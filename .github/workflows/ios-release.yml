@@ -71,6 +71,10 @@ jobs:
         working-directory: app/ios/puuk-ios
         run: npm ci
 
+      - name: 🩹 Patch Swift Tools Version (6.2 -> 6.0 for Xcode 16.2)
+        working-directory: app/ios/puuk-ios
+        run: node scripts/patch-swift-version.js
+
       - name: ⚙️ Expo Prebuild (generate native iOS)
         working-directory: app/ios/puuk-ios
         env:
