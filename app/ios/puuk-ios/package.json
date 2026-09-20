@@ -7,7 +7,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "postinstall": "node scripts/patch-swift-version.js"
+    "postinstall": "node scripts/patch-swift-version.js",
+    "eas-build-post-install": "node scripts/patch-swift-version.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

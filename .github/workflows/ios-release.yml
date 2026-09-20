@@ -13,6 +13,7 @@ on:
         type: choice
         options:
           - 'simulator'
+          - 'unsigned_ipa'
           - 'eas_production'
           - 'both'
       server_url:
@@ -160,3 +161,81 @@ jobs:
         env:
           EXPO_PUBLIC_API_URL: ${{ inputs.server_url }}
         run: eas build --platform ios --profile production --non-interactive
+
+  build-unsigned-ipa:
+    name: 📦 Build unsigned iOS IPA
+    needs: validate
+    if: inputs.build_target == 'unsigned_ipa'
+    runs-on: macos-14
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🍏 Select Xcode version (>= 16.1 for React Native 0.86)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/ios/puuk-ios/package-lock.json
+
+      - name: 📦 Install Dependencies
+        working-directory: app/ios/puuk-ios
+        run: npm ci
+
+      - name: 🩹 Patch Expo Swift manifests
+        working-directory: app/ios/puuk-ios
+        run: node scripts/patch-swift-version.js
+
+      - name: ⚙️ Expo Prebuild (generate native iOS)
+        working-directory: app/ios/puuk-ios
+        env:
+          EXPO_PUBLIC_API_URL: ${{ inputs.server_url }}
+        run: npx expo prebuild --platform ios --clean
+
+      - name: 🍎 CocoaPods Install
+        working-directory: app/ios/puuk-ios/ios
+        run: pod install
+
+      - name: 🔨 Build unsigned device app
+        working-directory: app/ios/puuk-ios/ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace Puuk.xcworkspace \
+            -scheme Puuk \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee xcodebuild-unsigned.log | (xcbeautify || cat)
+
+      - name: 📦 Package unsigned IPA
+        working-directory: app/ios/puuk-ios/ios
+        run: |
+          set -euo pipefail
+          APP_PATH="build/Build/Products/Release-iphoneos/Puuk.app"
+          test -d "$APP_PATH" || {
+            echo "Error: device Puuk.app not found at $APP_PATH"
+            find build -name "Puuk.app" -type d -print
+            exit 1
+          }
+          rm -rf Payload Puuk-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/Puuk.app
+          /usr/bin/zip -qry Puuk-unsigned.ipa Payload
+
+      - name: 📤 Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Puuk-iOS-unsigned-IPA
+          path: app/ios/puuk-ios/ios/Puuk-unsigned.ipa
+          retention-days: 14

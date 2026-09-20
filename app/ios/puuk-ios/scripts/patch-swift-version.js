@@ -12,10 +12,17 @@ for (const relPath of targetFiles) {
   const fullPath = path.resolve(__dirname, '..', relPath);
   if (fs.existsSync(fullPath)) {
     let content = fs.readFileSync(fullPath, 'utf8');
-    if (content.includes('swift-tools-version: 6.2')) {
-      content = content.replace(/swift-tools-version: 6\.2/g, 'swift-tools-version: 6.0');
+    const originalContent = content;
+
+    // Xcode 16.2 uses Swift 6.0 and does not parse trailing commas in
+    // PackageDescription function argument lists emitted by newer Expo packages.
+    content = content
+      .replace(/swift-tools-version: 6\.2/g, 'swift-tools-version: 6.0')
+      .replace(/,(\s*\))/g, '$1');
+
+    if (content !== originalContent) {
       fs.writeFileSync(fullPath, content, 'utf8');
-      console.log(`[patch-swift-version] Patched ${relPath} (6.2 -> 6.0)`);
+      console.log(`[patch-swift-version] Patched ${relPath} for Xcode 16.2 compatibility`);
       modifiedCount++;
     }
   }
