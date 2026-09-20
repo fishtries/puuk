@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+brain/venv/
+.venv/
+*.pyc
+
+# Databases (runtime artifacts)
+*.db
+*.db-wal
+*.db-shm
+
+# Node / web
+node_modules/
+app/web/dist/
+app/web/*.tsbuildinfo
+
+# Logs
+*.log
+brain/lyrics_worker.log
+
+# Temp / working files
+brain/temp_audio/
+brain/scratch/
+*.MP4
+*.mp4
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local env
+.env
+.env.local

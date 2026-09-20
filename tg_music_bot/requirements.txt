@@ -1,0 +1,7 @@
+aiogram
+yt-dlp
+python-dotenv==1.0.1
+spotdl
+mutagen
+bcrypt>=4.0.0
+numpy>=1.24.0

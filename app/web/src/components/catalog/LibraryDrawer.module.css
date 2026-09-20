@@ -1,0 +1,343 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  display: flex;
+}
+
+.drawer {
+  width: 480px;
+  max-width: 90vw;
+  height: 100%;
+  background-color: rgba(15, 17, 24, 0.95);
+  border-right: 1px solid var(--border-medium);
+  box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.searchWrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 12px;
+  transition: border-color var(--duration-quick) var(--ease-out);
+}
+
+.searchWrap:focus-within {
+  border-color: var(--accent-color);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.searchIcon {
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+
+.searchInput {
+  flex: 1;
+  height: 38px;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.clearBtn {
+  color: var(--text-muted);
+  padding: 4px;
+}
+
+.closeBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out);
+}
+
+.closeBtn:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.tabsRow {
+  display: flex;
+  gap: 4px;
+  background-color: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 18px;
+}
+
+.tabBtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out);
+}
+
+.tabBtn:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  background-color: var(--accent-color) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Wave Banner in Drawer */
+.waveBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(234, 88, 12, 0.1));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  margin-bottom: 8px;
+}
+
+.waveTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--accent-color);
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.waveTitle {
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 2px;
+}
+
+.waveDesc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  max-width: 240px;
+}
+
+.waveBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background-color: var(--accent-color);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+/* Track Rows */
+.trackList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trackRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease-out);
+}
+
+.trackRow:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.activeTrackRow {
+  background-color: var(--accent-subtle) !important;
+}
+
+.activeTrackRow .rowTitle {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.rowCoverWrap {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  flex-shrink: 0;
+  background-color: var(--bg-surface-elevated);
+}
+
+.rowCover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.placeholderIcon {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.rowPlayOverlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+.trackRow:hover .rowPlayOverlay {
+  display: flex;
+}
+
+.rowMeta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rowTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowArtist {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowDuration {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rowLikeBtn {
+  color: var(--text-disabled);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.liked {
+  color: var(--accent-color) !important;
+}
+
+/* Albums */
+.albumGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.albumCard {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.albumCoverWrap {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  margin-bottom: 6px;
+  background-color: var(--bg-surface-elevated);
+}
+
+.albumImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.albumPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.albumName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.albumArtist {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

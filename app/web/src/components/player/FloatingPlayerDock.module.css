@@ -1,0 +1,352 @@
+.dockContainer {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 50;
+  max-width: calc(100vw - 48px);
+  user-select: none;
+}
+
+/* Glassmorphism Capsule Base */
+.glassCapsule {
+  background: rgba(26, 28, 34, 0.65);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 1px rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+.glassCapsule:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 20px 48px rgba(0, 0, 0, 0.55),
+    0 6px 16px rgba(0, 0, 0, 0.35),
+    inset 0 1px 1px rgba(255, 255, 255, 0.2);
+}
+
+/* 1. Modes Capsule (Shuffle & Repeat) */
+.modesCapsule {
+  padding: 6px 12px;
+  gap: 8px;
+  height: 56px;
+}
+
+.modeBtn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.modeBtn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.activeMode {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+.activeDot {
+  position: absolute;
+  bottom: 5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--accent-color, #6366f1);
+  box-shadow: 0 0 6px var(--accent-color, #6366f1);
+}
+
+/* 2. Center Main Capsule */
+.centerDeckCapsule {
+  padding: 8px 18px 8px 10px;
+  gap: 16px;
+  height: 56px;
+  min-width: 520px;
+  max-width: 680px;
+  flex: 1;
+}
+
+.coverWrapper {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: transform 200ms ease;
+}
+
+.coverWrapper:hover {
+  transform: scale(1.05);
+}
+
+.coverImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fallbackCover {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.waveBadge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent-color, #6366f1);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trackInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  max-width: 160px;
+  overflow: hidden;
+}
+
+.trackTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+
+.trackArtist {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.52);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+/* Timeline Area */
+.timelineArea {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+}
+
+.timeLabel {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.48);
+  min-width: 32px;
+  text-align: center;
+}
+
+.scrubberTrack {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.scrubberTrack::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.15);
+  transition: height 150ms ease;
+}
+
+.scrubberTrack:hover::before {
+  height: 6px;
+}
+
+.progressBar {
+  position: relative;
+  height: 4px;
+  background: #ffffff;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
+  transition: height 150ms ease;
+}
+
+.scrubberTrack:hover .progressBar {
+  height: 6px;
+  background: var(--accent-color, #ffffff);
+}
+
+.scrubberThumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+  transform: scale(0);
+  transition: transform 150ms ease;
+  margin-right: -5px;
+}
+
+.scrubberTrack:hover .scrubberThumb {
+  transform: scale(1);
+}
+
+.hoverGuide {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+}
+
+/* Center Actions */
+.centerActions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qualityBadge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.actionIconBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.actionIconBtn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Phase 0: micro-compress on tap (WWDC25-2 tactile response) */
+.actionIconBtn:active {
+  transform: scale(0.94);
+}
+
+.activeActionBtn {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+}
+
+/* 3. Transport Controls Capsule */
+.transportCapsule {
+  padding: 6px 12px;
+  gap: 6px;
+  height: 56px;
+}
+
+.transportBtn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.transportBtn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.05);
+}
+
+.transportBtn:active {
+  transform: scale(0.96);
+}
+
+.playPauseBtn {
+  width: 42px;
+  height: 42px;
+  background: #ffffff;
+  color: #0f1013;
+  box-shadow: 0 4px 14px rgba(255, 255, 255, 0.2);
+}
+
+.playPauseBtn:hover {
+  background: #ffffff;
+  color: #000000;
+  box-shadow: 0 6px 18px rgba(255, 255, 255, 0.35);
+  transform: scale(1.06);
+}
+
+@media (max-width: 900px) {
+  .centerDeckCapsule {
+    min-width: 320px;
+  }
+
+  .timelineArea {
+    display: none;
+  }
+}

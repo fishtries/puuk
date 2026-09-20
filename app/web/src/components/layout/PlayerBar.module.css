@@ -1,0 +1,366 @@
+.playerBar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100vw;
+  height: var(--player-bar-height);
+  background-color: var(--bg-surface-elevated);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 100;
+}
+
+/* Left: Track Details */
+.leftCol {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 280px;
+  min-width: 240px;
+}
+
+.coverWrap {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  background-color: var(--bg-surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform var(--duration-quick) var(--ease-out),
+              box-shadow var(--duration-quick) var(--ease-out);
+}
+
+.coverWrap:hover {
+  transform: scale(1.05);
+  box-shadow: var(--shadow-glow);
+}
+
+.coverWrap:active {
+  transform: scale(0.96);
+}
+
+.coverImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.coverPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background-color: var(--bg-surface);
+}
+
+.spinIcon {
+  animation: spin 10s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.trackMeta {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.trackTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.trackArtist {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.likeBtn {
+  color: var(--text-disabled);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+  transition: color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.likeBtn:hover {
+  color: var(--text-secondary);
+}
+
+.likeBtn:active {
+  transform: scale(0.88);
+}
+
+.liked {
+  color: var(--accent-color) !important;
+}
+
+/* Center: Controls & Scrubber */
+.centerCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 580px;
+  width: 100%;
+  padding: 0 16px;
+}
+
+.transportButtons {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.smallBtn {
+  color: var(--text-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.smallBtn:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.smallBtn:active {
+  transform: scale(0.9);
+}
+
+.navBtn {
+  color: var(--text-secondary);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.navBtn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.navBtn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.navBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.masterPlayBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background-color: var(--text-primary);
+  color: #0b0c10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: transform var(--duration-press) var(--ease-spring),
+              background-color var(--duration-quick) var(--ease-out),
+              box-shadow var(--duration-quick) var(--ease-out);
+}
+
+.masterPlayBtn:hover:not(:disabled) {
+  transform: scale(1.06);
+  background-color: #ffffff;
+  box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);
+}
+
+.masterPlayBtn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.masterPlayBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.playIcon {
+  transform: translateX(1.5px);
+}
+
+.activeBtn {
+  color: var(--accent-color) !important;
+  background-color: var(--accent-subtle) !important;
+}
+
+.scrubberRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.timeLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: center;
+}
+
+.sliderTrackWrap {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+}
+
+.sliderFilled {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background-color: var(--text-primary);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+}
+
+.scrubberInput {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+}
+
+.sliderTrackWrap:hover .sliderFilled {
+  background-color: var(--accent-color);
+}
+
+/* Right: Actions & Volume */
+.rightCol {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 280px;
+  min-width: 240px;
+}
+
+.actionIconBtn {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.actionIconBtn:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.actionIconBtn:active {
+  transform: scale(0.9);
+}
+
+.volumeGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 120px;
+}
+
+.volumeBtn {
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-quick) var(--ease-out);
+}
+
+.volumeBtn:hover {
+  color: var(--text-primary);
+}
+
+.volumeTrackWrap {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+}
+
+.volumeFilled {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background-color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+}
+
+.volumeInput {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+}

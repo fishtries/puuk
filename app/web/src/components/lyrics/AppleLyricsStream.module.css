@@ -1,0 +1,615 @@
+.stageContainer {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  z-index: 10;
+  padding: 16px 24px;
+}
+
+/* Top Progressive Blur Vignette */
+.topProgressiveBlur {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  pointer-events: none;
+  z-index: 15;
+  overflow: hidden;
+  contain: strict;
+  transform: translateZ(0);
+}
+
+/* Bottom Progressive Blur Vignette */
+.bottomProgressiveBlur {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  pointer-events: none;
+  z-index: 15;
+  overflow: hidden;
+  contain: strict;
+  transform: translateZ(0);
+}
+
+.topProgressiveBlur .blurLayer1 {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.topProgressiveBlur .blurLayer2 {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 65%;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.topProgressiveBlur .blurLayer3 {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 35%;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.bottomProgressiveBlur .blurLayer1 {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.bottomProgressiveBlur .blurLayer2 {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 65%;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.bottomProgressiveBlur .blurLayer3 {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 35%;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+/* Scroll Area with Optical Edge Mask */
+.scrollArea {
+  flex: 1;
+  overflow: hidden;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 14%,
+    black 84%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 14%,
+    black 84%,
+    transparent 100%
+  );
+  padding: 0 12px;
+  cursor: default;
+  contain: paint;
+  transform: translateZ(0);
+}
+
+.queueScrollArea {
+  overflow-y: auto !important;
+  scrollbar-width: none;
+}
+
+.queueScrollArea::-webkit-scrollbar {
+  display: none;
+}
+
+/* Lyrics List with balanced scale and depth of field */
+.lyricsList {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 140px 0 260px;
+  max-width: 540px;
+  contain: layout;
+  transform: translateZ(0);
+}
+
+.lyricLine {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.38;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transform-origin: left center;
+  user-select: none;
+  /* Inter is a variable font, so font-weight interpolates: inactive 600 → hover 740 → active 800 */
+  transition:
+    color 300ms cubic-bezier(0.25, 1, 0.5, 1),
+    font-weight var(--duration-smooth) var(--ease-out);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Active Line: Crisp, Pure White with zero blur and high contrast.
+   Opacity/filter/transform are driven by Framer (see the progressive profile),
+   so they are intentionally not pinned here — that keeps the focus pull
+   interpolatable when a line hands off to the next one. */
+.activeLine {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  font-weight: 800;
+  letter-spacing: -0.02em !important;
+  background: none !important;
+  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Inactive Lines */
+.inactiveLine {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Word-Level Karaoke Styling */
+.activeWord {
+  font-weight: 800;
+  color: var(--accent-color, #38BDF8) !important;
+  -webkit-text-fill-color: var(--accent-color, #38BDF8) !important;
+  display: inline-block;
+  margin-right: 0.3em;
+  text-shadow: 0 0 16px var(--accent-glow, rgba(56, 189, 248, 0.5));
+  will-change: transform, opacity;
+  cursor: pointer;
+}
+
+.pastWord {
+  font-weight: 700;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  display: inline-block;
+  margin-right: 0.3em;
+  opacity: 0.95;
+  cursor: pointer;
+}
+
+.inactiveWord {
+  font-weight: 600;
+  color: inherit;
+  display: inline-block;
+  margin-right: 0.3em;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease;
+  cursor: pointer;
+}
+
+/* Karaoke Header Action & AI Generation Controls */
+.karaokeHeaderBar {
+  position: absolute;
+  top: 14px;
+  right: 24px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.generateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-pill, 9999px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.generateBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: var(--accent-color, #38BDF8);
+  box-shadow: 0 0 14px var(--accent-glow, rgba(56, 189, 248, 0.3));
+  transform: translateY(-1px);
+}
+
+.generateBtn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.regenerateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-pill, 9999px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.regenerateBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  border-color: var(--accent-color, #38bdf8);
+  box-shadow: 0 0 14px var(--accent-glow, rgba(56, 189, 248, 0.35));
+  transform: translateY(-1px);
+}
+
+.regenerateBtn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.refetchLyricsBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill, 9999px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.refetchLyricsBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.refetchLyricsBtn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.aiGenerateBtn {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(99, 102, 241, 0.25));
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius-pill, 9999px);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.aiGenerateBtn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(99, 102, 241, 0.4));
+  border-color: var(--accent-color, #38BDF8);
+  box-shadow: 0 0 16px var(--accent-glow, rgba(56, 189, 248, 0.4));
+  transform: translateY(-1px);
+}
+
+.aiGenerateBtn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.generationNotice {
+  font-size: 12px;
+  color: var(--accent-color, #38BDF8);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.generationError {
+  font-size: 12px;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Apple-style focus pull: the hovered line leans toward its active weight
+   while Framer lifts the depth-of-field blur. Touch devices fire false hovers,
+   so gate it to real pointers. */
+@media (hover: hover) and (pointer: fine) {
+  .lyricLine:not(.activeLine):hover {
+    font-weight: 740;
+  }
+}
+
+/* Manual scroll: the field washes back to full clarity. Dimming and text blur
+   are dropped per-line; only the top/bottom vignettes remain, so the edges
+   stay softly out of focus while the body is readable. */
+.isScrollBrowsing .scrollArea {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 7%,
+    black 93%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 7%,
+    black 93%,
+    transparent 100%
+  );
+}
+
+.isScrollBrowsing .topProgressiveBlur,
+.isScrollBrowsing .bottomProgressiveBlur {
+  opacity: 1;
+}
+
+/* State & Loading Wrappers */
+.stateContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.stateIcon {
+  color: var(--text-disabled);
+}
+
+.stateTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.stateSubtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.retryBtn {
+  margin-top: 6px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  transition: background-color var(--duration-quick) var(--ease-out);
+}
+
+.retryBtn:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.spinIcon {
+  animation: spin 1.2s linear infinite;
+  color: var(--accent-color);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Peek Variant Styling (floating modal window over player dock)              */
+/* -------------------------------------------------------------------------- */
+.peekStage {
+  padding: 4px 16px 14px;
+}
+
+.peekStage .lyricsList {
+  padding: 90px 0 240px;
+  gap: 18px;
+  max-width: 100%;
+}
+
+.peekStage .lyricLine {
+  font-size: 24px;
+  line-height: 1.35;
+  padding: 3px 6px;
+}
+
+.peekStage .activeLine {
+  font-size: 26px;
+}
+
+.peekStage .topProgressiveBlur {
+  height: 38px;
+}
+
+.peekStage .bottomProgressiveBlur {
+  height: 52px;
+}
+
+.peekStage .stateContainer {
+  padding: 24px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* High-performance Continuous Karaoke Word Fill                              */
+/* -------------------------------------------------------------------------- */
+
+.wordLineContainer {
+  display: inline;
+}
+
+.punctSpan {
+  display: inline;
+  white-space: pre-wrap;
+  color: inherit;
+  opacity: inherit;
+  font-weight: inherit;
+  user-select: none;
+}
+
+.karaokeWord {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.38);
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.38);
+  transition: transform 0.14s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+  cursor: pointer;
+}
+
+.karaokeWord[data-state="active"][data-alignment="matched"],
+.karaokeWord[data-state="active"]:not([data-alignment]) {
+  background: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #ffffff calc(var(--word-progress, 0%) - 16%),
+    rgba(255, 255, 255, 0.90) var(--word-progress, 0%),
+    rgba(255, 255, 255, 0.38) calc(var(--word-progress, 0%) + 18%),
+    rgba(255, 255, 255, 0.38) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  transform: scale(1.04);
+}
+
+.karaokeWord[data-state="active"][data-alignment="interpolated"] {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.88) 0%,
+    rgba(255, 255, 255, 0.88) calc(var(--word-progress, 0%) - 16%),
+    rgba(255, 255, 255, 0.72) var(--word-progress, 0%),
+    rgba(255, 255, 255, 0.32) calc(var(--word-progress, 0%) + 18%),
+    rgba(255, 255, 255, 0.32) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  transform: scale(1.02);
+}
+
+.karaokeWord[data-alignment="unresolved"],
+.karaokeWord[data-state="unresolved"] {
+  background: none !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.45) !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+  transform: scale(1) !important;
+  cursor: default;
+}
+
+.karaokeWord[data-state="past"] {
+  background: none;
+  -webkit-text-fill-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1);
+}
+
+.karaokeWord[data-state="past"][data-alignment="interpolated"] {
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.88);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.karaokeWord[data-state="future"] {
+  background: none;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.38);
+  color: rgba(255, 255, 255, 0.38);
+  transform: scale(1);
+}
+
+.staticInactiveWord {
+  display: inline-block;
+  margin-right: 0.28em;
+  color: inherit;
+}
+
+.staticInactiveWord:last-child {
+  margin-right: 0;
+}
+
+.lineLevelText {
+  display: inline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .karaokeWord {
+    transition: none !important;
+    will-change: auto !important;
+  }
+
+  .karaokeWord[data-state="active"] {
+    background: none !important;
+    -webkit-text-fill-color: #ffffff !important;
+    color: #ffffff !important;
+    transform: none !important;
+  }
+
+  .karaokeWord[data-state="active"][data-alignment="interpolated"] {
+    background: none !important;
+    -webkit-text-fill-color: rgba(255, 255, 255, 0.88) !important;
+    color: rgba(255, 255, 255, 0.88) !important;
+    transform: none !important;
+  }
+}
+
+
+

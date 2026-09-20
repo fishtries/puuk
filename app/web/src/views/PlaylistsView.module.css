@@ -1,0 +1,205 @@
+.pageContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  width: 100%;
+}
+
+/* ============================================================
+   Grid header
+   ============================================================ */
+
+.gridHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 4px 2px 0;
+  flex-wrap: wrap;
+}
+
+.gridEyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.gridTitle {
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1;
+}
+
+.gridCount {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  padding-bottom: 4px;
+}
+
+/* ============================================================
+   Playlists grid
+   ============================================================ */
+
+.playlistsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 18px;
+}
+
+.playlistCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 12px 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(26, 28, 34, 0.5);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  outline: none;
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    background-color 200ms ease;
+}
+
+.playlistCard:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(26, 28, 34, 0.68);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+}
+
+.cardCoverWrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.cardCoverImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cardCoverFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.favoritesCover {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--accent-color), #ec4899);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+.cardPlayHint {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #121316;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 150ms ease, transform 150ms ease;
+  pointer-events: none;
+}
+
+.playlistCard:hover .cardPlayHint {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.cardMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.cardTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardSubtitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Loading state */
+.loadingState {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 8px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
+.shelfSpinner {
+  animation: shelfSpin 900ms linear infinite;
+}
+
+@keyframes shelfSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1024px) {
+  .gridTitle {
+    font-size: 32px;
+  }
+
+  .playlistsGrid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelfSpinner {
+    animation-duration: 2s;
+  }
+}

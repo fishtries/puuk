@@ -1,0 +1,396 @@
+.homeContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding: 24px 32px 40px;
+}
+
+/* Wave Banner */
+.waveBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--duration-base) var(--ease-out),
+              box-shadow var(--duration-base) var(--ease-out);
+}
+
+.waveBanner:hover {
+  border-color: var(--border-medium);
+}
+
+.waveBannerActive {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 30px var(--accent-subtle);
+}
+
+.waveTextCol {
+  max-width: 460px;
+  z-index: 2;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background-color: var(--accent-subtle);
+  border-radius: var(--radius-xs);
+  margin-bottom: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent-color);
+}
+
+.waveTitle {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.waveDesc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+.waveActionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background-color: var(--accent-color);
+  color: #ffffff;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px var(--accent-glow);
+  transition: background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.waveActionBtn:hover {
+  background-color: var(--accent-hover);
+}
+
+.waveActionBtn:active {
+  transform: scale(0.96);
+}
+
+.wavePlayIcon {
+  transform: translateX(1px);
+}
+
+.eqWrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 60px;
+}
+
+.eqGrid {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 50px;
+  padding: 0 8px;
+}
+
+.eqBar {
+  width: 4px;
+  background: linear-gradient(to top, var(--accent-color), #a5b4fc);
+  border-radius: var(--radius-pill);
+  transition: height 80ms ease-out, opacity 200ms ease-out;
+}
+
+/* Sections */
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.countBadge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Track Table */
+.trackTable {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tableHeaderRow {
+  display: grid;
+  grid-template-columns: 44px 1fr 200px 90px 90px 48px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: 44px 1fr 200px 90px 90px 48px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background-color: transparent;
+  transition: background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.tableRow:hover {
+  background-color: var(--bg-surface-elevated);
+}
+
+.tableRow:active {
+  transform: scale(0.995);
+}
+
+.activeRow {
+  background-color: var(--accent-subtle) !important;
+}
+
+.activeRow .titleText {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.colIndex {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.indexNum {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activePlayIcon {
+  color: var(--accent-color);
+}
+
+.hoverPlayIcon {
+  display: none;
+  color: var(--text-primary);
+}
+
+.tableRow:hover .indexNum {
+  display: none;
+}
+
+.tableRow:hover .hoverPlayIcon {
+  display: block;
+}
+
+.colTitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.rowCover {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  flex-shrink: 0;
+}
+
+.rowCoverPlaceholder {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rowMeta {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.titleText {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artistText {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.colAlbum {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.colBpm {
+  font-size: 12px;
+}
+
+.bpmBadge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dimText {
+  color: var(--text-disabled);
+}
+
+.colDuration {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.colActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.likeBtn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.likeBtn:hover {
+  color: var(--text-secondary);
+}
+
+.likeBtn:active {
+  transform: scale(0.88);
+}
+
+.liked {
+  color: var(--accent-color) !important;
+}
+
+/* Albums Grid */
+.albumGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 20px;
+}
+
+.albumCard {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: transform var(--duration-smooth) var(--ease-out);
+}
+
+.albumCard:hover {
+  transform: translateY(-3px);
+}
+
+.albumCoverWrap {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  background-color: var(--bg-surface-elevated);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 10px;
+}
+
+.albumImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.albumPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.albumTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.albumArtist {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

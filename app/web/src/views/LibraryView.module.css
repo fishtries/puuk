@@ -1,0 +1,256 @@
+.libraryContainer {
+  padding: 24px 32px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.headerBanner {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  padding: 28px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(236, 72, 153, 0.15));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.bannerIcon {
+  width: 90px;
+  height: 90px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--accent-color), #ec4899);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.3);
+  flex-shrink: 0;
+}
+
+.bannerMeta {
+  display: flex;
+  flex-direction: column;
+}
+
+.bannerSubtitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.bannerTitle {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  margin-bottom: 6px;
+}
+
+.bannerStats {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.trackTable {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tableHeaderRow {
+  display: grid;
+  grid-template-columns: 44px 1fr 220px 90px 48px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: 44px 1fr 220px 90px 48px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.tableRow:hover {
+  background-color: var(--bg-surface-elevated);
+}
+
+.tableRow:active {
+  transform: scale(0.995);
+}
+
+.activeRow {
+  background-color: var(--accent-subtle) !important;
+}
+
+.activeRow .titleText {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.colIndex {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.indexNum {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activePlayIcon {
+  color: var(--accent-color);
+}
+
+.hoverPlayIcon {
+  display: none;
+  color: var(--text-primary);
+}
+
+.tableRow:hover .indexNum {
+  display: none;
+}
+
+.tableRow:hover .hoverPlayIcon {
+  display: block;
+}
+
+.colTitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.rowCover {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+  outline: var(--image-outline);
+  outline-offset: var(--image-outline-offset);
+  flex-shrink: 0;
+}
+
+.rowCoverPlaceholder {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rowMeta {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.titleText {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artistText {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.colAlbum {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.colDuration {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.colActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.likeBtn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-spring);
+}
+
+.likeBtn:hover {
+  color: var(--text-secondary);
+}
+
+.likeBtn:active {
+  transform: scale(0.88);
+}
+
+.liked {
+  color: var(--accent-color) !important;
+}
+
+.loadingWrap,
+.emptyWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 24px;
+  text-align: center;
+  gap: 12px;
+}
+
+.emptyIcon {
+  color: var(--text-disabled);
+}
+
+.emptyTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.emptySubtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 320px;
+  line-height: 1.5;
+}
