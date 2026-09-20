@@ -55,6 +55,11 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
 
+      - name: 🍏 Select Xcode version (>= 16.1 for React Native 0.86)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,7 +89,9 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
 
       - name: 📦 Package .app for Simulator
         working-directory: app/ios/puuk-ios/ios/build/Build/Products/Release-iphonesimulator
