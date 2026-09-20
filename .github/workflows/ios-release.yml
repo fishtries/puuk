@@ -84,25 +84,45 @@ jobs:
       - name: 🔨 Build for iOS Simulator (Release)
         working-directory: app/ios/puuk-ios/ios
         run: |
+          set -o pipefail
           xcodebuild -workspace Puuk.xcworkspace \
             -scheme Puuk \
             -configuration Release \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
             -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee xcodebuild.log | (xcbeautify || cat)
+
+      - name: 🚨 Print Error Log on Failure
+        if: failure()
+        working-directory: app/ios/puuk-ios/ios
+        run: |
+          echo "=== Recent errors from xcodebuild.log ==="
+          grep -E -C 3 -i "error:" xcodebuild.log || tail -n 100 xcodebuild.log
 
       - name: 📦 Package .app for Simulator
-        working-directory: app/ios/puuk-ios/ios/build/Build/Products/Release-iphonesimulator
+        working-directory: app/ios/puuk-ios/ios
         run: |
-          zip -r Puuk-iOS-Simulator.zip Puuk.app
+          APP_PATH=$(find build -name "Puuk.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: Puuk.app not found!"
+            find build -maxdepth 5 -ls
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          APP_DIR=$(dirname "$APP_PATH")
+          (cd "$APP_DIR" && zip -r Puuk-iOS-Simulator.zip Puuk.app)
+          mv "$APP_DIR/Puuk-iOS-Simulator.zip" ./
 
       - name: 📤 Upload Simulator Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Puuk-iOS-Simulator
-          path: app/ios/puuk-ios/ios/build/Build/Products/Release-iphonesimulator/Puuk-iOS-Simulator.zip
+          path: app/ios/puuk-ios/ios/Puuk-iOS-Simulator.zip
           retention-days: 14
 
   build-eas:
