@@ -72,6 +72,10 @@ jobs:
         working-directory: app/ios/puuk-ios
         run: npm ci
 
+      - name: 🩹 Patch Expo JSI for Xcode 26
+        working-directory: app/ios/puuk-ios
+        run: node scripts/patch-expo-jsi.js
+
       - name: ⚙️ Expo Prebuild (generate native iOS)
         working-directory: app/ios/puuk-ios
         env:
@@ -182,6 +186,10 @@ jobs:
       - name: 📦 Install Dependencies
         working-directory: app/ios/puuk-ios
         run: npm ci
+
+      - name: 🩹 Patch Expo JSI for Xcode 26
+        working-directory: app/ios/puuk-ios
+        run: node scripts/patch-expo-jsi.js
 
       - name: ⚙️ Expo Prebuild (generate native iOS)
         working-directory: app/ios/puuk-ios
