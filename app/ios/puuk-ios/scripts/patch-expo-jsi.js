@@ -19,7 +19,13 @@ let modifiedCount = 0;
 for (const filePath of walk(jsiRoot)) {
   const original = fs.readFileSync(filePath, 'utf8');
   const patched = original
-    // Swift 6 requires weak references to be mutable storage.
+    // Swift 6 requires weak references to be mutable storage. Mark these
+    // runtime handles explicitly because the JSI value wrappers cross
+    // isolation domains by design.
+    .replace(
+      /(?:nonisolated\(unsafe\)\s+)?weak\s+(?:let|var)\s+runtime\b/g,
+      'nonisolated(unsafe) weak var runtime',
+    )
     .replace(/\bweak\s+let\b/g, 'weak var')
     // Xcode 26 rejects the ownership annotation on these C++ constructors.
     .replace(/\bSWIFT_RETURNS_RETAINED\s+/g, '');
