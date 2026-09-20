@@ -181,7 +181,7 @@ function generateFallbackTheme(baseHex?: string, fallbackSeed: string = 'puuk'):
   const sat = Math.min(55, Math.max(25, s));
 
   return {
-    bgDark: '#07080b',
+    bgDark: '#000000',
     colors: [
       `hsla(${h}, ${sat}%, 12%, 0.85)`,
       `hsla(${(h + 20) % 360}, ${Math.max(20, sat - 5)}%, 16%, 0.75)`,

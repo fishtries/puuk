@@ -256,10 +256,9 @@ export default function HomeScreen({
               { text: "Save", onPress: async (name) => {
                   if (!name) return;
                   try {
-                    const res = await fetch(`${SERVER_URL}/api/playlists/${playlist.id}`, {
+                    const res = await authFetch(`/api/playlists/${playlist.id}`, {
                       method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ name })
+                      body: { name }
                     });
                     if (res.ok) fetchLibrary();
                   } catch (e) {

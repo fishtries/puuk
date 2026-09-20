@@ -196,7 +196,7 @@
   width: 24px;
   height: 24px;
   border-radius: var(--radius-xs);
-  background: linear-gradient(135deg, var(--accent-color), #ec4899);
+  background: linear-gradient(135deg, var(--accent-color), #fa243c);
   color: #ffffff;
   display: flex;
   align-items: center;

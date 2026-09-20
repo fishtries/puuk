@@ -3,12 +3,7 @@ import { PlayerStoreState, RepeatMode, ActiveView, RightPanelTab, PlaybackStatus
 import { Track } from '../types/track';
 import { audioEngine } from '../engine/AudioEngine';
 import { parseLRC } from '../engine/lrcParser';
-import {
-  generateAccentColor,
-  applyAccentColor,
-  parseLyricsPayload,
-  isDemoTrack,
-} from './playerStoreHelpers';
+import { parseLyricsPayload, isDemoTrack } from './playerStoreHelpers';
 import {
   fetchLyrics as apiFetchLyrics,
   fetchHistory,
@@ -61,7 +56,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     isFullscreen: false,
     isDebugOpen: false,
     isLoginOpen: false,
-    accentColor: '#6366f1',
+    accentColor: '#ffdab9',
 
      queue: [],
     history: [],
@@ -72,15 +67,11 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     lyrics: [],
     isLyricsLoading: false,
     rawLyricsText: '',
-    wordData: null,
 
     playTrack: async (track: Track, newQueue?: Track[]) => {
       const state = get();
       const updatedQueue = newQueue || (state.queue.length > 0 ? state.queue : [track]);
       const index = updatedQueue.findIndex((t) => t.id === track.id);
-
-      const accent = generateAccentColor(track.title + track.artist);
-      applyAccentColor(accent);
 
       set({
         currentTrack: track,
@@ -89,10 +80,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         status: 'loading',
         currentTime: 0,
         duration: track.duration || 0,
-        accentColor: accent,
         lyrics: [],
         rawLyricsText: '',
-        wordData: null,
       });
 
       get().fetchLyrics(track.id);
@@ -283,20 +272,19 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     fetchLyrics: async (trackId: string, force = false) => {
-      set({ isLyricsLoading: true, lyrics: [], rawLyricsText: '', wordData: null });
+      set({ isLyricsLoading: true, lyrics: [], rawLyricsText: '' });
       try {
         const data = await apiFetchLyrics(trackId, force);
-        const { lyrics: parsed, rawLyricsText, wordData } = parseLyricsPayload(data);
+        const { lyrics: parsed, rawLyricsText } = parseLyricsPayload(data);
 
         set({
           lyrics: parsed,
           rawLyricsText,
-          wordData,
           isLyricsLoading: false,
         });
       } catch (err) {
         console.warn('Could not fetch lyrics:', err);
-        set({ lyrics: [], rawLyricsText: '', wordData: null, isLyricsLoading: false });
+        set({ lyrics: [], rawLyricsText: '', isLyricsLoading: false });
       }
     },
 
@@ -375,22 +363,14 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         let newCurrent = state.currentTrack;
         let newLyrics = state.lyrics;
         let newRawLyrics = state.rawLyricsText;
-        let newWordData = state.wordData;
-        let newAccent = state.accentColor;
 
         if (state.currentTrack?.id === trackId) {
           newCurrent = { ...state.currentTrack, ...updatedTrack };
-
-          if (updatedTrack.title || updatedTrack.artist) {
-            newAccent = generateAccentColor((newCurrent.title || '') + (newCurrent.artist || ''));
-            applyAccentColor(newAccent);
-          }
 
           if (updatedTrack.lyrics !== undefined) {
             const rawLrc = updatedTrack.lyrics || '';
             newRawLyrics = rawLrc;
             newLyrics = parseLRC(rawLrc);
-            newWordData = null;
           }
         }
 
@@ -401,8 +381,6 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
           recentlyPlayed: state.recentlyPlayed.map(update),
           lyrics: newLyrics,
           rawLyricsText: newRawLyrics,
-          wordData: newWordData,
-          accentColor: newAccent,
         };
       });
     },

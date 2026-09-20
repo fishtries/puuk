@@ -49,7 +49,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent-color, #6366f1);
+  color: var(--accent-color, #ffdab9);
   flex-shrink: 0;
 }
 
@@ -127,7 +127,7 @@
 
 .activeTabBtn {
   color: #ffffff;
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color, #ffdab9);
   font-weight: 600;
   box-shadow: 0 2px 8px var(--accent-glow, rgba(99, 102, 241, 0.3));
 }
@@ -171,7 +171,7 @@
 }
 
 .searchInput:focus {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #ffdab9);
 }
 
 .searchBtn {
@@ -261,7 +261,7 @@
 .applyResultBtn {
   padding: 4px 10px;
   border-radius: 6px;
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color, #ffdab9);
   color: #ffffff;
   font-size: 11px;
   font-weight: 600;
@@ -312,7 +312,7 @@
 }
 
 .input:focus {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #ffdab9);
   box-shadow: 0 0 0 2px var(--accent-glow, rgba(99, 102, 241, 0.2));
 }
 
@@ -332,7 +332,7 @@
 }
 
 .textarea:focus {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #ffdab9);
 }
 
 /* Cover Tab */
@@ -427,7 +427,7 @@
 
 .dropzone:hover,
 .dropzoneActive {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #ffdab9);
   background: rgba(99, 102, 241, 0.05);
 }
 
@@ -501,7 +501,7 @@
 }
 
 .lyricsTextarea:focus {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #ffdab9);
 }
 
 .lyricsStatusRow {
@@ -628,7 +628,7 @@
   height: 40px;
   padding: 0 22px;
   border-radius: var(--radius-sm, 8px);
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color, #ffdab9);
   border: none;
   color: #ffffff;
   font-size: 13px;

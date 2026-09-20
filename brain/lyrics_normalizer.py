@@ -1,14 +1,11 @@
 """
-Lyrics normalization module with strict bidirectional span mapping.
-Guarantees that the original text is NEVER mutated or reconstructed from tokens.
+Lyrics normalization module for line-level LRC parsing and validation.
+Guarantees that the original text is NEVER mutated or reconstructed.
 """
 
 import re
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
-from alignment_types import NormalizedToken, ReferenceLine
-
-# Regex matching words including hyphenated words and English contractions (don't, it's, rock'n'roll)
-WORD_TOKEN_REGEX = re.compile(r"[\w]+(?:['’\-][\w]+)*", re.UNICODE)
 
 # Regex matching LRC timestamp headers: [MM:SS.mmm] or [MM:SS:mmm] or [MM:SS]
 LRC_TIMESTAMP_REGEX = re.compile(r"\[(\d{2,}):(\d{2})(?:[.:](\d{2,3}))?\]")
@@ -16,101 +13,18 @@ LRC_TIMESTAMP_REGEX = re.compile(r"\[(\d{2,}):(\d{2})(?:[.:](\d{2,3}))?\]")
 # Metadata tags: [ar:...], [ti:...], [al:...], [by:...], [offset:...], [length:...], etc.
 LRC_METADATA_REGEX = re.compile(r"^\[(ar|ti|al|au|by|offset|length|re|ve):", re.IGNORECASE)
 
-
-def normalize_value_for_matching(raw_token: str) -> str:
-    """
-    Normalizes a token value for robust acoustic matching:
-    - Lowercases
-    - Maps 'ё' -> 'е'
-    - Removes internal hyphens and apostrophes ("из-за" -> "изза", "don't" -> "dont")
-    - Strips any remaining punctuation
-    """
-    if not raw_token:
-        return ""
-    val = raw_token.lower()
-    val = val.replace("ё", "е")
-    # Strip apostrophes and dashes so 'don't' matches 'dont' and 'из-за' matches 'изза'
-    val = re.sub(r"['’\-]", "", val)
-    # Strip non-alphanumeric unicode characters
-    val = re.sub(r"[^\w]", "", val, flags=re.UNICODE)
-    return val
+# Inline word-level tags in legacy Enhanced LRC: <MM:SS.mmm> — stripped from display text.
+LEGACY_WORD_TAG_REGEX = re.compile(r"<\d{2,}:\d{2}(?:[.:]\d{2,3})?>")
 
 
-def tokenize_line(text: str) -> List[NormalizedToken]:
-    """
-    Tokenizes a line of lyrics into NormalizedToken objects.
-    Guarantees the strict invariant:
-    "".join(t.prefix + t.original_text + t.suffix for t in tokens) == text
-
-    Each token contains:
-    - value: normalized acoustic matching string (lowercase, ё->е, stripped of apostrophes/dashes)
-    - original_text: pure acoustic word without punctuation
-    - original_start: start character index of acoustic word in text
-    - original_end: end character index of acoustic word in text
-    - prefix: leading brackets/punctuation/quotes
-    - suffix: trailing punctuation/brackets/whitespace
-    """
-    if not text:
-        return []
-
-    matches = list(WORD_TOKEN_REGEX.finditer(text))
-    if not matches:
-        if text:
-            return [
-                NormalizedToken(
-                    value="",
-                    original_text="",
-                    original_start=0,
-                    original_end=0,
-                    prefix=text,
-                    suffix="",
-                )
-            ]
-        return []
-
-    tokens: List[NormalizedToken] = []
-    num_matches = len(matches)
-
-    for i, match in enumerate(matches):
-        w_start, w_end = match.span()
-        clean_word = text[w_start:w_end]
-        norm_val = normalize_value_for_matching(clean_word)
-
-        # 1. Prefix for the first token captures all characters from start of line
-        prefix = text[0:w_start] if i == 0 else ""
-
-        tokens.append(
-            NormalizedToken(
-                value=norm_val,
-                original_text=clean_word,
-                original_start=w_start,
-                original_end=w_end,
-                prefix=prefix,
-                suffix="",
-            )
-        )
-
-    # 2. Divide gaps between token[i] and token[i+1]
-    for i in range(num_matches - 1):
-        gap_start = matches[i].end()
-        gap_end = matches[i + 1].start()
-        gap = text[gap_start:gap_end]
-
-        # Check if gap ends with opening brackets or quotes belonging to token[i+1]
-        m = re.search(r"([\(\[\{«\"'“‘<]+)$", gap)
-        if m:
-            split_idx = m.start()
-            tokens[i].suffix = gap[:split_idx]
-            tokens[i + 1].prefix = gap[split_idx:]
-        else:
-            tokens[i].suffix = gap
-            tokens[i + 1].prefix = ""
-
-    # 3. Final suffix: all trailing characters from last word to end of line
-    last_end = matches[-1].end()
-    tokens[-1].suffix = text[last_end:]
-
-    return tokens
+@dataclass
+class ReferenceLine:
+    """A single parsed lyric line with an optional line-level timestamp anchor."""
+    original_text: str
+    start_anchor: Optional[float]  # Timestamp in seconds from LRC [MM:SS.mmm], if available
+    next_anchor: Optional[float]   # Timestamp in seconds of succeeding line, if available
+    line_index: int
+    language: Optional[str] = None  # 'ru', 'en', 'mixed'
 
 
 def detect_line_language(text: str) -> str:
@@ -187,13 +101,12 @@ def parse_reference_lrc(lrc_content: str) -> List[ReferenceLine]:
             start_sec = parse_timestamp_seconds(first_match)
             # Remove all timestamps from the line to get the clean display text
             clean_display = LRC_TIMESTAMP_REGEX.sub("", stripped).strip()
-            # Also clean any inline word-level tags if present: <MM:SS.mmm>
-            clean_display = re.sub(r"<\d{2,}:\d{2}(?:[.:]\d{2,3})?>", "", clean_display).strip()
+            clean_display = LEGACY_WORD_TAG_REGEX.sub("", clean_display).strip()
             if clean_display:
                 parsed_items.append((start_sec, clean_display))
         else:
             # Plain lyrics line (no timestamp anchor)
-            clean_display = re.sub(r"<\d{2,}:\d{2}(?:[.:]\d{2,3})?>", "", stripped).strip()
+            clean_display = LEGACY_WORD_TAG_REGEX.sub("", stripped).strip()
             if clean_display:
                 parsed_items.append((None, clean_display))
 
@@ -208,17 +121,13 @@ def parse_reference_lrc(lrc_content: str) -> List[ReferenceLine]:
                 next_anchor = parsed_items[j][0]
                 break
 
-        tokens = tokenize_line(display_text)
-        line_lang = detect_line_language(display_text)
-
         reference_lines.append(
             ReferenceLine(
                 original_text=display_text,
                 start_anchor=start_anchor,
                 next_anchor=next_anchor,
-                tokens=tokens,
                 line_index=i,
-                language=line_lang,
+                language=detect_line_language(display_text),
             )
         )
 
@@ -381,4 +290,3 @@ def inspect_reference_anchors(reference_lines: List[ReferenceLine]) -> Dict[str,
         "has_line_anchors": has_anchors,
         "anchor_mode": mode,
     }
-

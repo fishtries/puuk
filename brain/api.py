@@ -1,8 +1,7 @@
 """Puuk Brain API — application composition root.
 
 Assembles routers, wires services, and keeps backwards-compatible exports
-used by the test suite (apply_diversity_penalty, get_smart_recommendations,
-process_word_lyrics_job, ...).
+used by the test suite (apply_diversity_penalty, get_smart_recommendations, ...).
 """
 from contextlib import asynccontextmanager
 
@@ -12,8 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import db
 from services import recommendation_service
 from services.media_locations import extract_full_metadata  # noqa: F401 (compat export)
-from services.lyrics_service import process_word_lyrics_job  # noqa: F401 (compat export)
-from services.lyrics_service import generate_and_save_word_lrc  # noqa: F401 (compat alias)
 from services.library_service import scan_library
 
 # Backwards-compatible exports consumed by tests/scripts (see test_personalization.py)
@@ -83,11 +80,6 @@ app.include_router(library_router)
 
 from routers.tracks import router as tracks_router
 app.include_router(tracks_router)
-
-# --- Lyrics & word-alignment (GPU) ---
-
-from routers.lyrics_jobs import router as lyrics_jobs_router
-app.include_router(lyrics_jobs_router)
 
 
 if __name__ == "__main__":

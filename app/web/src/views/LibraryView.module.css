@@ -19,7 +19,7 @@
   width: 90px;
   height: 90px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--accent-color), #ec4899);
+  background: linear-gradient(135deg, var(--accent-color), #fa243c);
   display: flex;
   align-items: center;
   justify-content: center;

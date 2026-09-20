@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
-export let SERVER_URL = 'http://192.168.1.117:8000';
+export const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.117:8000';
+export let SERVER_URL = DEFAULT_SERVER_URL;
 
 export const setServerUrl = (url) => {
   if (url && typeof url === 'string') {

@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { DeviceEventEmitter } from 'react-native';
+import { DEFAULT_SERVER_URL } from './api';
 
 const SETTINGS_KEY = 'puuk_app_settings';
 
@@ -10,7 +11,7 @@ export const DEFAULT_SETTINGS = {
   hapticsEnabled: true,
   soundCheck: false,
   crossfade: false,
-  serverUrl: 'http://192.168.1.117:8000',
+  serverUrl: DEFAULT_SERVER_URL,
 };
 
 let cachedSettings = { ...DEFAULT_SETTINGS };

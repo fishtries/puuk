@@ -1,5 +1,43 @@
 # Puuk — Project Guide & Agent Instructions
 
+ПЛАН РЕФАКТОРИНГА:
+
+План рефакторинга Puuk — текущее состояние
+✅ Фаза 1: Backend — ЗАВЕРШЕНА (с фиксам по аудиту)
+Задача
+config.py — централизованная конфигурация
+db.py (1 257) → фасад 88 строк + repositories/ (8 доменных модулей)
+api.py (1 584) → composition root 99 строк + 11 роутеров + 7 сервисов
+whisper_anchor_backend.py → alignment/model_cache.py выделен
+Верификация: 61/61 тестов, 40 маршрутов, бот-совместимость
+Аудит-фиксы: cover-endpoint fallback поведение, cleanup мусора в api.py/db.py/base.py
+✅ Фаза 2: Веб-клиент — ЗАВЕРШЕНА (с фиксам по аудиту)
+Задача
+TagEditorModal.tsx 888 → 158 + 7 модулей (hook + 4 таба + карточка + утилиты)
+AppleLyricsStream.tsx 832 → 326 + 4 модуля (WordTimedLine, LyricLineRow, lyricsDepth, useKaraokeGeneration)
+HomeScreen.tsx 702 → 495 + islands/ + demoMix
+usePlayerStore.ts — helpers вынесены (accent, lyrics parsing, demo-guard), API не изменён
+Верификация: tsc strict ✓, build ✓, 20/20 тестов ✓
+Аудит-фикс: polling cleanup в useKaraokeGeneration
+🔄 Фаза 3: iOS — НЕ НАЧАТА (следующий шаг)
+Задача
+FullPlayerModal.js (2 412 строк) → декомпозиция на 10+ компонентов
+App.js (671) → экраны + навигационный конфиг
+TrackEditScreen.js (724), LoginModal.js (739) — при необходимости
+TypeScript-миграция (v2-скоуп, опционально)
+Тесты (0% → базовые)
+Перед стартом: разведка app/ios/puuk-ios/ (структура, зависимости,Metro/bundler), бэкап, baseline. iOS без тестов и без git — придётся опираться на компиляцию bundle + ручные проверки.
+📋 Отложенные задачи (backlog)
+1. Nested buttons в кликабельных карточках (HomeIslands.tsx) — pre-existing UX-дефект, нужно stopPropagation или перенос onClick
+2. Изоляция тестовой БД (brain) — tmp-path fixture, тесты наследят 52 leftover-записи в puuk.db
+3. Компонентные тесты веба — TagEditor, lyrics hook (rendering-тесты отсутствуют)
+4. Общий LRC-парсер — дублирование в 3 местах (brain, web, iOS)
+5. git init + первичный коммит — до сих пор не сделан, риск для Фазы 3
+6. Декомпозиция HomeScreen глубже (useHomeCatalogData, HomeSearchResults) — 495 строк всё ещё много
+⚠️ Открытый вопрос перед Фазой 3
+iOS — это JS без тестов и типов; верификация возможна только через Metro bundle + ручной прогон. Начинать с FullPlayerModal.js (самый большой выигрыш), или сначала сделать git init + коммит текущего состояния, чтобы иметь точку отката?
+Также рекомендую перед Фазой 3 закрыть backlog-пункты 1–2 (быстрые, снижают шум при будущих проверках).
+
 Добро пожаловать в репозиторий **puuk** — персональной музыкальной экосистемы.
 
 ---
@@ -50,6 +88,15 @@
 
 При разработке используй специализированные навыки из `.agents/skills/`.
 **Полный индекс:** [.agents/skills/INDEX.md](.agents/skills/INDEX.md)
+
+### Оркестрация дочерних агентов (Orca)
+
+Если запускаешь воркеров через Orca (`orca orchestration ...`) — **сначала
+прочитай [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md)**. Ключевое:
+- запускай `--agent opencode` (codex на этой машине не установлен — воркеры зависают);
+- не полагайся на авто-инжект промпта: проверь ход и при простое дослай
+  спеку через `orca terminal send`;
+- официальный версионный гайд — `orca skills get orchestration`.
 
 ### Для веб-клиента (`app/web`)
 - **`puuk-ui`** — стилизация (CSS Modules), анимации (Framer Motion), React 19 + Zustand паттерны, динамическая тема под обложку. Первый выбор для любой UI-задачи.

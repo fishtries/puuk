@@ -50,6 +50,17 @@ python3 .agents/skills/puuk-ux-lite/scripts/search.py "твой запрос" [-
 
 ---
 
+---
+
+## Оркестрация дочерних агентов (Orca)
+
+Запуск воркеров через `orca orchestration` — см.
+[`docs/ORCHESTRATION.md`](../../docs/ORCHESTRATION.md): агент `--agent opencode`,
+ручная доставка промпта при зависании инжекта, восстановление
+`--dispatch-capability`. Официальный гайд — `orca skills get orchestration`.
+
+---
+
 ## Применение по компонентам проекта
 
 ### `app/web/` (React SPA)

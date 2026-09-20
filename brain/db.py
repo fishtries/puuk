@@ -64,13 +64,6 @@ from repositories.playlists import (
     delete_playlist,
     update_playlist,
 )
-from repositories.lyrics_jobs import (
-    set_lyrics_job,
-    get_lyrics_job,
-    delete_lyrics_job,
-    get_next_pending_lyrics_job,
-    get_pending_lyrics_jobs,
-)
 from repositories.wave import (
     get_user_embedding,
     set_user_embedding,

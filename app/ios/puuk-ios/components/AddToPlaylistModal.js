@@ -11,8 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-const SERVER_URL = 'http://192.168.1.117:8000';
+import { authFetch } from '../utils/api';
 
 export default function AddToPlaylistModal({ visible, track, onClose }) {
   const [playlists, setPlaylists] = useState([]);
@@ -27,7 +26,7 @@ export default function AddToPlaylistModal({ visible, track, onClose }) {
   const fetchPlaylists = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${SERVER_URL}/api/playlists`);
+      const response = await authFetch('/api/playlists');
       if (response.ok) {
         setPlaylists(await response.json());
       }
@@ -41,7 +40,7 @@ export default function AddToPlaylistModal({ visible, track, onClose }) {
   const handleAddToPlaylist = async (playlist) => {
     if (!track) return;
     try {
-      const response = await fetch(`${SERVER_URL}/api/playlists/${playlist.id}/tracks`, {
+      const response = await authFetch(`/api/playlists/${playlist.id}/tracks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ track_id: track.id })

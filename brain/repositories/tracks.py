@@ -125,12 +125,10 @@ def update_track_lyrics(track_id, lyrics, lyrics_source=None, lyrics_status=None
 def update_track_lyrics_data(
     track_id: str,
     lyrics: Optional[str] = None,
-    lyrics_word_data: Optional[str] = None,
     lyrics_source: Optional[str] = None,
     lyrics_status: Optional[str] = None,
     lyrics_language: Optional[str] = None,
     reference_search_status: Optional[str] = None,
-    clear_word_data: bool = False
 ):
     conn = get_connection()
     cursor = conn.cursor()
@@ -139,11 +137,6 @@ def update_track_lyrics_data(
     if lyrics is not None:
         fields.append("lyrics = ?")
         values.append(lyrics)
-    if clear_word_data:
-        fields.append("lyrics_word_data = NULL")
-    elif lyrics_word_data is not None:
-        fields.append("lyrics_word_data = ?")
-        values.append(lyrics_word_data)
     if lyrics_source is not None:
         fields.append("lyrics_source = ?")
         values.append(lyrics_source)
@@ -172,7 +165,7 @@ def set_track_synced_reference(
 ):
     """
     Atomically updates reference lyrics to synced LRC, sets source and status,
-    marks reference_search_status, and strictly CLEARS any old invalid wordData.
+    and marks reference_search_status.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -181,7 +174,6 @@ def set_track_synced_reference(
         SET lyrics = ?,
             lyrics_source = ?,
             lyrics_status = ?,
-            lyrics_word_data = NULL,
             reference_search_status = ?
         WHERE id = ?
     """, (synced_lrc, lyrics_source, lyrics_status, reference_search_status, track_id))

@@ -3,8 +3,7 @@ import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity }
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import CoverImage from './CoverImage';
-
-const SERVER_URL = 'http://192.168.1.117:8000';
+import { authFetch } from '../utils/api';
 
 export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPlaylist }) {
   const { albumId, albumTitle, coverArt } = route.params;
@@ -14,7 +13,7 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPla
   useEffect(() => {
     const fetchTracks = async () => {
       try {
-        const response = await fetch(`${SERVER_URL}/api/albums/${albumId}`);
+        const response = await authFetch(`/api/albums/${albumId}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         setTracks(data);

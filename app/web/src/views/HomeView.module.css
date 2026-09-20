@@ -107,7 +107,7 @@
 
 .eqBar {
   width: 4px;
-  background: linear-gradient(to top, var(--accent-color), #a5b4fc);
+  background: linear-gradient(to top, var(--accent-color), #ffcda0);
   border-radius: var(--radius-pill);
   transition: height 80ms ease-out, opacity 200ms ease-out;
 }

@@ -12,7 +12,6 @@ from repositories import (
     albums,
     tracks,
     playlists,
-    lyrics_jobs,
     wave,
 )
 
@@ -25,6 +24,5 @@ __all__ = [
     "albums",
     "tracks",
     "playlists",
-    "lyrics_jobs",
     "wave",
 ]

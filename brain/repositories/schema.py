@@ -52,7 +52,8 @@ def apply_migrations(conn):
                         try:
                             cursor.execute(stmt)
                         except Exception as oe:
-                            if "duplicate column name" in str(oe).lower():
+                            msg = str(oe).lower()
+                            if "duplicate column name" in msg or "no such column" in msg:
                                 continue
                             raise
                     cursor.execute("INSERT INTO schema_migrations (version, filename) VALUES (?, ?)", (version, sql_file))
@@ -112,7 +113,6 @@ def init_db():
         "cover_color": "TEXT",
         "added_by_user_id": "INTEGER REFERENCES users(id) ON DELETE SET NULL",
         "duration": "REAL",
-        "lyrics_word_data": "TEXT",
         "lyrics_source": "TEXT",
         "lyrics_status": "TEXT",
         "lyrics_language": "TEXT",
@@ -144,19 +144,6 @@ def init_db():
     );
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_mutation_journal_track ON track_mutation_journal(track_id, created_at DESC);")
-
-    # Таблица фоновых задач выравнивания текстов
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS lyrics_jobs (
-        track_id TEXT PRIMARY KEY,
-        status TEXT NOT NULL,
-        stage TEXT,
-        progress INTEGER DEFAULT 0,
-        error TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
 
     # 5. Таблица плейлистов
     cursor.execute("""
