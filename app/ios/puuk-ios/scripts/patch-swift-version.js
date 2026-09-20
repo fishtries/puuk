@@ -4,6 +4,7 @@ const path = require('path');
 const targetFiles = [
   'node_modules/@expo/expo-modules-macros-plugin/apple/Package.swift',
   'node_modules/expo-modules-jsi/apple/Package.swift',
+  'node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI-Cxx/include/RuntimeScheduler.h',
 ];
 
 let modifiedCount = 0;
@@ -18,7 +19,8 @@ for (const relPath of targetFiles) {
     // PackageDescription function argument lists emitted by newer Expo packages.
     content = content
       .replace(/swift-tools-version: 6\.2/g, 'swift-tools-version: 6.0')
-      .replace(/,(\s*\))/g, '$1');
+      .replace(/,(\s*\))/g, '$1')
+      .replace(/\bSWIFT_RETURNS_RETAINED\s+/g, '');
 
     if (content !== originalContent) {
       fs.writeFileSync(fullPath, content, 'utf8');
