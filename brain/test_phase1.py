@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
 import db
 from security import hash_password, verify_password
 

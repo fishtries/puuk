@@ -108,88 +108,14 @@ export interface SearchResults {
   artists: Artist[];
 }
 
-// Backend DTO types (strictly matching WhisperAnchorBackend JSON output)
-export interface WordLyricsWordDTO {
-  text: string;
-  start: number | null;
-  end: number | null;
-  alignment?: 'matched' | 'interpolated' | 'unresolved' | null;
-  timestamp_source?: 'whisper' | 'interpolated' | 'line_fallback' | 'unresolved' | null;
-  confidence?: number | null;
-  is_interpolated?: boolean | null;
-  prefix?: string;
-  suffix?: string;
-}
-
-export interface WordLyricsLineDTO {
-  start: number;
-  end: number;
-  language: string;
-  text: string;
-  quality?: 'approximate' | 'line_fallback' | 'degraded' | 'failed' | string;
-  word_timing_available?: boolean;
-  timestamp_source?: 'whisper' | 'interpolated' | 'line_fallback' | 'unresolved' | string;
-  confidence?: number | null;
-  matched_words?: number;
-  interpolated_words?: number;
-  unresolved_words?: number;
-  line_fallback_words?: number;
-  unresolved_rate?: number;
-  words: WordLyricsWordDTO[];
-}
-
-export interface WordLyricsPayloadDTO {
-  version: number;
-  backend: string;
-  quality: 'approximate' | 'line_fallback' | 'degraded' | 'failed' | string;
-  language: string;
-  confidence?: number | null;
-  lines: WordLyricsLineDTO[];
-  stats?: Record<string, any>;
-}
-
 // Frontend Domain types
-export type WordAlignment = 'matched' | 'interpolated' | 'unresolved';
-export type WordTimestampSource = 'whisper' | 'interpolated' | 'line_fallback' | 'unresolved';
 export type LineQuality = 'approximate' | 'line_fallback' | 'degraded' | 'failed' | string;
-export type LineDisplayMode = 'word' | 'line';
-
-export interface LyricsWord {
-  text: string;
-  startTime: number | null; // seconds, null if unresolved/missing
-  endTime: number | null;   // seconds, null if unresolved/missing
-  alignment: WordAlignment;
-  timestampSource: WordTimestampSource;
-  confidence: number | null;
-  isInterpolated: boolean;
-  prefix?: string;          // Leading brackets/punctuation (e.g. "(", "«")
-  suffix?: string;          // Trailing punctuation/brackets/whitespace (e.g. ")?", ",", "—)")
-}
 
 export interface LyricsLine {
   time: number; // canonical line start anchor
   endTime?: number; // canonical line end anchor
   text: string; // full line reference text
   language?: string;
-  quality: LineQuality;
-  wordTimingAvailable: boolean;
-  displayMode: LineDisplayMode; // 'word' | 'line' based on 20% unresolved policy
-  unresolvedRate?: number;
-  timestampSource?: WordTimestampSource | string;
-  confidence?: number | null;
-  matchedWords?: number;
-  interpolatedWords?: number;
-  unresolvedWords?: number;
-  lineFallbackWords?: number;
-  words?: LyricsWord[]; // undefined if no word-level tags
-}
-
-export interface WordLyricsPayload {
-  version: number;
-  backend: string;
-  quality: string;
-  language: string;
-  confidence: number | null;
-  lines: LyricsLine[];
-  stats?: Record<string, any>;
+  quality?: LineQuality;
+  timestampSource?: string;
 }

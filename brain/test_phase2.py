@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 # Добавляем brain в sys.path
 sys.path.insert(0, os.path.dirname(__file__))
 
+import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
+
 from fastapi.testclient import TestClient
 import db
 import auth

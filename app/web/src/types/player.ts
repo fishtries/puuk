@@ -1,4 +1,4 @@
-import { Track, LyricsLine, WordLyricsPayload } from './track';
+import { Track, LyricsLine } from './track';
 
 export type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
 export type RepeatMode = 'off' | 'all' | 'one';
@@ -24,6 +24,7 @@ export interface PlayerStoreState {
   repeatMode: RepeatMode;
   isShuffled: boolean;
   isWaveActive: boolean;
+  isWaveLoading: boolean;
 
   // Layout & Overlays
   activeView: ActiveView;
@@ -40,12 +41,12 @@ export interface PlayerStoreState {
   recentlyPlayed: Track[];
   isHistoryLoading: boolean;
   currentTrackIndex: number;
+  wavePlayedIds: string[];
 
   // Lyrics
   lyrics: LyricsLine[];
   isLyricsLoading: boolean;
   rawLyricsText: string;
-  wordData: WordLyricsPayload | null;
 
   // Actions
   playTrack: (track: Track, queue?: Track[]) => Promise<void>;

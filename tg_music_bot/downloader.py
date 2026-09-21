@@ -56,6 +56,10 @@ def download_audio(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=No
         'quiet': True,
         'no_warnings': True,
         'nooverwrites': True,
+        'retries': 10,
+        'fragment_retries': 10,
+        'js_runtimes': {'node': {}},
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
 
     try:
@@ -92,6 +96,8 @@ def search_youtube(query: str, max_results: int = 5) -> list:
         'extract_flat': True,
         'quiet': True,
         'no_warnings': True,
+        'js_runtimes': {'node': {}},
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,8 +129,15 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
         os.makedirs(output_dir, exist_ok=True)
         
     import sys
+    cmd = [
+        sys.executable, "-m", "spotdl", "download", url,
+        "--output", output_dir,
+        "--audio", "youtube", "piped",
+        "--lyrics",
+        "--yt-dlp-args", "--js-runtimes node:/usr/bin/node --extractor-args youtube:player_client=android,web"
+    ]
     process = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "spotdl", "download", url, "--output", output_dir,
+        *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
@@ -132,13 +145,21 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
     total_tracks = 0
     downloaded_tracks = 0
     track_history = []
+    output_lines = []
+    error_lines = []
     
     while True:
         line = await process.stdout.readline()
         if not line:
             break
             
-        line_str = strip_ansi(line.decode('utf-8')).strip()
+        line_str = strip_ansi(line.decode('utf-8', errors='ignore')).strip()
+        if not line_str:
+            continue
+            
+        output_lines.append(line_str)
+        if any(err_kw in line_str.lower() for err_kw in ("error:", "exception:", "failed", "unavailable", "blocked", "http error")):
+            error_lines.append(line_str)
         
         # Parsing spotdl output
         if "Found" in line_str and "songs" in line_str:
@@ -178,11 +199,19 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
                     
     await process.wait()
     
+    stderr_data = await process.stderr.read()
+    stderr_str = strip_ansi(stderr_data.decode('utf-8', errors='ignore')).strip()
+    if stderr_str:
+        error_lines.extend([l.strip() for l in stderr_str.splitlines() if l.strip()])
+    
     if process.returncode != 0:
-        err = await process.stderr.read()
-        raise Exception(f"SpotDL Error: {err.decode('utf-8')}")
+        relevant_errors = "\n".join(error_lines[-5:]) if error_lines else ("\n".join(output_lines[-5:]) if output_lines else "Неизвестная ошибка")
+        raise Exception(f"SpotDL Error:\n{relevant_errors}")
         
     if downloaded_tracks == 0:
+        if error_lines:
+            detail = "\n".join(error_lines[-3:])
+            raise Exception(f"Ни один трек не был загружен:\n{detail}")
         raise Exception("Ни один трек не был загружен. Возможно, трек заблокирован на YouTube или недоступен.")
         
     return {

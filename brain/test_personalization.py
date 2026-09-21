@@ -7,6 +7,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
+
 import db
 import auth
 from security import hash_password

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Activity, Cpu, Disc, Volume2, AlignLeft, RefreshCw } from 'lucide-react';
+import { X, Activity, Cpu, Disc, Volume2, AlignLeft, RefreshCw, Waves } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { WAVE_MAX_BUFFER_SIZE } from '../../store/waveQueue';
 import { audioEngine } from '../../engine/AudioEngine';
 import styles from './DebugOverlay.module.css';
 
@@ -14,9 +15,18 @@ export const DebugOverlay: React.FC = () => {
   const duration = usePlayerStore((state) => state.duration);
   const volume = usePlayerStore((state) => state.volume);
   const queue = usePlayerStore((state) => state.queue);
+  const currentTrackIndex = usePlayerStore((state) => state.currentTrackIndex);
+  const isWaveActive = usePlayerStore((state) => state.isWaveActive);
+  const isWaveLoading = usePlayerStore((state) => state.isWaveLoading);
+  const wavePlayedIds = usePlayerStore((state) => state.wavePlayedIds);
   const lyrics = usePlayerStore((state) => state.lyrics);
 
   const [audioContextState, setAudioContextState] = useState('unknown');
+
+  const playedSet = new Set(wavePlayedIds);
+  const upcomingBufferCount = queue
+    .slice(currentTrackIndex + 1)
+    .filter((track) => track?.id && !playedSet.has(track.id)).length;
 
   useEffect(() => {
     if (isDebugOpen) {
@@ -139,6 +149,43 @@ export const DebugOverlay: React.FC = () => {
                 <span className={styles.statLabel}>Sync Mode:</span>
                 <span className={styles.statValue}>
                   {lyrics.length > 0 ? 'Millisecond Timestamped' : 'Unparsed / Idle'}
+                </span>
+              </div>
+            </div>
+
+            <div className={styles.section}>
+              <div className={styles.sectionTitle}>
+                <Waves size={14} />
+                <span>Wave Telemetry</span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Wave:</span>
+                <span className={`${styles.statValue} ${styles.statusBadge}`}>
+                  {isWaveActive ? 'ACTIVE' : 'OFF'}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Loading:</span>
+                <span className={`${styles.statValue} ${styles.statusBadge}`}>
+                  {isWaveLoading ? 'FETCHING' : 'IDLE'}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Played Count:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  {wavePlayedIds.length}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Upcoming Buffer:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  {upcomingBufferCount}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Buffer Cap:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  {WAVE_MAX_BUFFER_SIZE}
                 </span>
               </div>
             </div>

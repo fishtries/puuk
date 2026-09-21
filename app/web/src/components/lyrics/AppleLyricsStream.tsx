@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Music, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Music, RefreshCw } from 'lucide-react';
 import { useLyrics } from '../../hooks/useLyrics';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import styles from './AppleLyricsStream.module.css';
 import { LyricLineRow } from './LyricLineRow';
-import { useKaraokeGeneration } from './useKaraokeGeneration';
 
 export interface AppleLyricsStreamProps {
   variant?: 'fullscreen' | 'peek';
@@ -16,12 +15,6 @@ export const AppleLyricsStream: React.FC<AppleLyricsStreamProps> = ({
   const { lyrics, activeIndex, isLyricsLoading, seek } = useLyrics();
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const fetchLyrics = usePlayerStore((state) => state.fetchLyrics);
-  const {
-    generationStatus,
-    generationNotice,
-    generationError,
-    handleGenerateWordLyrics,
-  } = useKaraokeGeneration(currentTrack);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isInitialMountRef = useRef(true);
@@ -170,11 +163,6 @@ export const AppleLyricsStream: React.FC<AppleLyricsStreamProps> = ({
     fetchLyrics(currentTrack.id, true);
   }, [currentTrack, fetchLyrics]);
 
-  const hasWordLevel = useMemo(
-    () => lyrics.some((l) => l.wordTimingAvailable && l.words && l.words.length > 0),
-    [lyrics]
-  );
-
   const computedTargetY = baseTargetY + userScrollOffset;
 
   return (
@@ -189,58 +177,6 @@ export const AppleLyricsStream: React.FC<AppleLyricsStreamProps> = ({
         <div className={styles.blurLayer2} />
         <div className={styles.blurLayer3} />
       </div>
-
-      {/* Karaoke Word-Level Actions / Generation Bar */}
-      {currentTrack && (
-        <div className={styles.karaokeHeaderBar}>
-          {generationNotice && (
-            <div className={styles.generationNotice}>
-              <RefreshCw size={12} className={styles.spinIcon} />
-              <span>{generationNotice}</span>
-            </div>
-          )}
-          {generationError && (
-            <div className={styles.generationError}>
-              <span>{generationError}</span>
-            </div>
-          )}
-          {generationStatus !== 'processing' && (
-            <>
-              {hasWordLevel ? (
-                <button
-                  type="button"
-                  className={styles.regenerateBtn}
-                  onClick={() => handleGenerateWordLyrics(true, false)}
-                  title="Заново сопоставить слова песни на GPU (RTX 4070)"
-                >
-                  <RotateCcw size={13} />
-                  <span>Пересоздать караоке</span>
-                </button>
-              ) : lyrics.length > 0 ? (
-                <button
-                  type="button"
-                  className={styles.generateBtn}
-                  onClick={() => handleGenerateWordLyrics(false, false)}
-                  title="Запустить Whisper AI для пословной караоке-разметки"
-                >
-                  <Sparkles size={14} />
-                  <span>✨ Создать караоке-разметку</span>
-                </button>
-              ) : null}
-
-              <button
-                type="button"
-                className={styles.refetchLyricsBtn}
-                onClick={handleRefetchLyrics}
-                title="Принудительно запросить текст из LRCLIB заново"
-              >
-                <RefreshCw size={12} />
-                <span>Обновить текст</span>
-              </button>
-            </>
-          )}
-        </div>
-      )}
 
       {/* Main content: lyrics stream with manual-scroll listeners */}
       <div
@@ -277,39 +213,18 @@ export const AppleLyricsStream: React.FC<AppleLyricsStreamProps> = ({
             <Music size={36} className={styles.stateIcon} />
             <h2 className={styles.stateTitle}>Текст песни отсутствует</h2>
             <p className={styles.stateSubtitle}>
-              Для этого трека нет синхронизированных строк караоке.
+              Для этого трека нет синхронизированных строк.
             </p>
             {currentTrack && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <button
-                  type="button"
-                  className={styles.retryBtn}
-                  onClick={handleRefetchLyrics}
-                  title="Заново запросить текст песни из внешнего источника LRCLIB"
-                >
-                  <RefreshCw size={14} />
-                  <span>Повторить поиск текста (LRCLIB)</span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.aiGenerateBtn}
-                  onClick={() => handleGenerateWordLyrics(true, true)}
-                  disabled={generationStatus === 'processing'}
-                  title="Сгенерировать текст и разметку караоке через Whisper на GPU"
-                >
-                  {generationStatus === 'processing' ? (
-                    <>
-                      <RefreshCw size={14} className={styles.spinIcon} />
-                      <span>Whisper AI распознаёт слова на GPU...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={14} />
-                      <span>✨ Распознать караоке через Whisper AI</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                type="button"
+                className={styles.retryBtn}
+                onClick={handleRefetchLyrics}
+                title="Заново запросить текст песни из внешнего источника LRCLIB"
+              >
+                <RefreshCw size={14} />
+                <span>Повторить поиск текста (LRCLIB)</span>
+              </button>
             )}
           </div>
         )}

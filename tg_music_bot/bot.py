@@ -11,6 +11,10 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.methods import TelegramMethod
+from aiogram.methods.base import TelegramType
 
 # Добавляем brain в sys.path для работы с базой данных
 brain_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../brain'))
@@ -28,6 +32,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ALLOWED_USERS_STR = os.getenv('ALLOWED_USERS', '')
+POLLING_TIMEOUT = int(os.getenv('TG_POLLING_TIMEOUT', '3'))
 
 # Parse allowed users (comma separated IDs)
 try:
@@ -36,12 +41,45 @@ except ValueError:
     print("Warning: Error parsing ALLOWED_USERS. Make sure they are comma-separated integers.")
     ALLOWED_USERS = []
 
+class ResilientAiohttpSession(AiohttpSession):
+    """
+    Сессия с автоматическим прозрачным ретраем при сбросе TCP-сессии
+    прозрачным прокси или DPI (ServerDisconnectedError / ClientConnectorError).
+    """
+    async def make_request(
+        self,
+        bot: Bot,
+        method: TelegramMethod[TelegramType],
+        timeout: int | None = None,
+    ) -> TelegramType:
+        for attempt in range(3):
+            try:
+                return await super().make_request(bot, method, timeout)
+            except TelegramNetworkError as e:
+                err_msg = str(e)
+                if attempt < 2 and any(k in err_msg for k in ("ServerDisconnectedError", "ClientConnectorError", "ClientOSError", "ConnectionResetError")):
+                    logging.debug("Transient Telegram network drop (%s), reconnecting (attempt %d/3)...", err_msg, attempt + 1)
+                    self._should_reset_connector = True
+                    await asyncio.sleep(0.5)
+                    continue
+                raise
+
+class NetworkDropFilter(logging.Filter):
+    """Фильтрует штатные разрывы соединения прокси во время long-polling, не засоряя journalctl."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "ServerDisconnectedError" in msg or "ConnectionResetError" in msg:
+            return False
+        return True
+
 # Initialize bot and dispatcher
 effective_token = BOT_TOKEN if (BOT_TOKEN and BOT_TOKEN != 'your_bot_token_here') else "1234567890:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-bot = Bot(token=effective_token)
+session = ResilientAiohttpSession()
+bot = Bot(token=effective_token, session=session)
 dp = Dispatcher()
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("aiogram.dispatcher").addFilter(NetworkDropFilter())
 
 user_modes = {} # user_id -> 'server' or 'chat'
 MUSIC_DIR = os.getenv('MUSIC_DIR', '/mnt/data/projects/puuk/music')
@@ -375,7 +413,8 @@ async def main():
     except Exception as e:
         logging.warning(f"Failed to set bot commands: {e}")
         
-    await dp.start_polling(bot)
+    logging.info(f"Starting polling (polling_timeout={POLLING_TIMEOUT}s)...")
+    await dp.start_polling(bot, polling_timeout=POLLING_TIMEOUT)
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -9,9 +9,12 @@ MUSIC_DIR = os.getenv("MUSIC_DIR", "/mnt/data/projects/puuk/music")
 BASE_DIR = os.path.dirname(__file__)
 DEFAULT_COVER_PATH = os.path.join(BASE_DIR, "default_cover.jpg")
 DEFAULT_COVER_COLOR = "#13141f"
-WAVE_PERSONALIZATION_WEIGHT = float(os.getenv("WAVE_PERSONALIZATION_WEIGHT", "0.3"))
+WAVE_PERSONALIZATION_WEIGHT = float(os.getenv("WAVE_PERSONALIZATION_WEIGHT", "0.35"))
+# Доля exploration-пула кандидатов от чистого вектора вкуса (ширина выхода за кластер трека).
+WAVE_EXPLORE_RATIO = float(os.getenv("WAVE_EXPLORE_RATIO", "0.25"))
 
-DB_PATH = os.path.join(BASE_DIR, "puuk.db")
+# Тесты изолируют БД через PUUK_DB_PATH (см. test_db_path.py); по умолчанию — рабочая база.
+DB_PATH = os.getenv("PUUK_DB_PATH") or os.path.join(BASE_DIR, "puuk.db")
 
 
 def get_base_url(request) -> str:

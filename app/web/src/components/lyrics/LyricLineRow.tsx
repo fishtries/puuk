@@ -2,7 +2,6 @@ import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { LyricsLine } from '../../types/track';
 import { getProgressiveValues, SCROLL_CLARITY, getWaveSpring } from './lyricsDepth';
-import { WordTimedLine } from './WordTimedLine';
 import styles from './AppleLyricsStream.module.css';
 
 interface LyricLineRowProps {
@@ -95,8 +94,6 @@ export const LyricLineRow: React.FC<LyricLineRowProps> = React.memo(
       onLineClick(line.time);
     }, [onLineClick, line.time]);
 
-    const isWordMode = line.displayMode === 'word' && Boolean(line.words && line.words.length > 0);
-
     return (
       <motion.p
         className={`${styles.lyricLine} ${isActive ? styles.activeLine : styles.inactiveLine}`}
@@ -115,18 +112,7 @@ export const LyricLineRow: React.FC<LyricLineRowProps> = React.memo(
         }
         transition={transitionProps}
       >
-        {isWordMode ? (
-          <WordTimedLine
-            words={line.words!}
-            isActive={isActive}
-            isPast={index < activeIndex}
-            lineTime={line.time}
-            onWordClick={onLineClick}
-            onLineClick={onLineClick}
-          />
-        ) : (
-          <span className={styles.lineLevelText}>{line.text}</span>
-        )}
+        <span className={styles.lineLevelText}>{line.text}</span>
       </motion.p>
     );
   }

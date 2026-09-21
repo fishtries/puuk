@@ -8,9 +8,11 @@
 config.py — централизованная конфигурация
 db.py (1 257) → фасад 88 строк + repositories/ (8 доменных модулей)
 api.py (1 584) → composition root 99 строк + 11 роутеров + 7 сервисов
-whisper_anchor_backend.py → alignment/model_cache.py выделен
 Верификация: 61/61 тестов, 40 маршрутов, бот-совместимость
 Аудит-фиксы: cover-endpoint fallback поведение, cleanup мусора в api.py/db.py/base.py
+🗑️ Удалён word-level (побуквенный/Enhanced LRC, karaoke) пайплайн: whisper_anchor_backend,
+word_lrc_generator, alignment/, lyrics_worker, GPU-эндпоинты, web WordTimedLine/lyricsMapper,
+DB-колонка lyrics_word_data и таблица lyrics_jobs (миграция 004). Обычный строчный LRC сохранён.
 ✅ Фаза 2: Веб-клиент — ЗАВЕРШЕНА (с фиксам по аудиту)
 Задача
 TagEditorModal.tsx 888 → 158 + 7 модулей (hook + 4 таба + карточка + утилиты)
@@ -18,22 +20,31 @@ AppleLyricsStream.tsx 832 → 326 + 4 модуля (WordTimedLine, LyricLineRow,
 HomeScreen.tsx 702 → 495 + islands/ + demoMix
 usePlayerStore.ts — helpers вынесены (accent, lyrics parsing, demo-guard), API не изменён
 Верификация: tsc strict ✓, build ✓, 20/20 тестов ✓
-Аудит-фикс: polling cleanup в useKaraokeGeneration
-🔄 Фаза 3: iOS — НЕ НАЧАТА (следующий шаг)
+Аудит-фикс: polling cleanup в useKaraokeGeneration (оба модуля удалены вместе с word-level пайплайном)
+🔄 Фаза 3: iOS — В ПРОЦЕССЕ (декомпозиция завершена, верификация ручным прогоном)
 Задача
-FullPlayerModal.js (2 412 строк) → декомпозиция на 10+ компонентов
-App.js (671) → экраны + навигационный конфиг
-TrackEditScreen.js (724), LoginModal.js (739) — при необходимости
-TypeScript-миграция (v2-скоуп, опционально)
-Тесты (0% → базовые)
-Перед стартом: разведка app/ios/puuk-ios/ (структура, зависимости,Metro/bundler), бэкап, baseline. iOS без тестов и без git — придётся опираться на компиляцию bundle + ручные проверки.
+✅ FullPlayerModal.js (2 412 → 816) + fullplayer/: BlurOverlays, MiniPlayerBar, PlayerControls, QueuePanel, ProgressBar, ChasingArrowsIcon, playerStyles + lyrics/ (AppleLyricsView, AnimatedLyricLine, lyricDepth)
+✅ App.js (671 → 157) — composition root + navigation/ (RootNavigator, MainTabs)
+✅ TrackEditScreen.js (724 → 467) + trackEditScreenStyles.js; LoginModal.js (739 → 443) + loginModalStyles.js
+✅ Тесты (0% → базовые): jest-expo@~57.0.5, utils/lrcParser + lyrics/lyricDepth, 7/7; jest moduleNameMapper для вложенного expo-modules-core
+⏳ TypeScript-миграция (v2-скоуп, опционально) — не начата
+🔍 Очистка (Orca-разведка + фикс): удалён мёртвый components/MiniPlayer.js и мёртвые экспорты usePlayerController (handlePreviousTrack/handlePlayTrack/handleStartWave); дубли DTO ×3 → normalizeTrackDto(); patch-expo-jsi.js + postinstall/eas-build-post-install восстановлены (ложно удалены как мёртвые; текущий expo-modules-jsi@57.0.8 уже содержит nonisolated(unsafe) — скрипт стал no-op, но hooks сохранены для деградации/старых версий)
+✅ iOS аудит-фиксы: mergeUniqueQueue сохраняет голову буфера (slice(0,max) — первый будущий трек не теряется), queueEpochRef — устаревшие ответы fetchQueue инвалидируются при смене режима (race playTrack→playTrackList), fetchNextTrack передаёт exclude из истории/queued из буфера (семантика этапа 2), package-lock registry нормализован к npmjs (233 URL было npmmirror)
+Верификация: expo export bundle 3.8MB ✓, eslint ✓, jest 7/7 ✓; ручной прогон на устройстве — за пользователем
+✅ iOS wave parity (Orca-разведка + фикс): fetchQueue передаёт exclude_track_ids/queued_track_ids (паритет с backend-контрактом), merge-with-dedup вместо замены очереди (cap 20), мёртвый /api/wave/listen → /api/wave/feedback (finish/skip по прогрессу), isWaveSessionRef-gate: prefetch не загрязняет ручные плейлисты, in-flight guard fetchNextTrack (двойной Next), история сессии cap 50
 📋 Отложенные задачи (backlog)
-1. Nested buttons в кликабельных карточках (HomeIslands.tsx) — pre-existing UX-дефект, нужно stopPropagation или перенос onClick
-2. Изоляция тестовой БД (brain) — tmp-path fixture, тесты наследят 52 leftover-записи в puuk.db
+1. ✅ Nested buttons в кликабельных карточках — ЗАКРЫТО (HomeIslands.tsx ×4, HomeScreen.tsx, RecommendationShelf.tsx: inner buttons получили свой onClick + e.stopPropagation(); контракт: интерактивные элементы не вкладываются)
+2. ✅ Изоляция тестовой БД — ЗАКРЫТО (PUUK_DB_PATH env + brain/test_db_path.py, резолв пути на вызов в repositories/base.py; прогоны тестов больше не пишут в puuk.db). Остаток: ~99 тестовых записей в puuk.db требуют ручной чистки (решение по данным — за пользователем)
 3. Компонентные тесты веба — TagEditor, lyrics hook (rendering-тесты отсутствуют)
 4. Общий LRC-парсер — дублирование в 3 местах (brain, web, iOS)
 5. git init + первичный коммит — до сих пор не сделан, риск для Фазы 3
 6. Декомпозиция HomeScreen глубже (useHomeCatalogData, HomeSearchResults) — 495 строк всё ещё много
+
+🌊 «Моя Волна» — рефакторинг (3 этапа, ЗАВЕРШЁН):
+- Этап 1 (web): последовательное потребление пачки в nextTrack(), wavePlayedIds, prefetch, единый in-flight promise, compactWaveQueue, dedup, лимиты буфера
+- Этап 2 (backend): exclude_track_ids + queued_track_ids (уровни: dislike → queued → recent), select_diverse_recommendations (лимит 2 трека/артист), _ArtistResolver (1 SQL-запрос/пачка), artist из file_path как fallback
+- Этап 3 (backend): cold start из пула 50 (random.choice), exploration-пул от вектора вкуса (WAVE_EXPLORE_RATIO=0.25), band-jitter (eps=0.02), payload Qdrant обогащён artist/title (scan.py/heavy_worker.py), WAVE_RECO_DEBUG-счётчики, WAVE_PERSONALIZATION_WEIGHT 0.3→0.35
+- Верификация: brain 60/60, web 12/12, e2e: 40+/40+ уникальных треков, 8 исполнителей/пачка, 0 повторов
 ⚠️ Открытый вопрос перед Фазой 3
 iOS — это JS без тестов и типов; верификация возможна только через Metro bundle + ручной прогон. Начинать с FullPlayerModal.js (самый большой выигрыш), или сначала сделать git init + коммит текущего состояния, чтобы иметь точку отката?
 Также рекомендую перед Фазой 3 закрыть backlog-пункты 1–2 (быстрые, снижают шум при будущих проверках).

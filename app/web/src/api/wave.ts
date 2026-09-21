@@ -10,10 +10,21 @@ export interface WaveProfileStats {
   is_personalized: boolean;
 }
 
-export async function fetchWaveQueue(params?: { currentTrackId?: string; limit?: number }): Promise<Track[]> {
+export async function fetchWaveQueue(params?: {
+  currentTrackId?: string;
+  limit?: number;
+  excludeTrackIds?: string[];
+  queuedTrackIds?: string[];
+}): Promise<Track[]> {
   const query = new URLSearchParams();
   if (params?.currentTrackId) query.append('current_track_id', params.currentTrackId);
   if (params?.limit) query.append('limit', params.limit.toString());
+  for (const trackId of params?.excludeTrackIds ?? []) {
+    if (trackId) query.append('exclude_track_ids', trackId);
+  }
+  for (const trackId of params?.queuedTrackIds ?? []) {
+    if (trackId) query.append('queued_track_ids', trackId);
+  }
   const queryString = query.toString();
   return apiClient<Track[]>(`/api/wave/queue${queryString ? `?${queryString}` : ''}`);
 }

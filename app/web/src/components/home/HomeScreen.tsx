@@ -352,7 +352,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                             </span>
                           </div>
 
-                          <button type="button" className={styles.miniPlayBtn} aria-label="Воспроизвести">
+                          <button
+                            type="button"
+                            className={styles.miniPlayBtn}
+                            aria-label="Воспроизвести"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTrackItemClick(track);
+                            }}
+                          >
                             {isCurrentPlaying(track.id) ? (
                               <Pause size={14} fill="currentColor" />
                             ) : (

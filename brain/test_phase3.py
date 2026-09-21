@@ -5,6 +5,8 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
+
 from fastapi.testclient import TestClient
 import db
 import auth
@@ -109,13 +111,15 @@ class TestPhase3MultiUserLibrary(unittest.TestCase):
         favs_bob = self.client.get("/api/favorites", headers=self.headers_bob).json()
         self.assertEqual(len(favs_bob), 0)
 
-        # В выдаче общего каталога Алиса видит is_liked=True, Боб видит False
-        tracks_alice = self.client.get("/api/tracks", headers=self.headers_alice).json()
+        # В выдаче общего каталога Алиса видит is_liked=True, Боб видит False.
+        # limit задан явно: puuk.db накапливает тестовые треки между прогонами
+        # (БД не изолирована), и свежий трек выпадает за дефолтную страницу 50.
+        tracks_alice = self.client.get("/api/tracks?limit=500", headers=self.headers_alice).json()
         alice_track = next((t for t in tracks_alice if t["id"] == self.track_id), None)
         self.assertIsNotNone(alice_track)
         self.assertTrue(alice_track["is_liked"])
 
-        tracks_bob = self.client.get("/api/tracks", headers=self.headers_bob).json()
+        tracks_bob = self.client.get("/api/tracks?limit=500", headers=self.headers_bob).json()
         bob_track = next((t for t in tracks_bob if t["id"] == self.track_id), None)
         self.assertIsNotNone(bob_track)
         self.assertFalse(bob_track["is_liked"])

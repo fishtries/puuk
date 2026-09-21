@@ -122,6 +122,18 @@ def main():
                 # Заглушка для эмбеддинга (512 нулей)
                 vector_placeholder = [0.0] * VECTOR_SIZE
                 
+                # Метаданные извлекаются один раз: идут в payload Qdrant (для diversity)
+                # и в SQLite, без второго прохода по файлу.
+                sql_meta = None
+                try:
+                    from api import extract_full_metadata
+                    title_, artist_, album_, lyrics_, duration_ = extract_full_metadata(metadata['file_path'])
+                    metadata["artist"] = artist_
+                    metadata["title"] = title_
+                    sql_meta = (title_, artist_, album_, lyrics_, duration_)
+                except Exception as meta_err:
+                    logger.warning(f"Не удалось извлечь метаданные для {metadata['file_path']}: {meta_err}")
+                
                 try:
                     client.upsert(
                         collection_name=COLLECTION_NAME,
@@ -138,11 +150,11 @@ def main():
                     # Также обновляем SQLite базу (puuk.db), чтобы трек сразу отображался в приложении
                     try:
                         import db
-                        from api import extract_full_metadata
-                        title, artist, album, lyrics, duration = extract_full_metadata(metadata['file_path'])
-                        album_id = db.add_or_get_album(album, None)
-                        db.add_or_update_track(point_id, metadata['file_path'], title, album_id, artist, lyrics, duration=duration)
-                        logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title} - {artist}")
+                        if sql_meta is not None:
+                            title_, artist_, album_, lyrics_, duration_ = sql_meta
+                            album_id = db.add_or_get_album(album_, None)
+                            db.add_or_update_track(point_id, metadata['file_path'], title_, album_id, artist_, lyrics_, duration=duration_)
+                            logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title_} - {artist_}")
                     except Exception as db_err:
                         logger.warning(f"Не удалось обновить SQLite для {metadata['file_path']}: {db_err}")
                 except Exception as e:

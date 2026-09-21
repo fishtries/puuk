@@ -8,6 +8,8 @@ from PIL import Image
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
+import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
+
 from metadata import (
     AudioMetadata,
     MetadataPatch,

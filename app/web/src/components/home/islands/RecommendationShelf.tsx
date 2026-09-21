@@ -45,6 +45,10 @@ export const RecommendationShelf: React.FC<RecommendationShelfProps> = ({
                 type="button"
                 className={`${styles.shelfPlayOverlayBtn} ${isPlaying ? styles.visiblePlayBtn : ''}`}
                 aria-label="Play track"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTrackClick(track);
+                }}
               >
                 {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
               </button>

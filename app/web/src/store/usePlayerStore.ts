@@ -12,10 +12,224 @@ import {
   toggleLikeTrack,
 } from '../api/tracks';
 import { fetchWaveQueue, sendWaveFeedback } from '../api/wave';
+import {
+  WAVE_BATCH_SIZE,
+  WAVE_PREFETCH_THRESHOLD,
+  WaveExclusionSets,
+  buildWaveExclusions,
+  compactWaveQueue,
+  mergeWaveTracks,
+  trimPlayedIds,
+  upcomingWaveTracks,
+} from './waveQueue';
 
 const HISTORY_LIMIT = 50;
 
+/**
+ * Single in-flight wave request. Concurrent Next presses share one HTTP call
+ * instead of stacking duplicate batches on the queue.
+ */
+let waveFetchPromise: Promise<Track[]> | null = null;
+
+/**
+ * In-flight wave transition (see advanceWaveOnce). Guarantees a concurrent
+ * Next press cannot walk the fetch path in parallel and replay the batch head.
+ */
+let waveAdvanceInFlight: Promise<void> | null = null;
+
+function requestWaveBatch(
+  currentTrackId: string | undefined,
+  exclusions: WaveExclusionSets,
+): Promise<Track[]> {
+  if (waveFetchPromise) return waveFetchPromise;
+
+  waveFetchPromise = fetchWaveQueue({
+    currentTrackId,
+    limit: WAVE_BATCH_SIZE,
+    excludeTrackIds: exclusions.excludeTrackIds,
+    queuedTrackIds: exclusions.queuedTrackIds,
+  }).finally(() => {
+    waveFetchPromise = null;
+  });
+
+  return waveFetchPromise;
+}
+
 export const usePlayerStore = create<PlayerStoreState>((set, get) => {
+  async function loadWaveBatch(): Promise<Track[]> {
+    const { currentTrack, queue, wavePlayedIds } = get();
+    const exclusions = buildWaveExclusions(currentTrack, queue, wavePlayedIds);
+
+    set({ isWaveLoading: true });
+    try {
+      // requestWaveBatch de-duplicates concurrent callers by sharing one promise,
+      // so a second Next press waits for the same in-flight request instead of
+      // dropping it and returning an empty batch.
+      return await requestWaveBatch(currentTrack?.id, exclusions);
+    } catch (e) {
+      console.warn('Wave queue fetch failed:', e);
+      return [];
+    } finally {
+      set({ isWaveLoading: false });
+    }
+  }
+
+  /**
+   * Consume the buffered wave head, if any. Returns true when playback advanced,
+   * false when the buffer is exhausted (caller proceeds to a fresh fetch).
+   * State mutations land synchronously before the first await, so concurrent
+   * Next presses resolve to distinct heads instead of replaying one.
+   */
+  async function playWaveBufferHead(resolvedIndex: number, playedIds: string[]): Promise<boolean> {
+    const { queue, isWaveActive, playTrack } = get();
+    if (!isWaveActive) return false;
+
+    const upcoming = upcomingWaveTracks(queue, resolvedIndex, playedIds);
+    if (upcoming.length === 0) return false;
+
+    const head = upcoming[0];
+    const compacted = compactWaveQueue(queue, resolvedIndex, playedIds);
+    const nextIndex = compacted.findIndex((t) => t.id === head.id);
+
+    set({
+      wavePlayedIds: playedIds,
+      queue: compacted,
+      currentTrackIndex: nextIndex >= 0 ? nextIndex : 1,
+    });
+    await playTrack(head, compacted);
+
+    if (get().isWaveActive && upcoming.length - 1 <= WAVE_PREFETCH_THRESHOLD) {
+      void prefetchWave();
+    }
+    return true;
+  }
+
+  /**
+   * Wave navigation: play the next buffered track, or fetch a fresh batch only
+   * when the buffer is exhausted. The finished track is remembered so the
+   * backend never returns it again within the session.
+   */
+  async function advanceWave(finishedTrack: Track | null) {
+    const { queue, currentTrackIndex, currentTrack, wavePlayedIds, playTrack } = get();
+    const playedIds = finishedTrack?.id
+      ? trimPlayedIds([...wavePlayedIds, finishedTrack.id])
+      : wavePlayedIds;
+
+    // Trust the playing track's id over a possibly stale index (manual queue edits).
+    const anchorIndex = currentTrack
+      ? queue.findIndex((t) => t.id === currentTrack.id)
+      : currentTrackIndex;
+    const resolvedIndex = anchorIndex >= 0 ? anchorIndex : currentTrackIndex;
+
+    if (await playWaveBufferHead(resolvedIndex, playedIds)) return;
+
+    set({ wavePlayedIds: playedIds });
+    const fresh = await loadWaveBatch();
+    const merged = mergeWaveTracks(
+      compactWaveQueue(queue, resolvedIndex, playedIds),
+      fresh,
+      new Set([...playedIds, ...(get().currentTrack?.id ? [get().currentTrack!.id] : [])])
+    );
+
+    if (merged.length === 0) return;
+    await playTrack(merged[0], merged);
+  }
+
+  /**
+   * Serialized wave transition. A press that lands while an advance (including
+   * its fetch) is in flight waits for it, then consumes one track from the
+   * refreshed buffer — it never replays the just-landed batch head, which
+   * would double-play it. Buffered presses stay sequential per press.
+   */
+  function advanceWaveOnce(finishedTrack: Track | null): Promise<void> {
+    if (waveAdvanceInFlight) {
+      return waveAdvanceInFlight.then(() => {
+        const { currentTrack, queue, currentTrackIndex, wavePlayedIds } = get();
+        const anchorIndex = currentTrack
+          ? queue.findIndex((t) => t.id === currentTrack.id)
+          : currentTrackIndex;
+        const resolvedIndex = anchorIndex >= 0 ? anchorIndex : currentTrackIndex;
+        return playWaveBufferHead(resolvedIndex, wavePlayedIds).then(() => undefined);
+      });
+    }
+
+    waveAdvanceInFlight = advanceWave(finishedTrack).finally(() => {
+      waveAdvanceInFlight = null;
+    });
+    return waveAdvanceInFlight;
+  }
+
+  /** Background refill: never touches playback, only extends the queue. */
+  async function prefetchWave() {
+    const { currentTrack, queue, wavePlayedIds, isWaveLoading } = get();
+    if (isWaveLoading) return;
+
+    const playedIds = trimPlayedIds(wavePlayedIds);
+    const exclusions = buildWaveExclusions(currentTrack, queue, playedIds);
+
+    set({ isWaveLoading: true });
+    try {
+      const fresh = await requestWaveBatch(currentTrack?.id, exclusions);
+      const state = get();
+      const anchorIndex = state.currentTrack
+        ? state.queue.findIndex((t) => t.id === state.currentTrack?.id)
+        : state.currentTrackIndex;
+      const resolvedIndex = anchorIndex >= 0 ? anchorIndex : state.currentTrackIndex;
+      const compacted = compactWaveQueue(state.queue, resolvedIndex, playedIds);
+      const merged = mergeWaveTracks(
+        compacted,
+        fresh,
+        new Set([...playedIds, ...(state.currentTrack?.id ? [state.currentTrack.id] : [])])
+      );
+      set({ queue: merged, currentTrackIndex: state.currentTrack ? 0 : state.currentTrackIndex });
+    } catch (e) {
+      console.warn('Wave prefetch failed:', e);
+    } finally {
+      set({ isWaveLoading: false });
+    }
+  }
+
+  /**
+   * Navigation shared by manual Next and natural track end. Auto-advance passes
+   * reportSkip=false: the ended listener has already reported `finish` for the
+   * same track, and a duplicate skip would double-count it.
+   */
+  async function goToNextTrack(reportSkip: boolean) {
+    const { queue, currentTrackIndex, isShuffled, isWaveActive, currentTrack, currentTime, duration, playTrack } = get();
+
+    if (reportSkip && currentTrack) {
+      const listenMs = Math.round(currentTime * 1000);
+      const totalMs = Math.round((currentTrack.duration || duration || 0) * 1000);
+      sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs).catch(() => {});
+    }
+
+    // Wave active: consume the already-fetched buffer before asking Qdrant again.
+    if (isWaveActive) {
+      await advanceWaveOnce(currentTrack);
+      return;
+    }
+
+    if (queue.length === 0) return;
+
+    let nextIndex: number;
+    if (isShuffled) {
+      nextIndex = Math.floor(Math.random() * queue.length);
+    } else {
+      nextIndex = currentTrackIndex + 1;
+      if (nextIndex >= queue.length) {
+        if (get().repeatMode === 'all') {
+          nextIndex = 0;
+        } else {
+          return; // end of queue per WEB_CLIENT_ARCH
+        }
+      }
+    }
+
+    if (queue[nextIndex]) {
+      playTrack(queue[nextIndex]);
+    }
+  }
+
   audioEngine.on('timeupdate', ({ currentTime, duration }) => {
     set({ currentTime, duration: duration || get().duration });
   });
@@ -25,7 +239,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
   });
 
   audioEngine.on('ended', () => {
-    const { repeatMode, nextTrack, currentTrack, duration } = get();
+    const { repeatMode, currentTrack, duration } = get();
     if (currentTrack) {
       const trackDurationMs = Math.round((currentTrack.duration || duration || 0) * 1000);
       sendWaveFeedback(currentTrack.id, 'finish', trackDurationMs, trackDurationMs).catch(() => {});
@@ -35,7 +249,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       audioEngine.seek(0);
       audioEngine.play();
     } else {
-      nextTrack();
+      goToNextTrack(false);
     }
   });
 
@@ -49,6 +263,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     repeatMode: 'off',
     isShuffled: false,
     isWaveActive: false,
+    isWaveLoading: false,
 
     activeView: 'home',
     isRightPanelOpen: false,
@@ -63,6 +278,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     recentlyPlayed: [],
     isHistoryLoading: false,
     currentTrackIndex: -1,
+    wavePlayedIds: [],
 
     lyrics: [],
     isLyricsLoading: false,
@@ -73,10 +289,16 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const updatedQueue = newQueue || (state.queue.length > 0 ? state.queue : [track]);
       const index = updatedQueue.findIndex((t) => t.id === track.id);
 
+      // A manual jump inside an active wave counts as "already heard".
+      const nextPlayedIds = state.isWaveActive
+        ? trimPlayedIds([...state.wavePlayedIds, track.id])
+        : state.wavePlayedIds;
+
       set({
         currentTrack: track,
         currentTrackIndex: index >= 0 ? index : 0,
         queue: updatedQueue,
+        wavePlayedIds: nextPlayedIds,
         status: 'loading',
         currentTime: 0,
         duration: track.duration || 0,
@@ -133,51 +355,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       set({ isMuted: nextMuted });
     },
 
-    nextTrack: async () => {
-      const { queue, currentTrackIndex, isShuffled, isWaveActive, currentTrack, currentTime, duration, playTrack } = get();
-
-      if (currentTrack) {
-        const listenMs = Math.round(currentTime * 1000);
-        const totalMs = Math.round((currentTrack.duration || duration || 0) * 1000);
-        sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs).catch(() => {});
-      }
-
-      // If Wave is active, pull next from Qdrant vector queue
-      if (isWaveActive) {
-        try {
-          const nextWaveTracks = await fetchWaveQueue({
-            currentTrackId: currentTrack?.id,
-            limit: 5,
-          });
-          if (nextWaveTracks.length > 0) {
-            playTrack(nextWaveTracks[0], [...queue, ...nextWaveTracks]);
-            return;
-          }
-        } catch (e) {
-          console.warn('Wave queue fetch failed:', e);
-        }
-      }
-
-      if (queue.length === 0) return;
-
-      let nextIndex: number;
-      if (isShuffled) {
-        nextIndex = Math.floor(Math.random() * queue.length);
-      } else {
-        nextIndex = currentTrackIndex + 1;
-        if (nextIndex >= queue.length) {
-          if (get().repeatMode === 'all') {
-            nextIndex = 0;
-          } else {
-            return; // end of queue per WEB_CLIENT_ARCH
-          }
-        }
-      }
-
-      if (queue[nextIndex]) {
-        playTrack(queue[nextIndex]);
-      }
-    },
+    nextTrack: () => goToNextTrack(true),
 
     previousTrack: () => {
       const { currentTime, queue, currentTrackIndex, playTrack } = get();
@@ -203,17 +381,33 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
     toggleWave: async () => {
       const nextWave = !get().isWaveActive;
-      set({ isWaveActive: nextWave });
-      if (nextWave && !get().currentTrack) {
-        try {
-          const waveTracks = await fetchWaveQueue({ limit: 10 });
-          if (waveTracks.length > 0) {
-            get().playTrack(waveTracks[0], waveTracks);
-          }
-        } catch (e) {
-          console.error('Failed to start wave:', e);
-        }
+      const currentTrack = get().currentTrack;
+
+      if (!nextWave) {
+        set({ isWaveActive: false, isWaveLoading: false });
+        return;
       }
+
+      set({
+        isWaveActive: true,
+        wavePlayedIds: currentTrack?.id ? [currentTrack.id] : [],
+      });
+
+      const waveTracks = await loadWaveBatch();
+      if (waveTracks.length === 0) return;
+
+      const state = get();
+      if (!state.currentTrack) {
+        get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()));
+        return;
+      }
+
+      // Keep playing the current track and refill the buffer behind it.
+      const merged = mergeWaveTracks([], waveTracks, new Set([state.currentTrack.id]));
+      set({
+        queue: [state.currentTrack, ...merged],
+        currentTrackIndex: 0,
+      });
     },
 
     addToQueue: (track: Track) => {
@@ -226,7 +420,18 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       set((state) => {
         const newQueue = [...state.queue];
         newQueue.splice(index, 1);
-        return { queue: newQueue };
+
+        // Keep currentTrackIndex pointing at the playing track when the removed
+        // row sat before it, otherwise upcoming navigation skips a track.
+        let currentTrackIndex = state.currentTrackIndex;
+        if (index < currentTrackIndex) {
+          currentTrackIndex -= 1;
+        } else if (state.currentTrack) {
+          const realIndex = newQueue.findIndex((t) => t.id === state.currentTrack?.id);
+          currentTrackIndex = realIndex >= 0 ? realIndex : currentTrackIndex;
+        }
+
+        return { queue: newQueue, currentTrackIndex };
       });
     },
 

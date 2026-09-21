@@ -4,7 +4,6 @@ import type {
   Playlist,
   SearchResults,
   Track,
-  WordLyricsPayloadDTO,
   TrackEditPayloadDTO,
   MetadataSearchResultDTO,
   LyricsSearchResultDTO,
@@ -15,18 +14,9 @@ export interface LyricsResponse {
   syncedLyrics?: string | null;
   plainLyrics?: string | null;
   isSynced: boolean;
-  wordData?: WordLyricsPayloadDTO | null;
   lyricsSource?: string | null;
   lyricsStatus?: string | null;
   lyricsLanguage?: string | null;
-}
-
-export interface LyricsGenerationStatus {
-  status: 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
-  stage?: string;
-  progress?: number;
-  message?: string;
-  error?: string;
 }
 
 export async function fetchLyrics(trackId: string, force = false): Promise<LyricsResponse> {
@@ -82,35 +72,6 @@ export async function toggleLikeTrack(trackId: string, isLiked: boolean): Promis
   return apiClient<{ is_liked: boolean }>(`/api/tracks/${trackId}/like`, {
     method,
   });
-}
-
-export async function triggerWordLyricsGeneration(
-  trackId: string,
-  language?: string,
-  force = false,
-  refetch = false
-): Promise<{ status: string; message: string; track_id: string }> {
-  const params = new URLSearchParams();
-  if (language) params.append('language', language);
-  if (force) params.append('force', 'true');
-  if (refetch) params.append('refetch', 'true');
-  const qs = params.toString() ? `?${params.toString()}` : '';
-  return apiClient<{ status: string; message: string; track_id: string }>(
-    `/api/tracks/${trackId}/generate-word-lyrics${qs}`,
-    { method: 'POST' }
-  );
-}
-
-export async function fetchLyricsGenerationStatus(
-  trackId: string
-): Promise<LyricsGenerationStatus> {
-  try {
-    return await apiClient<LyricsGenerationStatus>(
-      `/api/tracks/${trackId}/lyrics-generation-status`
-    );
-  } catch {
-    return { status: 'idle' };
-  }
 }
 
 export async function recordTrackHistory(trackId: string): Promise<void> {

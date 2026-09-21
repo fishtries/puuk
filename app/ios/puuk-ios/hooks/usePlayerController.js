@@ -1,7 +1,57 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { authFetch, SERVER_URL } from '../utils/api';
+
+/**
+ * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
+ * здесь форма нормализуется. Заменяет три дублированных маппинга.
+ */
+function normalizeTrackDto(source) {
+  const id = source?.id || source?.track_id;
+  return {
+    id,
+    title: source?.title || 'Unknown Track',
+    artist: source?.artist || 'My Wave',
+    bpm: source?.bpm || 0,
+    stream_url: source?.stream_url,
+    is_liked: !!source?.is_liked,
+    coverArt: source?.coverArt || `${SERVER_URL}/api/cover/${id}`,
+  };
+}
+
+// Паритет с backend MAX_EXCLUDE_IDS: длиннее список клиент не передает.
+const MAX_EXCLUDE_IDS = 100;
+// Ограничение будущего буфера волны и истории сессии.
+const MAX_QUEUE_BUFFER = 20;
+const MAX_HISTORY = 50;
+
+function capIds(ids, limit = MAX_EXCLUDE_IDS) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  return unique.length > limit ? unique.slice(unique.length - limit) : unique;
+}
+
+/** URL /api/wave/queue с повторяющимися query-параметрами исключений (контракт этапа 2). */
+function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
+  const params = new URLSearchParams();
+  params.append('current_track_id', trackId);
+  for (const id of capIds(excludeIds)) params.append('exclude_track_ids', id);
+  for (const id of capIds(queuedIds)) params.append('queued_track_ids', id);
+  return `/api/wave/queue?${params.toString()}`;
+}
+
+/** Слияние пачки рекомендаций с буфером без дублей: сначала буфер, потом новая пачка.
+ * При переполнении хвост обрезается — первые будущие треки (ближайшие к текущему) сохраняются. */
+function mergeUniqueQueue(existing, incoming, maxBuffer = MAX_QUEUE_BUFFER) {
+  const seen = new Set(existing.map(t => t.id));
+  const merged = [...existing];
+  for (const track of incoming) {
+    if (!track?.id || seen.has(track.id)) continue;
+    seen.add(track.id);
+    merged.push(track);
+  }
+  return merged.length > maxBuffer ? merged.slice(0, maxBuffer) : merged;
+}
 
 export default function usePlayerController({ setTracks }) {
   const [currentTrack, setCurrentTrack] = useState(null);
@@ -10,6 +60,15 @@ export default function usePlayerController({ setTracks }) {
   const [playerExpandToken, setPlayerExpandToken] = useState(0);
   const [upNextQueue, setUpNextQueue] = useState([]);
   const [history, setHistory] = useState([]);
+
+  // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии,
+  // ручные плейлисты (playTrackList) не загрязняются.
+  const isWaveSessionRef = useRef(false);
+  // Эпоха очереди: любое обновление очереди инвалидирует in-flight ответы fetchQueue,
+  // чтобы поздний wave-ответ не влился в ручной плейлист (race playTrack → playTrackList).
+  const queueEpochRef = useRef(0);
+  // Защита от двойного перехода (кнопка + авто-advance).
+  const isAdvancingRef = useRef(false);
 
   const player = useAudioPlayer();
   const status = useAudioPlayerStatus(player);
@@ -29,23 +88,18 @@ export default function usePlayerController({ setTracks }) {
     player.play();
   }, [player]);
 
-  const fetchQueue = useCallback(async (trackId, signal) => {
+  const fetchQueue = useCallback(async (trackId, signal, exclusions) => {
+    const epoch = queueEpochRef.current;
     try {
-      const response = await authFetch(`/api/wave/queue?current_track_id=${trackId}`, {
+      const response = await authFetch(buildWaveQueueUrl(trackId, exclusions), {
         signal
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const formattedQueue = data.map(t => ({
-        id: t.id || t.track_id,
-        title: t.title || 'Unknown Track',
-        artist: t.artist || 'My Wave',
-        bpm: t.bpm || 0,
-        stream_url: t.stream_url,
-        is_liked: !!t.is_liked,
-        coverArt: `${SERVER_URL}/api/cover/${t.id || t.track_id}`
-      }));
-      setUpNextQueue(formattedQueue);
+      // Слияние вместо замены: остаток буфера сохраняется, дубли невозможны.
+      // Ответ инвалидируется, если очередь успела обновиться (сменился режим/трек).
+      if (epoch !== queueEpochRef.current) return;
+      setUpNextQueue(prev => mergeUniqueQueue(prev, data.map(normalizeTrackDto)));
     } catch (error) {
       if (error.name !== 'AbortError') {
         Alert.alert("Error", "Failed to load queue.");
@@ -77,104 +131,60 @@ export default function usePlayerController({ setTracks }) {
 
   const fetchNextTrack = useCallback(async () => {
     if (!currentTrack) return;
-    setIsLoading(true);
-    setHistory(prev => [...prev, currentTrack]);
+    if (isAdvancingRef.current) return;
+    isAdvancingRef.current = true;
 
-    let nextTrack;
-    let newQueue = [...upNextQueue];
+    try {
+      setIsLoading(true);
+      setHistory(prev => [...prev, currentTrack].slice(-MAX_HISTORY));
 
-    if (newQueue.length > 0) {
-      nextTrack = newQueue.shift();
-      setUpNextQueue(newQueue);
-    }
+      let nextTrack;
+      let newQueue = [...upNextQueue];
 
-    if (nextTrack) {
-      setCurrentTrack(nextTrack);
-      loadAndPlay(nextTrack);
-      setIsLoading(false);
-
-      if (newQueue.length < 3) {
-        // Подгружаем еще треков, если очередь пустеет
-        fetchQueue(nextTrack.id);
+      if (newQueue.length > 0) {
+        nextTrack = newQueue.shift();
+        setUpNextQueue(newQueue);
       }
 
-      // Отправляем аналитику прослушивания для умной волны
-      authFetch('/api/wave/listen', {
-        method: 'POST',
-        body: { track_id: currentTrack.id, listened_ratio: 1.0 }
-      }).catch(e => console.error("Failed to send listen analytic", e));
+      if (nextTrack) {
+        setCurrentTrack(nextTrack);
+        loadAndPlay(nextTrack);
+        setIsLoading(false);
 
-      // Записываем прослушивание в историю пользователя
-      authFetch(`/api/tracks/${nextTrack.id}/history`, { method: 'POST' }).catch(() => {});
-    } else {
-      // Если очередь пуста, просто останавливаем или играем рандом
-      player.pause();
-    }
-  }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue]);
+        if (isWaveSessionRef.current && newQueue.length < 3) {
+          // Подгружаем пачку по семантике этапа 2:
+          // exclude — недавно проигранное (история + текущий),
+          // queued — то, что уже стоит в буфере.
+          fetchQueue(nextTrack.id, undefined, {
+            excludeIds: [...history.map(t => t.id), currentTrack.id],
+            queuedIds: newQueue.map(t => t.id),
+          });
+        }
 
-  const handlePreviousTrack = useCallback(() => {
-    if (history.length > 0) {
-      const prevTrack = history[0];
-      setHistory(prev => prev.slice(1));
+        // Телеметрия волны: finish при дослушивании, иначе skip
+        const trackMs = Math.round((currentTrack.duration || duration || 0) * 1000);
+        const listenedMs = Math.round((currentTime || 0) * 1000);
+        const eventType = duration > 0 && currentTime >= duration * 0.9 ? 'finish' : 'skip';
+        authFetch('/api/wave/feedback', {
+          method: 'POST',
+          body: {
+            track_id: currentTrack.id,
+            event_type: eventType,
+            listen_duration_ms: listenedMs,
+            track_duration_ms: trackMs,
+          }
+        }).catch(e => console.error("Failed to send wave feedback", e));
 
-      // Текущий трек возвращаем в начало очереди
-      if (currentTrack) {
-        setUpNextQueue(prev => [currentTrack, ...prev]);
-      }
-
-      setCurrentTrack(prevTrack);
-      loadAndPlay(prevTrack);
-      fetchQueue(prevTrack.id);
-    } else {
-      // Если истории нет, начинаем трек сначала
-      player.seekTo(0);
-    }
-  }, [history, currentTrack, player, loadAndPlay, fetchQueue]);
-
-  const handlePlayTrack = useCallback((track) => {
-    // При ручном выборе трека
-    if (currentTrack) {
-      setHistory(prev => [currentTrack, ...prev].slice(0, 50));
-    }
-    setCurrentTrack(track);
-    loadAndPlay(track);
-    // Очищаем очередь и генерируем новую на основе выбранного трека
-    setUpNextQueue([]);
-    fetchQueue(track.id);
-  }, [currentTrack, loadAndPlay, fetchQueue]);
-
-  const handleStartWave = useCallback(async () => {
-    // Кнопка плей/пауза для волны на главном экране
-    if (currentTrack) {
-      if (isPlaying) {
-        player.pause();
+        // Записываем прослушивание в историю пользователя
+        authFetch(`/api/tracks/${nextTrack.id}/history`, { method: 'POST' }).catch(() => {});
       } else {
-        player.play();
+        // Если очередь пуста, просто останавливаем
+        player.pause();
       }
-    } else {
-      try {
-        const response = await authFetch('/api/wave/start');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const waveTrack = await response.json();
-
-        const formattedTrack = {
-          id: waveTrack.id || waveTrack.track_id,
-          title: waveTrack.title || 'Unknown Track',
-          artist: waveTrack.artist || 'My Wave',
-          bpm: waveTrack.bpm || 0,
-          stream_url: waveTrack.stream_url,
-          is_liked: !!waveTrack.is_liked,
-          coverArt: `${SERVER_URL}/api/cover/${waveTrack.id || waveTrack.track_id}`
-        };
-
-        setCurrentTrack(formattedTrack);
-        loadAndPlay(formattedTrack);
-        fetchQueue(waveTrack.id);
-      } catch (error) {
-        Alert.alert("Error", "Failed to start wave.");
-      }
+    } finally {
+      isAdvancingRef.current = false;
     }
-  }, [currentTrack, isPlaying, player, loadAndPlay, fetchQueue]);
+  }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue, currentTime, duration]);
 
   const togglePlayPause = useCallback(() => {
     if (isPlaying) {
@@ -190,25 +200,33 @@ export default function usePlayerController({ setTracks }) {
 
   const playTrack = useCallback((track) => {
     if (currentTrack && currentTrack.id !== track.id) {
-      setHistory(prev => [...prev, currentTrack]);
+      setHistory(prev => [...prev, currentTrack].slice(-MAX_HISTORY));
     }
+    isWaveSessionRef.current = true;
     setCurrentTrack(track);
     requestExpandPlayer();
+    queueEpochRef.current += 1;
     setUpNextQueue([]);
-    fetchQueue(track.id);
+    // Очередь волны от выбранного трека; играли — исключаем, чтобы не сыпалось назад.
+    fetchQueue(track.id, undefined, {
+      excludeIds: [...history.map(t => t.id), currentTrack?.id],
+      queuedIds: [],
+    });
     loadAndPlay(track);
     authFetch(`/api/tracks/${track.id}/history`, { method: 'POST' }).catch(() => {});
-  }, [currentTrack, requestExpandPlayer, fetchQueue, loadAndPlay]);
+  }, [currentTrack, history, requestExpandPlayer, fetchQueue, loadAndPlay]);
 
   const playTrackList = useCallback((trackList, startIndex = 0) => {
     if (!trackList || trackList.length === 0) return;
     const track = trackList[startIndex];
     const queue = trackList.slice(startIndex + 1);
     if (currentTrack && currentTrack.id !== track.id) {
-      setHistory(prev => [...prev, currentTrack]);
+      setHistory(prev => [...prev, currentTrack].slice(-MAX_HISTORY));
     }
+    isWaveSessionRef.current = false;
     setCurrentTrack(track);
     requestExpandPlayer();
+    queueEpochRef.current += 1;
     setUpNextQueue(queue);
     loadAndPlay(track);
     authFetch(`/api/tracks/${track.id}/history`, { method: 'POST' }).catch(() => {});
@@ -245,26 +263,24 @@ export default function usePlayerController({ setTracks }) {
       const response = await authFetch('/api/wave/next?current_track_id=random');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const waveTrack = {
-        id: data.id || data.track_id,
-        title: data.title || 'Unknown Track',
-        artist: data.artist || 'My Wave',
-        bpm: data.bpm || 0,
-        stream_url: data.stream_url,
-        coverArt: data.coverArt || `${SERVER_URL}/api/cover/${data.id || data.track_id}`,
-        is_liked: !!data.is_liked
-      };
+      const waveTrack = normalizeTrackDto(data);
+      isWaveSessionRef.current = true;
       setCurrentTrack(waveTrack);
       requestExpandPlayer();
+      queueEpochRef.current += 1;
       setUpNextQueue([]);
-      fetchQueue(waveTrack.id);
+      // Новая сессия волны: играли до этого — исключаем.
+      fetchQueue(waveTrack.id, undefined, {
+        excludeIds: [...history.map(t => t.id), currentTrack?.id],
+        queuedIds: [],
+      });
       loadAndPlay(waveTrack);
     } catch (error) {
       if (error.name !== 'AbortError') {
         Alert.alert("Error", "Failed to start wave.");
       }
     }
-  }, [requestExpandPlayer, fetchQueue, loadAndPlay]);
+  }, [history, currentTrack, requestExpandPlayer, fetchQueue, loadAndPlay]);
 
   return {
     player,
@@ -280,14 +296,8 @@ export default function usePlayerController({ setTracks }) {
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
-    history,
-    loadAndPlay,
-    fetchQueue,
     playPreviousTrack,
     fetchNextTrack,
-    handlePreviousTrack,
-    handlePlayTrack,
-    handleStartWave,
     togglePlayPause,
     playTrack,
     playTrackList,

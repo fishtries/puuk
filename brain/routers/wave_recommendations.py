@@ -18,6 +18,17 @@ from services.recommendation_service import (
 
 router = APIRouter(prefix="/api/wave", tags=["wave-recommendations"])
 
+# Максимум исключаемых ID за один запрос (protection против раздутого клиента).
+MAX_EXCLUDE_IDS = 100
+
+
+def _normalize_exclude_ids(raw_ids: list[str] | None) -> set[str]:
+    """Дедуплицирует и ограничивает список exclude_track_ids от клиента."""
+    if not raw_ids:
+        return set()
+    cleaned = [track_id.strip() for track_id in raw_ids if track_id and track_id.strip()]
+    return set(cleaned[-MAX_EXCLUDE_IDS:])
+
 
 def _resolve_random_start():
     """Холодный старт /wave/next: случайный трек из коллекции. Возвращает (id, existing_records)."""
@@ -31,6 +42,8 @@ def _resolve_random_start():
 def get_next_track(
     request: Request,
     current_track_id: str = Query(..., description="UUID текущего трека (или 'random' для старта)"),
+    exclude_track_ids: list[str] = Query(default=[], description="ID недавно проигранных треков"),
+    queued_track_ids: list[str] = Query(default=[], description="ID треков, уже стоящих в очереди клиента"),
     current_user: dict = Depends(get_current_user)
 ):
     """Возвращает следующий трек для «Моей волны» на основе CLAP-эмбеддингов с учетом дизлайков."""
@@ -54,11 +67,17 @@ def get_next_track(
         raise HTTPException(status_code=404, detail=f"Трек {current_track_id} не найден.")
 
     dislike_ids = db.get_user_dislike_ids(current_user["id"])
+    exclude_ids = _normalize_exclude_ids(exclude_track_ids)
+    queued_ids = _normalize_exclude_ids(queued_track_ids)
+    queued_ids.discard(str(current_track_id))
+
     recommendations = get_smart_recommendations(
         current_track_id=current_track_id,
         limit=5,
         existing_track=existing,
         dislike_ids=dislike_ids,
+        exclude_ids=exclude_ids,
+        queued_ids=queued_ids,
         user_id=current_user["id"],
         personalization_weight=WAVE_PERSONALIZATION_WEIGHT
     )
@@ -76,6 +95,8 @@ def get_wave_queue_endpoint(
     request: Request,
     current_track_id: str = Query(None, description="UUID текущего трека (или 'random' / None для холодного старта)"),
     limit: int = Query(10, ge=1, le=50),
+    exclude_track_ids: list[str] = Query(default=[], description="ID недавно проигранных треков"),
+    queued_track_ids: list[str] = Query(default=[], description="ID треков, уже стоящих в очереди клиента"),
     current_user: dict = Depends(get_current_user)
 ):
     """Возвращает персонализированную очередь треков Моей Волны."""
@@ -111,11 +132,17 @@ def get_wave_queue_endpoint(
             raise HTTPException(status_code=404, detail=f"Трек {current_track_id} не найден.")
 
     dislike_ids = db.get_user_dislike_ids(user_id)
+    exclude_ids = _normalize_exclude_ids(exclude_track_ids)
+    queued_ids = _normalize_exclude_ids(queued_track_ids)
+    queued_ids.discard(str(current_track_id))
+
     recommendations = get_smart_recommendations(
         current_track_id=current_track_id,
         limit=limit,
         existing_track=existing,
         dislike_ids=dislike_ids,
+        exclude_ids=exclude_ids,
+        queued_ids=queued_ids,
         user_id=user_id,
         personalization_weight=WAVE_PERSONALIZATION_WEIGHT
     )

@@ -40,7 +40,15 @@ export const FreshMixCard: React.FC<{
     </div>
 
     <div className={styles.cardActionRow}>
-      <button type="button" className={styles.cardActionPlayBtn}>
+      <button
+        type="button"
+        className={styles.cardActionPlayBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          onLaunchWave();
+        }}
+        aria-label={isWaveActive ? 'Пауза Волны' : 'Запустить Волну'}
+      >
         {isWaveActive && isPlaying ? (
           <Pause size={18} fill="currentColor" />
         ) : (
@@ -84,7 +92,15 @@ export const RecentlyListenedCard: React.FC<{ tracks: Track[] } & TrackRowHandle
               <span className={styles.pillTrackArtist}>{track.artist}</span>
             </div>
 
-            <button type="button" className={styles.miniPlayBtn} aria-label={`Воспроизвести ${track.title}`}>
+            <button
+              type="button"
+              className={styles.miniPlayBtn}
+              aria-label={`Воспроизвести ${track.title}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTrackClick(track);
+              }}
+            >
               {isCurrentPlaying(track.id) ? (
                 <Pause size={13} fill="currentColor" />
               ) : (
@@ -122,7 +138,15 @@ export const FavoritesCard: React.FC<{ favorites: Track[]; onPlayFirst: () => vo
     </div>
 
     <div className={styles.cardActionRow}>
-      <button type="button" className={styles.cardActionPlayBtn}>
+      <button
+        type="button"
+        className={styles.cardActionPlayBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlayFirst();
+        }}
+        aria-label="Слушать избранное"
+      >
         <Play size={18} fill="currentColor" />
       </button>
     </div>
@@ -157,7 +181,15 @@ export const FreshTracksCard: React.FC<{ tracks: Track[] } & TrackRowHandlers> =
             <span className={styles.pillTrackArtist}>{track.artist}</span>
           </div>
 
-          <button type="button" className={styles.miniPlayBtn}>
+          <button
+            type="button"
+            className={styles.miniPlayBtn}
+            aria-label={`Воспроизвести ${track.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTrackClick(track);
+            }}
+          >
             {isCurrentPlaying(track.id) ? (
               <Pause size={13} fill="currentColor" />
             ) : (

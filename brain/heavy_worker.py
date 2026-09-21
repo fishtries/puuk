@@ -90,6 +90,20 @@ def setup_sftp() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
     logger.info("SFTP соединение успешно установлено.")
     return ssh, sftp
 
+def parse_artist_from_path(file_path: str) -> str | None:
+    """
+    Извлекает исполнителя из имени файла вида "Artist - Title.ext".
+    Без обращения к диску. Используется как fallback для точек, у которых
+    payload ещё не содержит 'artist' (сканированных до обогащения).
+    """
+    if not file_path:
+        return None
+    name = Path(file_path).stem
+    if " - " not in name:
+        return None
+    return name.split(" - ", 1)[0].strip() or None
+
+
 def get_unprocessed_tracks(client: QdrantClient) -> list:
     """Поиск всех треков с needs_embedding=True через Scroll API."""
     logger.info("Ищу треки, ожидающие ML-анализа (needs_embedding=True)...")
@@ -180,7 +194,14 @@ def main():
                 if not file_path:
                     logger.warning(f"У записи {point_id} нет file_path. Пропускаем.")
                     continue
-                    
+
+                # Обогащение payload: точки, отсканированные до появления
+                # 'artist', получают исполнителя из имени файла.
+                if not payload.get("artist"):
+                    parsed_artist = parse_artist_from_path(file_path)
+                    if parsed_artist:
+                        payload["artist"] = parsed_artist
+                        
                 remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
                 local_filename = Path(file_path).name
                 local_path = TEMP_DIR / local_filename
