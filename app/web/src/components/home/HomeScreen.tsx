@@ -20,6 +20,7 @@ import { Album, Artist, Track } from '../../types/track';
 import { PlaylistsView, PlaylistGridItem } from '../../views/PlaylistsView';
 import { PlaylistDetail } from '../../views/PlaylistDetail';
 import { AlbumDetail } from '../../views/AlbumDetail';
+import type { MoodItem } from '../../types/recommendations';
 import styles from './HomeScreen.module.css';
 
 import { DEMO_MIX } from './demoMix';
@@ -148,6 +149,17 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
     }
   };
 
+  const handleOpenMoodPlaylist = (mood: MoodItem) => {
+    setSelectedPlaylist({
+      id: `mood-${mood.id}`,
+      name: mood.title,
+      coverUrl: mood.coverUrl,
+      trackCount: mood.tracks.length,
+      subtitle: mood.description,
+      tracks: mood.tracks,
+    });
+  };
+
   return (
     <div className={styles.screenWrapper}>
       {/* 1. Left Capsule (Sidebar Island) */}
@@ -265,6 +277,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
               <PlaylistDetail
                 playlistId={selectedPlaylist.id}
                 isFavorites={selectedPlaylist.isFavorites}
+                name={selectedPlaylist.name}
+                subtitle={selectedPlaylist.subtitle}
+                coverUrl={selectedPlaylist.coverUrl}
+                tracks={selectedPlaylist.tracks}
               />
             )}
           </motion.section>
@@ -473,7 +489,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                 onLaunchWave={handleLaunchWave}
               />
 
-              <YoullLikeThisCard />
+              <YoullLikeThisCard
+                allTracks={allTracks}
+                onOpenPlaylist={handleOpenMoodPlaylist}
+              />
 
               <FavoritesCard
                 favorites={favorites}

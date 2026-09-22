@@ -1,7 +1,17 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Play, Pause, Music2, Clock, Heart, ArrowUpRight } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { Track } from '../../../types/track';
+import { getCoverUrl } from '../../../api/tracks';
 import styles from '../HomeScreen.module.css';
+import { MoodCoverFlowCarousel } from './MoodCoverFlowCarousel';
+import {
+  fetchYoullLikeThis,
+  buildFallbackMoodItems,
+  DEFAULT_MOOD_ORDER,
+  MOOD_DEFINITIONS,
+} from '../../../api/recommendations';
+import type { MoodItem } from '../../../types/recommendations';
 
 export interface TrackRowHandlers {
   isCurrentPlaying: (trackId: string) => boolean;
@@ -33,23 +43,62 @@ export const FreshMixCard: React.FC<{
   </div>
 );
 
-/** Card 2: "you'll like this" (без реализации). */
-export const YoullLikeThisCard: React.FC = () => (
-  <div
-    className={`${styles.glassCard} ${styles.youllLikeThisCard}`}
-    role="region"
-    aria-label="you'll like this"
-  >
-    <div className={styles.cardTitleBar}>
-      <span className={styles.youllLikeThisTitle}>you'll like this</span>
-      <ArrowUpRight size={18} className={styles.youllLikeThisArrow} />
-    </div>
+/** Card 2: "you'll like this" — 3D Cover Flow Carousel сгенерированных AI плейлистов. */
+export const YoullLikeThisCard: React.FC<{
+  allTracks?: Track[];
+  onOpenPlaylist?: (mood: MoodItem) => void;
+}> = ({ allTracks = [], onOpenPlaylist }) => {
+  // Запрос рекомендаций от бэкенда
+  const { data: moodData } = useQuery({
+    queryKey: ['recommendations', 'youll-like-this'],
+    queryFn: () => fetchYoullLikeThis(),
+    staleTime: 60000,
+    retry: 1,
+  });
 
-    <div className={styles.youllLikeThisPlaceholder}>
-      <p className={styles.youllLikeThisPlaceholderText}>Персональные рекомендации появятся здесь</p>
+  // Построение 6 mood-плейлистов с надёжным fallback на базе библиотеки треков
+  const moodItems: MoodItem[] = useMemo(() => {
+    const fallback = buildFallbackMoodItems(allTracks);
+    if (!moodData?.sections || moodData.sections.length === 0) {
+      return fallback;
+    }
+
+    return DEFAULT_MOOD_ORDER.map((moodId) => {
+      const section = moodData.sections.find((s) => s.mood === moodId);
+      const def = MOOD_DEFINITIONS[moodId];
+      const fallbackItem = fallback.find((f) => f.id === moodId);
+      const tracks =
+        section?.tracks && section.tracks.length > 0
+          ? section.tracks
+          : fallbackItem?.tracks || [];
+      const coverUrl =
+        (tracks[0] ? getCoverUrl(tracks[0]) : undefined) || fallbackItem?.coverUrl;
+
+      return {
+        id: moodId,
+        title: def?.title || section?.title || `${moodId} mix`,
+        description: def?.description || 'Персональный AI плейлист',
+        color: def?.color || '#ff7a00',
+        gradient: def?.gradient || 'linear-gradient(135deg, #ff7a00 0%, #ff0055 100%)',
+        tracks,
+        coverUrl,
+      };
+    });
+  }, [moodData, allTracks]);
+
+  return (
+    <div
+      className={`${styles.glassCard} ${styles.youllLikeThisCard}`}
+      role="region"
+      aria-label="you'll like this"
+    >
+      <MoodCoverFlowCarousel
+        moods={moodItems}
+        onOpenPlaylist={(mood) => onOpenPlaylist?.(mood)}
+      />
     </div>
-  </div>
-);
+  );
+};
 
 /** @deprecated Сохранено для обратной совместимости */
 export const RecentlyListenedCard: React.FC<any> = YoullLikeThisCard;

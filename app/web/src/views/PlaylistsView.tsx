@@ -3,7 +3,7 @@ import { Heart, Music2, Play, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { fetchPlaylists, fetchFavorites, getCoverUrl } from '../api/tracks';
-import { Playlist } from '../types/track';
+import { Playlist, Track } from '../types/track';
 import styles from './PlaylistsView.module.css';
 
 export const FAVORITES_ID = '__favorites__';
@@ -23,6 +23,7 @@ export interface PlaylistGridItem {
   trackCount: number;
   isFavorites?: boolean;
   subtitle?: string;
+  tracks?: Track[];
 }
 
 interface PlaylistsViewProps {
