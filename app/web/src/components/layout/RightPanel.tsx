@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, AlignLeft, ListMusic } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { KaraokeLyrics } from '../lyrics/KaraokeLyrics';
-import { QueueList } from '../queue/QueueList';
+import { ClearQueueButton, QueueList } from '../queue/QueueList';
 import styles from './RightPanel.module.css';
 
 export const RightPanel: React.FC = () => {
@@ -44,15 +44,18 @@ export const RightPanel: React.FC = () => {
               </button>
             </div>
 
-            <button
-              type="button"
-              className={styles.closeBtn}
-              onClick={() => setIsRightPanelOpen(false)}
-              aria-label="Закрыть панель"
-              title="Закрыть (L)"
-            >
-              <X size={16} />
-            </button>
+            <div className={styles.headerActions}>
+              {rightPanelTab === 'queue' && <ClearQueueButton />}
+              <button
+                type="button"
+                className={styles.closeBtn}
+                onClick={() => setIsRightPanelOpen(false)}
+                aria-label="Закрыть панель"
+                title="Закрыть (L)"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </header>
 
           {/* Panel Content */}

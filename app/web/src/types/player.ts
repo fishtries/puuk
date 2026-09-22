@@ -30,6 +30,7 @@ export interface PlayerStoreState {
   activeView: ActiveView;
   isRightPanelOpen: boolean;
   rightPanelTab: RightPanelTab;
+  isTrackInfoOpen: boolean;
   isFullscreen: boolean;
   isDebugOpen: boolean;
   isLoginOpen: boolean;
@@ -60,7 +61,7 @@ export interface PlayerStoreState {
   previousTrack: () => void;
   setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
-  toggleWave: () => void;
+  toggleWave: () => Promise<boolean>;
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;
   clearQueue: () => void;
@@ -68,6 +69,8 @@ export interface PlayerStoreState {
   setIsRightPanelOpen: (isOpen: boolean) => void;
   toggleRightPanel: (tab?: RightPanelTab) => void;
   setRightPanelTab: (tab: RightPanelTab) => void;
+  setIsTrackInfoOpen: (isOpen: boolean) => void;
+  toggleTrackInfo: () => void;
   setIsFullscreen: (isOpen: boolean) => void;
   setIsDebugOpen: (isOpen: boolean) => void;
   setIsLoginOpen: (isOpen: boolean) => void;

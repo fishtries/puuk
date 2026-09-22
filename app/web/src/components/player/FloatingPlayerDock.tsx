@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Play,
   Pause,
@@ -9,15 +9,14 @@ import {
   Repeat1,
   ListMusic,
   Music2,
-  Sparkles,
   Captions,
   Tag,
+  Heart,
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { getCoverUrl } from '../../api/tracks';
 import { LyricsQuickPeek } from './LyricsQuickPeek';
-import { WaveProfileIndicator } from './WaveProfileIndicator';
 import styles from './FloatingPlayerDock.module.css';
 
 function formatTime(seconds: number): string {
@@ -26,6 +25,57 @@ function formatTime(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
+
+const MARQUEE_SPEED_PX_PER_SEC = 24;
+const MARQUEE_MIN_DURATION_S = 4;
+
+interface MarqueeLabelProps {
+  text: string;
+  className: string;
+}
+
+const MarqueeLabel: React.FC<MarqueeLabelProps> = ({ text, className }) => {
+  const viewportRef = useRef<HTMLSpanElement | null>(null);
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const [overflowDistance, setOverflowDistance] = useState(0);
+
+  useEffect(() => {
+    const measure = () => {
+      const viewport = viewportRef.current;
+      const textMeasure = measureRef.current;
+      if (!viewport || !textMeasure) return;
+      const distance = textMeasure.getBoundingClientRect().width - viewport.clientWidth;
+      setOverflowDistance(distance > 1 ? distance : 0);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (viewportRef.current) observer.observe(viewportRef.current);
+    return () => observer.disconnect();
+  }, [text]);
+
+  const duration = overflowDistance > 0
+    ? Math.max(overflowDistance / MARQUEE_SPEED_PX_PER_SEC, MARQUEE_MIN_DURATION_S)
+    : 0;
+
+  return (
+    <span ref={viewportRef} className={className}>
+      <span ref={measureRef} className={styles.marqueeMeasure} aria-hidden="true">
+        {text}
+      </span>
+      {overflowDistance > 0 ? (
+        <span
+          className={styles.marqueeTrack}
+          style={{ animationDuration: `${duration.toFixed(2)}s` }}
+        >
+          <span className={styles.marqueeCopy}>{text}</span>
+          <span aria-hidden className={styles.marqueeCopy}>{text}</span>
+        </span>
+      ) : (
+        text
+      )}
+    </span>
+  );
+};
 
 interface FloatingPlayerDockProps {
   onOpenLyrics?: () => void;
@@ -42,7 +92,6 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   const duration = usePlayerStore((state) => state.duration);
   const isShuffled = usePlayerStore((state) => state.isShuffled);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
-  const isWaveActive = usePlayerStore((state) => state.isWaveActive);
 
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
@@ -50,7 +99,9 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   const seek = usePlayerStore((state) => state.seek);
   const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
   const setRepeatMode = usePlayerStore((state) => state.setRepeatMode);
-  const toggleRightPanel = usePlayerStore((state) => state.toggleRightPanel);
+  const isTrackInfoOpen = usePlayerStore((state) => state.isTrackInfoOpen);
+  const toggleTrackInfo = usePlayerStore((state) => state.toggleTrackInfo);
+  const toggleLike = usePlayerStore((state) => state.toggleLike);
   const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
 
   const [isLyricsPeekOpen, setIsLyricsPeekOpen] = useState(false);
@@ -86,7 +137,12 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   };
 
   return (
-    <div className={styles.dockContainer} role="region" aria-label="Floating Player Dock">
+    <div
+      className={`${styles.dockContainer} ${isTrackInfoOpen ? styles.dockHiddenOnCompact : ''}`}
+      data-track-info-open={isTrackInfoOpen}
+      role="region"
+      aria-label="Floating Player Dock"
+    >
       {/* 1. Left Pill: Shuffle & Repeat */}
       <div className={`${styles.glassCapsule} ${styles.modesCapsule}`}>
         <button
@@ -96,7 +152,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           title={isShuffled ? 'Перемешивание включено' : 'Перемешать'}
           aria-label="Toggle shuffle"
         >
-          <Shuffle size={16} />
+          <Shuffle size={18} />
           {isShuffled && <span className={styles.activeDot} />}
         </button>
 
@@ -113,7 +169,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           }
           aria-label="Toggle repeat"
         >
-          {repeatMode === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
+          {repeatMode === 'one' ? <Repeat1 size={18} /> : <Repeat size={18} />}
           {repeatMode !== 'off' && <span className={styles.activeDot} />}
         </button>
       </div>
@@ -127,7 +183,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           title="Предыдущий трек"
           aria-label="Previous track"
         >
-          <SkipBack size={18} />
+          <SkipBack size={20} />
         </button>
 
         <button
@@ -137,7 +193,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           title={isPlaying ? 'Пауза' : 'Воспроизведение'}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
-          {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+          {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
         </button>
 
         <button
@@ -147,7 +203,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           title="Следующий трек"
           aria-label="Next track"
         >
-          <SkipForward size={18} />
+          <SkipForward size={20} />
         </button>
       </div>
 
@@ -167,28 +223,38 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
             />
           ) : (
             <div className={styles.fallbackCover}>
-              <Music2 size={18} className={styles.fallbackIcon} />
-            </div>
-          )}
-          {isWaveActive && (
-            <div className={styles.waveBadge} title="Моя Волна">
-              <Sparkles size={10} />
+              <Music2 size={20} className={styles.fallbackIcon} />
             </div>
           )}
         </div>
 
         {/* Track Title & Artist */}
         <div className={styles.trackInfo}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span className={styles.trackTitle} title={currentTrack?.title || 'Не играет'}>
-              {currentTrack?.title || 'Выберите трек для воспроизведения'}
-            </span>
-            {isWaveActive && <WaveProfileIndicator compact />}
-          </div>
-          <span className={styles.trackArtist} title={currentTrack?.artist || ''}>
-            {currentTrack?.artist || 'Puuk Music'}
-          </span>
+          <MarqueeLabel
+            text={currentTrack?.title || 'Выберите трек для воспроизведения'}
+            className={styles.trackTitle}
+          />
+          <MarqueeLabel
+            text={currentTrack?.artist || 'Puuk Music'}
+            className={styles.trackArtist}
+          />
         </div>
+
+        {/* Like Button (left side, right after metadata) */}
+        {currentTrack && (
+          <button
+            type="button"
+            onClick={() => toggleLike(currentTrack.id)}
+            className={`${styles.actionIconBtn} ${styles.dockLikeBtn} ${currentTrack.is_liked ? styles.likedActionBtn : ''}`}
+            title={currentTrack.is_liked ? 'Удалить из избранного' : 'В избранное'}
+            aria-label="Лайк"
+          >
+            <Heart
+              size={18}
+              fill={currentTrack.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'}
+            />
+          </button>
+        )}
 
         {/* Scrubber Timeline */}
         <div className={styles.timelineArea}>
@@ -237,17 +303,17 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
             aria-label="Toggle lyrics peek"
             aria-expanded={isLyricsPeekOpen}
           >
-            <Captions size={17} />
+            <Captions size={19} />
           </button>
 
           <button
             type="button"
-            onClick={() => toggleRightPanel('queue')}
-            className={styles.actionIconBtn}
-            title="Очередь воспроизведения"
+            onClick={toggleTrackInfo}
+            className={`${styles.actionIconBtn} ${isTrackInfoOpen ? styles.activeActionBtn : ''}`}
+            title="Открыть очередь и информацию о треке"
             aria-label="Open queue"
           >
-            <ListMusic size={17} />
+            <ListMusic size={19} />
           </button>
 
           {currentTrack && (
@@ -258,7 +324,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
               title="Редактировать теги ID3"
               aria-label="Редактировать теги"
             >
-              <Tag size={16} />
+              <Tag size={18} />
             </button>
           )}
         </div>

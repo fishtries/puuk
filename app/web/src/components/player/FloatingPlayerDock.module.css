@@ -7,8 +7,15 @@
   align-items: center;
   gap: 12px;
   z-index: 50;
+  width: min(calc(100vw - 48px), 1280px);
   max-width: calc(100vw - 48px);
   user-select: none;
+  transition: opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-modal) var(--ease-drawer);
+}
+
+.dockHiddenOnCompact {
+  pointer-events: none;
 }
 
 /* Glassmorphism Capsule Base */
@@ -41,15 +48,15 @@
 
 /* 1. Modes Capsule (Shuffle & Repeat) */
 .modesCapsule {
-  padding: 6px 12px;
-  gap: 8px;
-  height: 56px;
+  padding: 7px 14px;
+  gap: 10px;
+  height: 66px;
 }
 
 .modeBtn {
   position: relative;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -83,19 +90,19 @@
 
 /* 2. Center Main Capsule */
 .centerDeckCapsule {
-  padding: 8px 18px 8px 10px;
-  gap: 16px;
-  height: 56px;
-  min-width: 520px;
-  max-width: 680px;
+  padding: 10px 22px 10px 12px;
+  gap: 18px;
+  height: 66px;
+  min-width: 580px;
+  max-width: 1000px;
   flex: 1;
 }
 
 .coverWrapper {
   position: relative;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
@@ -123,61 +130,83 @@
   color: rgba(255, 255, 255, 0.4);
 }
 
-.waveBadge {
-  position: absolute;
-  bottom: 2px;
-  right: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: var(--accent-color, #ffdab9);
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .trackInfo {
   display: flex;
   flex-direction: column;
-  min-width: 110px;
-  max-width: 160px;
+  flex: 0 0 160px;
+  width: 160px;
   overflow: hidden;
 }
 
 .trackTitle {
-  font-size: 13.5px;
+  display: block;
+  font-size: 14.5px;
   font-weight: 600;
   color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.25;
 }
 
 .trackArtist {
-  font-size: 11.5px;
+  display: block;
+  font-size: 12.5px;
   color: rgba(255, 255, 255, 0.52);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   margin-top: 2px;
+}
+
+.marqueeTrack {
+  display: inline-flex;
+  animation-name: dockMarquee;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.marqueeMeasure {
+  position: absolute;
+  width: max-content;
+  white-space: nowrap;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.marqueeCopy {
+  flex-shrink: 0;
+  padding-right: 40px;
+}
+
+@keyframes dockMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marqueeTrack {
+    animation: none;
+  }
 }
 
 /* Timeline Area */
 .timelineArea {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   flex: 1;
 }
 
 .timeLabel {
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.48);
-  min-width: 32px;
+  min-width: 36px;
   text-align: center;
 }
 
@@ -251,7 +280,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -267,8 +296,8 @@
 }
 
 .actionIconBtn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -295,16 +324,26 @@
   background: rgba(255, 255, 255, 0.16) !important;
 }
 
+.likedActionBtn {
+  color: var(--accent-color, #ff7a00) !important;
+}
+
+.dockLikeBtn {
+  flex-shrink: 0;
+  margin-left: -6px;
+  margin-right: -4px;
+}
+
 /* 3. Transport Controls Capsule */
 .transportCapsule {
-  padding: 6px 12px;
-  gap: 6px;
-  height: 56px;
+  padding: 7px 14px;
+  gap: 8px;
+  height: 66px;
 }
 
 .transportBtn {
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -327,8 +366,8 @@
 }
 
 .playPauseBtn {
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   background: #ffffff;
   color: #0f1013;
   box-shadow: 0 4px 14px rgba(255, 255, 255, 0.2);
@@ -343,10 +382,56 @@
 
 @media (max-width: 900px) {
   .centerDeckCapsule {
-    min-width: 320px;
+    min-width: 360px;
   }
 
   .timelineArea {
     display: none;
+  }
+
+}
+
+@media (max-width: 1099px) {
+  .dockContainer .glassCapsule {
+    transition: opacity var(--duration-base) var(--ease-out),
+      transform var(--duration-modal) var(--ease-drawer);
+  }
+
+  .dockContainer[data-track-info-open='true'] .modesCapsule {
+    opacity: 0;
+    transform: translateX(180px) scale(0.72);
+    transition-delay: 0ms;
+  }
+
+  .dockContainer[data-track-info-open='true'] .transportCapsule {
+    opacity: 0;
+    transform: translateX(72px) scale(0.72);
+    transition-delay: 70ms;
+  }
+
+  .dockContainer[data-track-info-open='true'] .centerDeckCapsule {
+    opacity: 0;
+    transform: scale(0.72);
+    transition-delay: 140ms;
+  }
+
+  .dockContainer[data-track-info-open='false'] .glassCapsule {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    transition-delay: 0ms;
+  }
+}
+
+@media (min-width: 1100px) {
+  .dockHiddenOnCompact {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dockContainer {
+    transition: none;
   }
 }

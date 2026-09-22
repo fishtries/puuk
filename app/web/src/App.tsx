@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ArrowLeft } from 'lucide-react';
 import { HomeScreen } from './components/home/HomeScreen';
 import { FloatingPlayerDock } from './components/player/FloatingPlayerDock';
+import { CompactTrackInfoIsland } from './components/player/TrackInfoIslands';
 import { AmbientBackground } from './components/player/AmbientBackground';
 import { ApplePlayerDeck } from './components/player/ApplePlayerDeck';
 import { AppleLyricsStream } from './components/lyrics/AppleLyricsStream';
@@ -10,6 +11,7 @@ import { LibraryDrawer } from './components/catalog/LibraryDrawer';
 import { LoginModal } from './components/auth/LoginModal';
 import { DebugOverlay } from './components/debug/DebugOverlay';
 import { TagEditorModal } from './components/tags/TagEditorModal';
+import { RightPanel } from './components/layout/RightPanel';
 
 import { useAuthStore } from './store/useAuthStore';
 import { usePlayerStore } from './store/usePlayerStore';
@@ -52,6 +54,8 @@ function AppContent() {
             onOpenLyrics={() => setViewMode('lyrics')}
             isLyricsActive={false}
           />
+          <CompactTrackInfoIsland />
+          <RightPanel />
         </div>
       ) : (
         /* Apple Music Fullscreen Lyrics Stage */

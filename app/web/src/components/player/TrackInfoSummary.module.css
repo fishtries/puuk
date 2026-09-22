@@ -1,0 +1,105 @@
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.cover {
+  grid-column: 1 / -1;
+  aspect-ratio: 1;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--image-outline), var(--shadow-md);
+}
+
+.cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title,
+.artist,
+.album {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.title {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.artist {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.album {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.likeButton {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  transition: color var(--duration-quick) var(--ease-out),
+    background-color var(--duration-quick) var(--ease-out),
+    transform var(--duration-press) var(--ease-out);
+}
+
+.likeButton:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.likeButton:active {
+  transform: scale(0.97);
+}
+
+.liked {
+  color: var(--accent-color);
+}
+
+.compact {
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+  gap: 14px;
+}
+
+.compact .cover {
+  grid-column: auto;
+  grid-row: 1 / span 2;
+  width: 104px;
+  border-radius: var(--radius-md);
+}
+
+.compact .title {
+  font-size: 15px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .likeButton {
+    transition: none;
+  }
+}

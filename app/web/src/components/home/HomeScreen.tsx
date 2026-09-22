@@ -25,11 +25,12 @@ import styles from './HomeScreen.module.css';
 import { DEMO_MIX } from './demoMix';
 import {
   FreshMixCard,
-  RecentlyListenedCard,
+  YoullLikeThisCard,
   FavoritesCard,
   FreshTracksCard,
 } from './islands/HomeIslands';
 import { RecommendationShelf } from './islands/RecommendationShelf';
+import { WideTrackInfoIsland } from '../player/TrackInfoIslands';
 
 interface HomeScreenProps {
   onOpenAuth: () => void;
@@ -41,6 +42,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const toggleWave = usePlayerStore((state) => state.toggleWave);
+  const toggleRightPanel = usePlayerStore((state) => state.toggleRightPanel);
   const isWaveActive = usePlayerStore((state) => state.isWaveActive);
   const history = usePlayerStore((state) => state.history);
   const recentlyPlayed = usePlayerStore((state) => state.recentlyPlayed);
@@ -79,12 +81,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   const favorites = useMemo(() => {
     return serverFavorites.length > 0 ? serverFavorites : allTracks.slice(0, 5);
   }, [serverFavorites, allTracks]);
-
-  const recentTracks = useMemo(() => {
-    if (recentlyPlayed.length > 0) return recentlyPlayed.slice(0, 3);
-    if (history.length > 0) return history.slice(0, 3);
-    return allTracks.slice(0, 2);
-  }, [recentlyPlayed, history, allTracks]);
 
   const freshTracks = useMemo(() => {
     return allTracks.slice(2, 6);
@@ -140,11 +136,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
     setActiveTab('home');
   };
 
-  const handleLaunchWave = () => {
-    if (!isWaveActive && allTracks.length > 0 && !currentTrack) {
-      playTrack(allTracks[0], allTracks);
+  const handleLaunchWave = async () => {
+    if (isWaveActive) {
+      await toggleWave();
+      return;
     }
-    toggleWave();
+
+    const started = await toggleWave();
+    if (started) {
+      toggleRightPanel('queue');
+    }
   };
 
   return (
@@ -196,7 +197,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
       </aside>
 
       {/* 2. Main Content Stage */}
-      <main className={styles.mainContent}>
+        <main className={styles.mainContent}>
         {/* Top Header Bar: Search Capsule & fish User Pill */}
         <header className={styles.topHeaderBar}>
           <div className={styles.searchCapsule}>
@@ -472,11 +473,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                 onLaunchWave={handleLaunchWave}
               />
 
-              <RecentlyListenedCard
-                tracks={recentTracks}
-                isCurrentPlaying={isCurrentPlaying}
-                onTrackClick={handleTrackItemClick}
-              />
+              <YoullLikeThisCard />
 
               <FavoritesCard
                 favorites={favorites}
@@ -498,7 +495,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
             />
           </>
         ))}
-      </main>
-    </div>
+        </main>
+
+        <WideTrackInfoIsland />
+      </div>
   );
 };

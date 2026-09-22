@@ -268,6 +268,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     activeView: 'home',
     isRightPanelOpen: false,
     rightPanelTab: 'lyrics',
+    isTrackInfoOpen: false,
     isFullscreen: false,
     isDebugOpen: false,
     isLoginOpen: false,
@@ -379,13 +380,13 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       set((state) => ({ isShuffled: !state.isShuffled }));
     },
 
-    toggleWave: async () => {
+    toggleWave: async (): Promise<boolean> => {
       const nextWave = !get().isWaveActive;
       const currentTrack = get().currentTrack;
 
       if (!nextWave) {
         set({ isWaveActive: false, isWaveLoading: false });
-        return;
+        return false;
       }
 
       set({
@@ -394,12 +395,15 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       });
 
       const waveTracks = await loadWaveBatch();
-      if (waveTracks.length === 0) return;
+      if (waveTracks.length === 0) {
+        set({ isWaveActive: false });
+        return false;
+      }
 
       const state = get();
       if (!state.currentTrack) {
-        get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()));
-        return;
+        await get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()));
+        return true;
       }
 
       // Keep playing the current track and refill the buffer behind it.
@@ -408,6 +412,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         queue: [state.currentTrack, ...merged],
         currentTrackIndex: 0,
       });
+
+      return true;
     },
 
     addToQueue: (track: Track) => {
@@ -462,6 +468,14 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
     setRightPanelTab: (rightPanelTab: RightPanelTab) => {
       set({ rightPanelTab, isRightPanelOpen: true });
+    },
+
+    setIsTrackInfoOpen: (isTrackInfoOpen: boolean) => {
+      set({ isTrackInfoOpen });
+    },
+
+    toggleTrackInfo: () => {
+      set((state) => ({ isTrackInfoOpen: !state.isTrackInfoOpen }));
     },
 
     setIsFullscreen: (isFullscreen: boolean) => {

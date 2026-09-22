@@ -15,7 +15,6 @@ export const QueueList: React.FC = () => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const playTrack = usePlayerStore((state) => state.playTrack);
   const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
-  const clearQueue = usePlayerStore((state) => state.clearQueue);
 
   if (queue.length === 0) {
     return (
@@ -29,19 +28,6 @@ export const QueueList: React.FC = () => {
 
   return (
     <div className={styles.container}>
-      <header className={styles.header}>
-        <span className={styles.count}>{queue.length} треков в очереди</span>
-        <button
-          type="button"
-          className={styles.clearBtn}
-          onClick={clearQueue}
-          title="Очистить очередь"
-        >
-          <Trash2 size={13} />
-          <span>Очистить</span>
-        </button>
-      </header>
-
       <div className={styles.trackList}>
         {queue.map((track, index) => {
           const isCurrent = currentTrack?.id === track.id;
@@ -75,5 +61,24 @@ export const QueueList: React.FC = () => {
         })}
       </div>
     </div>
+  );
+};
+
+export const ClearQueueButton: React.FC = () => {
+  const queue = usePlayerStore((state) => state.queue);
+  const clearQueue = usePlayerStore((state) => state.clearQueue);
+
+  if (queue.length === 0) return null;
+
+  return (
+    <button
+      type="button"
+      className={styles.clearBtn}
+      onClick={clearQueue}
+      title="Очистить очередь"
+    >
+      <Trash2 size={13} />
+      <span>Очистить</span>
+    </button>
   );
 };

@@ -79,18 +79,6 @@ export const Tracklist: React.FC<TracklistProps> = ({ tracks, isLoading, emptyLa
             role="button"
             tabIndex={0}
           >
-            <button
-              type="button"
-              className={`${styles.heartBtn} ${track.is_liked ? styles.heartBtnActive : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleLike(track.id);
-              }}
-              aria-label={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
-            >
-              <Heart size={12} fill={track.is_liked ? 'currentColor' : 'none'} />
-            </button>
-
             <span className={styles.trackIndex}>
               {isRowPlaying ? (
                 <span className={styles.playingDots}>
@@ -113,14 +101,27 @@ export const Tracklist: React.FC<TracklistProps> = ({ tracks, isLoading, emptyLa
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div className={styles.trackActions}>
+              <button
+                type="button"
+                className={`${styles.heartBtn} ${track.is_liked ? styles.heartBtnActive : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLike(track.id);
+                }}
+                aria-label={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
+                title={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
+              >
+                <Heart size={14} fill={track.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'} />
+              </button>
+
               <span className={`${styles.trackDuration} tabular-nums`}>
                 {formatDuration(track.duration)}
               </span>
 
               <button
                 type="button"
-                className={styles.heartBtn}
+                className={styles.actionBtn}
                 onClick={(e) => {
                   e.stopPropagation();
                   openTagEditor(track);
@@ -128,7 +129,7 @@ export const Tracklist: React.FC<TracklistProps> = ({ tracks, isLoading, emptyLa
                 title="Редактировать теги ID3"
                 aria-label="Редактировать теги ID3"
               >
-                <Tag size={12} />
+                <Tag size={13} />
               </button>
             </div>
           </li>
