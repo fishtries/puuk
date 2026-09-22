@@ -14,7 +14,7 @@ import db
 from config import COLLECTION_NAME
 from services.genre_normalization import extract_genres, normalize_genre
 from services.recommendation_service import build_wave_track_payload, client
-from user_profile import get_or_compute_user_embedding
+from user_profile import get_or_compute_user_embedding_fresh
 
 # --- Аффинность к жанрам ---
 # Лайк суммарно весит 3.0 за трек (прослушивание 1.0 + бонус 2.0).
@@ -117,7 +117,8 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
     for genre, weight in genre_weight.items():
         genre_score = weight / total_weight
         unique_artists = len(genre_artists.get(genre, set()))
-        breadth_bonus = min(unique_artists / ARTIST_BREADTH_TARGET_ARTISTS, 1.0) * ARTIST_BREADTH_WEIGHT
+        # Нормализованный бонус широты (0..1), вес применяется один раз при суммировании.
+        breadth_bonus = min(unique_artists / ARTIST_BREADTH_TARGET_ARTISTS, 1.0)
         affinity.append(
             GenreAffinity(
                 genre=genre,
@@ -302,7 +303,7 @@ def generate_genre_playlist(
 
     user_vec = None
     try:
-        user_vec = get_or_compute_user_embedding(user_id, client)
+        user_vec = get_or_compute_user_embedding_fresh(user_id, client)
     except Exception as e:
         print(f"[GenreRec] Warning computing user embedding: {e}")
 
@@ -397,7 +398,10 @@ def get_personalized_genre_sections(
             exclude_ids=used_track_ids,
             base_url=base_url,
         )
-        if len(tracks) < MIN_SECTION_TRACKS:
+        # Достаточность жанра проверяется выше по available (>= MIN_SECTION_TRACKS).
+        # Здесь отбрасываем только пустую выдачу, чтобы явный limit < 5 не ронял
+        # секцию, у которой в каталоге кандидатов достаточно.
+        if not tracks:
             continue
         used_track_ids.update(str(t["id"]) for t in tracks)
         slug = genre.lower().replace(" ", "-")

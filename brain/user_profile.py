@@ -88,6 +88,30 @@ def get_or_compute_user_embedding(user_id: int, qdrant_client: QdrantClient) -> 
         db.set_user_embedding(user_id, computed, len(history_tracks))
     return computed
 
+def get_or_compute_user_embedding_fresh(
+    user_id: int,
+    qdrant_client: QdrantClient,
+    threshold: int = 10,
+    hours: int = 24,
+) -> Optional[np.ndarray]:
+    """Возвращает актуальный эмбеддинг пользователя с учётом свежести.
+
+    В отличие от get_or_compute_user_embedding() (возвращает кэш без проверки),
+    пересчитывает вектор, если профиль устарел по should_recompute_embedding().
+    При недоступности Qdrant/пустой истории возвращает None (или кэш как fallback).
+    """
+    if should_recompute_embedding(user_id, threshold=threshold, hours=hours):
+        computed = compute_user_embedding(user_id, qdrant_client)
+        if computed is not None:
+            history_tracks = db.get_user_listening_history(user_id, limit=100)
+            db.set_user_embedding(user_id, computed, len(history_tracks))
+            return computed
+        # Qdrant недоступен / пустая история — не теряем уже кэшированный вектор,
+        # чтобы ранжирование не деградировало до SQLite-порядка.
+        return db.get_user_embedding(user_id)
+    return get_or_compute_user_embedding(user_id, qdrant_client)
+
+
 def should_recompute_embedding(user_id: int, threshold: int = 10, hours: int = 24) -> bool:
     """
     Проверяет, нужно ли пересчитать профиль пользователя:

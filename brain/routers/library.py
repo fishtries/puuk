@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 
 
 @router.post("/scan")
-def scan_library():
+def scan_library(current_user: dict = Depends(get_current_user)):
     """Сканирует MUSIC_DIR, извлекает теги и заполняет базу SQLite."""
     try:
         return scan_library_impl()

@@ -139,7 +139,7 @@ class TestGenreAffinity(unittest.TestCase):
         db.add_history(self.user_id, single)
         affinity = prs.get_user_genre_affinity(self.user_id)
         self.assertEqual(len(affinity), 1)
-        expected = 1.0 * 0.85 + (min(1 / 5, 1.0) * 0.15) * 0.15
+        expected = 1.0 * 0.85 + min(1 / 5, 1.0) * 0.15
         self.assertAlmostEqual(affinity[0]["score"], expected, places=6)
         self.assertEqual(affinity[0]["track_count"], 1)
         self.assertEqual(affinity[0]["artist_count"], 1)
@@ -181,7 +181,6 @@ class TestGenreAffinity(unittest.TestCase):
             breadth = (
                 min(a["artist_count"] / prs.ARTIST_BREADTH_TARGET_ARTISTS, 1.0)
                 * prs.ARTIST_BREADTH_WEIGHT
-                * prs.ARTIST_BREADTH_WEIGHT
             )
             return (a["score"] - breadth) / prs.GENRE_SCORE_WEIGHT * total_weight
 
@@ -197,7 +196,7 @@ class TestGenreSections(unittest.TestCase):
         db.init_db()
         name = f"sec_{uuid.uuid4().hex[:8]}"
         self.user_id = db.create_user(name, hash_password("pass123"), role="admin")
-        patcher = patch.object(prs, "get_or_compute_user_embedding", return_value=None)
+        patcher = patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -233,6 +232,17 @@ class TestGenreSections(unittest.TestCase):
         )
         self.assertEqual(len(sections), 1)
         self.assertEqual(len(sections[0]["tracks"]), 6)
+
+    def test_small_limit_does_not_drop_section(self):
+        # Жанр с достаточным числом кандидатов (>= MIN_SECTION_TRACKS) публикуется
+        # даже при явном limit < 5: секция содержит ровно limit треков.
+        genre = _unique_genre("Testsmall")
+        self._genre_with_tracks(genre, 6)
+        sections = prs.get_personalized_genre_sections(
+            self.user_id, section_limit=1, track_limit=3, base_url="http://x"
+        )
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(len(sections[0]["tracks"]), 3)
 
     def test_max_three_sections_by_default(self):
         for genre in (_unique_genre("Testjazz"), _unique_genre("Testrock"),
@@ -401,7 +411,7 @@ class TestQdrantRanking(unittest.TestCase):
             FakePoint(j4, 0.5, "Jazz Artist Four"),
             FakePoint(j5, 0.5, "Jazz Artist Five"),
         ]
-        with patch.object(prs, "get_or_compute_user_embedding", return_value=self.vec), \
+        with patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=self.vec), \
              patch.object(prs.client, "query_points", return_value=FakeResults(points)):
             result = prs.generate_genre_playlist(self.user_id, genre, limit=5, base_url="http://x")
 
@@ -418,7 +428,7 @@ class TestQdrantRanking(unittest.TestCase):
         ids = [_make_track(f"House Hit {i}", f"House Artist {i}", genre) for i in range(6)]
         points = [FakePoint(ids[0], 0.9, "House Artist 0"), FakePoint(ids[1], 0.8, "House Artist 1")]
 
-        with patch.object(prs, "get_or_compute_user_embedding", return_value=self.vec), \
+        with patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=self.vec), \
              patch.object(prs.client, "query_points", return_value=FakeResults(points)):
             result = prs.generate_genre_playlist(self.user_id, genre, limit=5, base_url="http://x")
 
@@ -434,7 +444,7 @@ class TestQdrantRanking(unittest.TestCase):
         for tid in ids:
             db.add_favorite(self.user_id, tid)
 
-        with patch.object(prs, "get_or_compute_user_embedding", return_value=self.vec), \
+        with patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=self.vec), \
              patch.object(prs.client, "query_points", side_effect=RuntimeError("qdrant down")):
             result = prs.generate_genre_playlist(self.user_id, genre, limit=5, base_url="http://x")
 
@@ -451,7 +461,7 @@ class TestQdrantRanking(unittest.TestCase):
             FakePoint(alpha_tie, 0.5, "Alpha Artist"),
             FakePoint(alpha_first, 0.5, "Alpha Artist"),
         ]
-        with patch.object(prs, "get_or_compute_user_embedding", return_value=self.vec), \
+        with patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=self.vec), \
              patch.object(prs.client, "query_points", return_value=FakeResults(points)):
             result = prs.generate_genre_playlist(self.user_id, genre, limit=5, base_url="http://x")
             again = prs.generate_genre_playlist(self.user_id, genre, limit=5, base_url="http://x")
@@ -466,7 +476,7 @@ class TestPersonalizedRecommendationsAPI(unittest.TestCase):
     def setUpClass(cls):
         db.init_db()
         cls.client = TestClient(app)
-        patcher = patch.object(prs, "get_or_compute_user_embedding", return_value=None)
+        patcher = patch.object(prs, "get_or_compute_user_embedding_fresh", return_value=None)
         patcher.start()
         cls.addClassCleanup(patcher.stop)
 
