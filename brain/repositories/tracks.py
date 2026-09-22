@@ -83,22 +83,34 @@ def search_all(query, limit=30):
     conn.close()
     return {"tracks": tracks, "albums": albums, "artists": artists}
 
-def add_or_update_track(track_id, file_path, title, album_id, artist, lyrics=None, added_by_user_id=1, cover_color=None, duration=None):
+def _clean_genre(genre: Optional[str]) -> Optional[str]:
+    """Жанр из файла для сканера: пустые и заглушки ('Unknown') считаются отсутствием жанра."""
+    if genre is None:
+        return None
+    cleaned = str(genre).strip()
+    if not cleaned or cleaned.lower() == "unknown":
+        return None
+    return cleaned
+
+def add_or_update_track(track_id, file_path, title, album_id, artist, lyrics=None, added_by_user_id=1, cover_color=None, duration=None, genre=None):
+    genre_value = _clean_genre(genre)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM tracks WHERE id = ?", (track_id,))
     if cursor.fetchone():
+        # Пустой/Unknown жанр из файла не затирает существующее непустое значение.
         cursor.execute("""
             UPDATE tracks
             SET file_path = ?, title = ?, album_id = ?, artist = ?, lyrics = ?,
+                genre = COALESCE(?, genre),
                 cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration)
             WHERE id = ?
-        """, (file_path, title, album_id, artist, lyrics, cover_color, duration, track_id))
+        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, track_id))
     else:
         cursor.execute("""
-            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration))
+            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value))
     conn.commit()
     conn.close()
 
@@ -198,15 +210,22 @@ def update_track_metadata(track_id, title, artist, album_id, lyrics):
     conn.commit()
     conn.close()
 
-def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False):
+def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False):
     """
     Обновляет запись трека в SQLite фактическими данными, прочитанными из файла на диске.
+
+    preserve_empty_genre=True — режим сканера: пустой/Unknown жанр из файла
+    не затирает существующее непустое значение в БД. По умолчанию False —
+    ручные PATCH/resync-потоки, где файл является источником истины.
     """
     conn = get_connection()
     cursor = conn.cursor()
 
     # Если lyrics не передан явно, берем из метаданных
     lyr = lyrics if lyrics is not None else meta.lyrics
+
+    genre_value = _clean_genre(meta.genre) if preserve_empty_genre else meta.genre
+    genre_sql = "genre = COALESCE(?, genre)" if preserve_empty_genre else "genre = ?"
 
     cover_inc_sql = ", cover_version = COALESCE(cover_version, 0) + 1" if cover_version_inc else ""
 
@@ -217,7 +236,7 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
             album_id = COALESCE(?, album_id),
             album_artist = ?,
             year = ?,
-            genre = ?,
+            {genre_sql},
             track_number = ?,
             disc_number = ?,
             comment = ?,
@@ -237,7 +256,7 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
         album_id,
         meta.album_artist,
         meta.year,
-        meta.genre,
+        genre_value,
         meta.track_number,
         meta.disc_number,
         meta.comment,

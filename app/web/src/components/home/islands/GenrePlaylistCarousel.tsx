@@ -1,63 +1,74 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Music2 } from 'lucide-react';
-import type { MoodItem } from '../../../types/recommendations';
-import styles from './MoodCoverFlowCarousel.module.css';
+import type { PersonalizedPlaylistSection } from '../../../types/recommendations';
+import { getCoverUrl } from '../../../api/tracks';
+import { pluralTracksCount, resolveSectionCover, toCarouselItems } from './genrePlaylistUtils';
+import styles from './GenrePlaylistCarousel.module.css';
 
-interface MoodCoverFlowCarouselProps {
-  moods: MoodItem[];
-  onOpenPlaylist: (mood: MoodItem) => void;
+interface GenrePlaylistCarouselProps {
+  sections: PersonalizedPlaylistSection[];
+  onOpenPlaylist: (section: PersonalizedPlaylistSection) => void;
 }
 
-/** Отдельный компонент обложки с гарантированным fallback при ошибке загрузки изображения */
-const CoverArtwork: React.FC<{ mood: MoodItem; isCenter: boolean }> = ({ mood, isCenter }) => {
+/** Обложка карточки с нейтральным fallback при отсутствии/ошибке загрузки изображения. */
+const CoverArtwork: React.FC<{
+  section: PersonalizedPlaylistSection;
+  coverUrl?: string;
+  isCenter: boolean;
+}> = ({ section, coverUrl, isCenter }) => {
   const [hasError, setHasError] = useState(false);
 
   // Сброс ошибки при смене URL
   useEffect(() => {
     setHasError(false);
-  }, [mood.coverUrl]);
+  }, [coverUrl]);
 
-  if (!mood.coverUrl || hasError) {
+  if (!coverUrl || hasError) {
     return (
-      <div className={styles.coverGradientFallback} style={{ background: mood.gradient }}>
+      <div className={styles.coverFallback}>
         <div className={styles.fallbackIconBadge}>
           <Music2 size={isCenter ? 22 : 18} />
         </div>
-        <span className={styles.fallbackMoodTitle}>{mood.title}</span>
+        <span className={styles.fallbackGenreTitle}>{section.genre}</span>
         <span className={styles.fallbackTracksCount}>
-          {mood.tracks.length > 0 ? `${mood.tracks.length} треков` : 'AI Mix'}
+          {pluralTracksCount(section.tracks.length)}
         </span>
       </div>
     );
   }
 
   return (
-    <img
-      src={mood.coverUrl}
-      alt={mood.title}
-      className={styles.coverImg}
-      loading="lazy"
-      draggable={false}
-      onError={() => setHasError(true)}
-    />
+    <>
+      <img
+        src={coverUrl}
+        alt={section.title}
+        className={styles.coverImg}
+        loading="lazy"
+        draggable={false}
+        onError={() => setHasError(true)}
+      />
+      <span className={styles.coverTracksBadge}>
+        {pluralTracksCount(section.tracks.length)}
+      </span>
+    </>
   );
 };
 
-export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
-  moods,
+export const GenrePlaylistCarousel: React.FC<GenrePlaylistCarouselProps> = ({
+  sections,
   onOpenPlaylist,
 }) => {
   const [activeIndex, setActiveIndex] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const items = useMemo(() => toCarouselItems(sections), [sections]);
 
   // Normalize index within bounds
   useEffect(() => {
-    if (activeIndex >= moods.length && moods.length > 0) {
-      setActiveIndex(moods.length - 1);
+    if (activeIndex >= items.length && items.length > 0) {
+      setActiveIndex(items.length - 1);
     }
-  }, [moods.length, activeIndex]);
+  }, [items.length, activeIndex]);
 
-  const activeMood = moods[activeIndex];
+  const activeItem = items[activeIndex];
 
   const handlePrev = useCallback(
     (e?: React.MouseEvent) => {
@@ -70,9 +81,9 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
   const handleNext = useCallback(
     (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      setActiveIndex((prev) => Math.min(moods.length - 1, prev + 1));
+      setActiveIndex((prev) => Math.min(items.length - 1, prev + 1));
     },
-    [moods.length]
+    [items.length]
   );
 
   // Keyboard navigation when focused or hovering
@@ -86,31 +97,30 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
         handleNext();
       } else if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        if (activeMood) onOpenPlaylist(activeMood);
+        if (activeItem) onOpenPlaylist(activeItem.section);
       }
     },
-    [handlePrev, handleNext, activeMood, onOpenPlaylist]
+    [handlePrev, handleNext, activeItem, onOpenPlaylist]
   );
 
-  const handleItemClick = (index: number, mood: MoodItem, e: React.MouseEvent) => {
+  const handleItemClick = (index: number, section: PersonalizedPlaylistSection, e: React.MouseEvent) => {
     e.stopPropagation();
     if (index === activeIndex) {
-      // Клик по центральному плейлисту — открывает страницу с плейлистом
-      onOpenPlaylist(mood);
+      // Клик по центральной подборке — открывает её страницу
+      onOpenPlaylist(section);
     } else {
-      // Клик по любому другому плейлисту — перемещает его в центр
+      // Клик по любой другой подборке — перемещает её в центр
       setActiveIndex(index);
     }
   };
 
   return (
     <div
-      ref={containerRef}
       className={styles.carouselRoot}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       role="region"
-      aria-label="AI Mood Playlists Carousel"
+      aria-label="Personalized Genre Playlists Carousel"
     >
       {/* Top Controls Bar */}
       <div className={styles.topBar}>
@@ -120,8 +130,8 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
             className={styles.navBtn}
             onClick={handlePrev}
             disabled={activeIndex === 0}
-            aria-label="Предыдущий плейлист"
-            title="Предыдущий плейлист"
+            aria-label="Предыдущая подборка"
+            title="Предыдущая подборка"
           >
             <ChevronLeft size={16} />
           </button>
@@ -129,9 +139,9 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
             type="button"
             className={styles.navBtn}
             onClick={handleNext}
-            disabled={activeIndex === moods.length - 1}
-            aria-label="Следующий плейлист"
-            title="Следующий плейлист"
+            disabled={activeIndex === items.length - 1}
+            aria-label="Следующая подборка"
+            title="Следующая подборка"
           >
             <ChevronRight size={16} />
           </button>
@@ -140,10 +150,11 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
 
       {/* 3D Cover Flow Stage */}
       <div className={styles.stage}>
-        {moods.map((mood, idx) => {
+        {items.map((item, idx) => {
           const offset = idx - activeIndex;
           const isCenter = offset === 0;
           const distance = Math.abs(offset);
+          const coverUrl = resolveSectionCover(item.section, getCoverUrl);
 
           let transform = '';
           let zIndex = 20 - distance;
@@ -173,7 +184,7 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
 
           return (
             <div
-              key={mood.id}
+              key={item.id}
               className={`${styles.coverItem} ${isCenter ? styles.centerItem : ''}`}
               style={{
                 transform,
@@ -181,23 +192,23 @@ export const MoodCoverFlowCarousel: React.FC<MoodCoverFlowCarouselProps> = ({
                 opacity,
                 filter,
               }}
-              onClick={(e) => handleItemClick(idx, mood, e)}
-              title={isCenter ? `Открыть «${mood.title}»` : `Выбрать «${mood.title}»`}
+              onClick={(e) => handleItemClick(idx, item.section, e)}
+              title={isCenter ? `Открыть «${item.title}»` : `Выбрать «${item.title}»`}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleItemClick(idx, mood, e as any);
+                if (e.key === 'Enter') handleItemClick(idx, item.section, e as any);
               }}
             >
               <div
                 className={styles.coverInner}
                 style={{
                   boxShadow: isCenter
-                    ? `0 16px 36px rgba(0, 0, 0, 0.7), 0 0 22px ${mood.color}44, inset 0 1px 1px rgba(255, 255, 255, 0.4)`
+                    ? '0 16px 36px rgba(0, 0, 0, 0.7), inset 0 1px 1px rgba(255, 255, 255, 0.4)'
                     : undefined,
                 }}
               >
-                <CoverArtwork mood={mood} isCenter={isCenter} />
+                <CoverArtwork section={item.section} coverUrl={coverUrl} isCenter={isCenter} />
               </div>
             </div>
           );

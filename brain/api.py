@@ -81,8 +81,8 @@ app.include_router(library_router)
 from routers.tracks import router as tracks_router
 app.include_router(tracks_router)
 
-from routers.mood_recommendations import router as mood_rec_router
-app.include_router(mood_rec_router)
+from routers.personalized_recommendations import router as personalized_rec_router
+app.include_router(personalized_rec_router)
 
 
 if __name__ == "__main__":

@@ -84,8 +84,8 @@ def locate_track_file_strict_candidates(db_file_path: Optional[str], track_id: s
     return None
 
 
-def extract_full_metadata(file_path: str):
-    """Извлекает (title, artist, album, lyrics, duration) с деградацией до имени файла."""
+def extract_full_metadata_with_genre(file_path: str):
+    """Извлекает (title, artist, album, genre, lyrics, duration) с деградацией до имени файла."""
     try:
         from services.track_metadata_service import resolve_track_file_path
         from metadata import read_audio_metadata
@@ -95,6 +95,7 @@ def extract_full_metadata(file_path: str):
             meta.title or os.path.splitext(os.path.basename(file_path))[0],
             meta.artist or "Неизвестный исполнитель",
             meta.album or "Неизвестный альбом",
+            meta.genre,
             meta.lyrics,
             meta.duration
         )
@@ -106,4 +107,10 @@ def extract_full_metadata(file_path: str):
             parts = name_without_ext.split(" - ", 1)
             title_val = parts[0].strip()
             artist_val = parts[-1].strip()
-        return title_val, artist_val, "Неизвестный альбом", None, None
+        return title_val, artist_val, "Неизвестный альбом", None, None, None
+
+
+def extract_full_metadata(file_path: str):
+    """Извлекает (title, artist, album, lyrics, duration) с деградацией до имени файла."""
+    title, artist, album, _genre, lyrics, duration = extract_full_metadata_with_genre(file_path)
+    return title, artist, album, lyrics, duration

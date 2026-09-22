@@ -126,11 +126,13 @@ def main():
                 # и в SQLite, без второго прохода по файлу.
                 sql_meta = None
                 try:
-                    from api import extract_full_metadata
-                    title_, artist_, album_, lyrics_, duration_ = extract_full_metadata(metadata['file_path'])
+                    from services.media_locations import extract_full_metadata_with_genre
+                    title_, artist_, album_, genre_, lyrics_, duration_ = extract_full_metadata_with_genre(metadata['file_path'])
                     metadata["artist"] = artist_
                     metadata["title"] = title_
-                    sql_meta = (title_, artist_, album_, lyrics_, duration_)
+                    if genre_:
+                        metadata["genre"] = genre_
+                    sql_meta = (title_, artist_, album_, genre_, lyrics_, duration_)
                 except Exception as meta_err:
                     logger.warning(f"Не удалось извлечь метаданные для {metadata['file_path']}: {meta_err}")
                 
@@ -151,9 +153,9 @@ def main():
                     try:
                         import db
                         if sql_meta is not None:
-                            title_, artist_, album_, lyrics_, duration_ = sql_meta
+                            title_, artist_, album_, genre_, lyrics_, duration_ = sql_meta
                             album_id = db.add_or_get_album(album_, None)
-                            db.add_or_update_track(point_id, metadata['file_path'], title_, album_id, artist_, lyrics_, duration=duration_)
+                            db.add_or_update_track(point_id, metadata['file_path'], title_, album_id, artist_, lyrics_, duration=duration_, genre=genre_)
                             logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title_} - {artist_}")
                     except Exception as db_err:
                         logger.warning(f"Не удалось обновить SQLite для {metadata['file_path']}: {db_err}")

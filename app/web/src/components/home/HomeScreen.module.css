@@ -155,9 +155,8 @@
 .topHeaderBar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
   margin-bottom: 24px;
+  padding-right: 180px;
   user-select: none;
 }
 
@@ -210,6 +209,10 @@
 
 /* User Profile Pill */
 .userProfilePill {
+  position: absolute;
+  top: 24px;
+  right: 36px;
+  z-index: 5;
   height: 44px;
   padding: 4px 8px 4px 18px;
   background: rgba(26, 28, 34, 0.6);
@@ -554,6 +557,17 @@
   -webkit-backdrop-filter: blur(12px);
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.youllLikeThisSpinner {
+  color: rgba(255, 255, 255, 0.75);
+  animation: youllLikeThisSpin 0.9s linear infinite;
+}
+
+@keyframes youllLikeThisSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Card 2 & 4: Track Pills */

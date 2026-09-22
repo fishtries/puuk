@@ -20,7 +20,7 @@ import { Album, Artist, Track } from '../../types/track';
 import { PlaylistsView, PlaylistGridItem } from '../../views/PlaylistsView';
 import { PlaylistDetail } from '../../views/PlaylistDetail';
 import { AlbumDetail } from '../../views/AlbumDetail';
-import type { MoodItem } from '../../types/recommendations';
+import type { PersonalizedPlaylistSection } from '../../types/recommendations';
 import styles from './HomeScreen.module.css';
 
 import { DEMO_MIX } from './demoMix';
@@ -149,14 +149,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
     }
   };
 
-  const handleOpenMoodPlaylist = (mood: MoodItem) => {
+  const handleOpenPersonalizedPlaylist = (section: PersonalizedPlaylistSection) => {
     setSelectedPlaylist({
-      id: `mood-${mood.id}`,
-      name: mood.title,
-      coverUrl: mood.coverUrl,
-      trackCount: mood.tracks.length,
-      subtitle: mood.description,
-      tracks: mood.tracks,
+      id: `personalized-${section.id}`,
+      name: section.title,
+      coverUrl: getCoverUrl(section.tracks[0]),
+      trackCount: section.tracks.length,
+      subtitle: section.description,
+      tracks: section.tracks,
     });
   };
 
@@ -490,8 +490,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
               />
 
               <YoullLikeThisCard
-                allTracks={allTracks}
-                onOpenPlaylist={handleOpenMoodPlaylist}
+                onOpenPlaylist={handleOpenPersonalizedPlaylist}
               />
 
               <FavoritesCard

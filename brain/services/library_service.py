@@ -28,9 +28,12 @@ def scan_library():
                 meta = read_audio_metadata(str(file_path))
                 album_id = db.add_or_get_album(meta.album or "Неизвестный альбом", None)
                 db.add_or_update_track(
-                    track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics, duration=meta.duration
+                    track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
+                    duration=meta.duration, genre=meta.genre
                 )
-                db.update_track_metadata_from_audio(track_id, meta, album_id)
+                # Режим сканера: пустой жанр в файле не затирает жанр в БД (например,
+                # выставленный вручную через редактор тегов).
+                db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
             except Exception as e:
                 print(f"[scan] Error scanning {file_path}: {e}")
                 title, artist, album, lyrics, duration = extract_full_metadata(rel_path)

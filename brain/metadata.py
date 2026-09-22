@@ -184,9 +184,12 @@ def read_mp3_metadata(file_path: str) -> AudioMetadata:
                 meta.year = str(tags["TDRC"].text[0])
             elif "TYER" in tags:
                 meta.year = str(tags["TYER"].text[0])
-            # Genre
+            # Genre (мультижанровые значения сохраняются как есть, "A; B")
             if "TCON" in tags:
-                meta.genre = str(tags["TCON"].text[0])
+                genre_values = [str(v).strip() for v in tags["TCON"].text]
+                genre_values = [v for v in genre_values if v]
+                if genre_values:
+                    meta.genre = "; ".join(genre_values)
             # Track Number
             if "TRCK" in tags:
                 meta.track_number = str(tags["TRCK"].text[0])
@@ -241,12 +244,18 @@ def read_flac_metadata(file_path: str) -> AudioMetadata:
             vals = tags.get(key) or tags.get(key.lower()) or tags.get(key.upper())
             return str(vals[0]) if vals else None
 
+        def _joined(key: str) -> Optional[str]:
+            vals = tags.get(key) or tags.get(key.lower()) or tags.get(key.upper())
+            cleaned = [str(v).strip() for v in (vals or [])]
+            cleaned = [v for v in cleaned if v]
+            return "; ".join(cleaned) if cleaned else None
+
         meta.title = _first("TITLE") or os.path.splitext(os.path.basename(file_path))[0]
         meta.artist = _first("ARTIST") or ""
         meta.album = _first("ALBUM") or ""
         meta.album_artist = _first("ALBUMARTIST") or _first("ALBUM ARTIST")
         meta.year = _first("DATE") or _first("YEAR")
-        meta.genre = _first("GENRE")
+        meta.genre = _joined("GENRE")
         meta.track_number = _first("TRACKNUMBER") or _first("TRACK")
         meta.disc_number = _first("DISCNUMBER") or _first("DISC")
         meta.comment = _first("COMMENT") or _first("DESCRIPTION")
@@ -336,12 +345,18 @@ def read_ogg_metadata(file_path: str) -> AudioMetadata:
                 vals = tags.get(key) or tags.get(key.lower()) or tags.get(key.upper())
                 return str(vals[0]) if vals else None
 
+            def _joined(key: str) -> Optional[str]:
+                vals = tags.get(key) or tags.get(key.lower()) or tags.get(key.upper())
+                cleaned = [str(v).strip() for v in (vals or [])]
+                cleaned = [v for v in cleaned if v]
+                return "; ".join(cleaned) if cleaned else None
+
             meta.title = _first("TITLE") or os.path.splitext(os.path.basename(file_path))[0]
             meta.artist = _first("ARTIST") or ""
             meta.album = _first("ALBUM") or ""
             meta.album_artist = _first("ALBUMARTIST") or _first("ALBUM ARTIST")
             meta.year = _first("DATE") or _first("YEAR")
-            meta.genre = _first("GENRE")
+            meta.genre = _joined("GENRE")
             meta.track_number = _first("TRACKNUMBER")
             meta.disc_number = _first("DISCNUMBER")
             meta.comment = _first("COMMENT")
