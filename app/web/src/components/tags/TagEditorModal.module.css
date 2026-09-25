@@ -316,6 +316,23 @@
   box-shadow: 0 0 0 2px var(--accent-glow, rgba(99, 102, 241, 0.2));
 }
 
+.autoGenreHint {
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 2px;
+  color: var(--text-tertiary, #a1a1aa);
+}
+
+.autoGenreLabel {
+  color: var(--text-secondary, #d4d4d8);
+  font-weight: 500;
+}
+
+.autoGenreValues {
+  color: var(--accent-color, #ffdab9);
+  font-weight: 500;
+}
+
 .textarea {
   width: 100%;
   padding: 12px;

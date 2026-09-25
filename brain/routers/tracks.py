@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import db
-from auth import get_current_user
+from auth import get_current_user, get_optional_current_user
 from config import get_base_url
 from serializers import serialize_track
 from services.lyrics_service import get_track_lyrics_payload
@@ -54,11 +54,11 @@ def _validate_uuid(track_id: str):
 
 
 @router.get("/tracks")
-def get_all_tracks(request: Request, limit: int = 50, current_user: dict = Depends(get_current_user)):
+def get_all_tracks(request: Request, limit: int = 50, current_user: Optional[dict] = Depends(get_optional_current_user)):
     """Возвращает список треков из базы данных SQLite с персональными лайками."""
     try:
         records = db.get_all_tracks()
-        fav_ids = db.get_favorite_track_ids(current_user["id"])
+        fav_ids = db.get_favorite_track_ids(current_user["id"]) if current_user else set()
         base_url = get_base_url(request)
         return [serialize_track(r, base_url, fav_ids) for r in records[:limit]]
     except Exception as e:
@@ -66,7 +66,7 @@ def get_all_tracks(request: Request, limit: int = 50, current_user: dict = Depen
 
 
 @router.get("/tracks/{track_id}")
-def get_track_info(track_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+def get_track_info(track_id: str, request: Request, current_user: Optional[dict] = Depends(get_optional_current_user)):
     """Retrieve track details including full ID3 metadata and tech specs."""
     from services.track_metadata_service import get_track_metadata_details
     base_url = get_base_url(request)
@@ -91,7 +91,11 @@ def resync_track(track_id: str, request: Request, current_user: dict = Depends(g
 
 
 @router.get("/tracks/{track_id}/lyrics")
-def get_track_lyrics(track_id: str, force: bool = Query(False, description="Принудительно повторить поиск в LRCLIB")):
+def get_track_lyrics(
+    track_id: str,
+    force: bool = Query(False, description="Принудительно повторить поиск в LRCLIB"),
+    current_user: Optional[dict] = Depends(get_optional_current_user)
+):
     """Fetches lyrics from DB. If empty (or forced), queries LRCLIB/syncedlyrics."""
     payload = get_track_lyrics_payload(track_id, force)
     if payload is None:

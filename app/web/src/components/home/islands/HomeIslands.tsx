@@ -6,6 +6,8 @@ import styles from '../HomeScreen.module.css';
 import { GenrePlaylistCarousel } from './GenrePlaylistCarousel';
 import { fetchPersonalizedRecommendations } from '../../../api/recommendations';
 import type { PersonalizedPlaylistSection } from '../../../types/recommendations';
+import { useAuthStore } from '../../../store/useAuthStore';
+import { usePlayerStore } from '../../../store/usePlayerStore';
 
 export interface TrackRowHandlers {
   isCurrentPlaying: (trackId: string) => boolean;
@@ -41,10 +43,16 @@ export const FreshMixCard: React.FC<{
 export const YoullLikeThisCard: React.FC<{
   onOpenPlaylist?: (section: PersonalizedPlaylistSection) => void;
 }> = ({ onOpenPlaylist }) => {
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const isAuthLoading = useAuthStore((state) => state.isLoading);
+  const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
+
   // Персональные жанровые подборки от бэкенда (пустой профиль → sections: [])
-  const { data, isLoading } = useQuery({
-    queryKey: ['recommendations', 'youll-like-this'],
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['recommendations', 'youll-like-this', user?.id ?? null],
     queryFn: () => fetchPersonalizedRecommendations({ limit: 20, sections: 3 }),
+    enabled: Boolean(!isAuthLoading && token && user),
     staleTime: 60000,
     retry: 1,
   });
@@ -58,9 +66,23 @@ export const YoullLikeThisCard: React.FC<{
       role="region"
       aria-label="you'll like this"
     >
-      {isLoading ? (
+      {isAuthLoading ? (
         <div className={styles.youllLikeThisPlaceholder}>
           <Loader2 size={18} className={styles.youllLikeThisSpinner} />
+        </div>
+      ) : !token ? (
+        <div className={styles.youllLikeThisPlaceholder}>
+          <button type="button" className={styles.youllLikeThisPlaceholderText} onClick={() => setIsLoginOpen(true)}>
+            Войдите, чтобы получить персональные подборки
+          </button>
+        </div>
+      ) : isLoading ? (
+        <div className={styles.youllLikeThisPlaceholder}>
+          <Loader2 size={18} className={styles.youllLikeThisSpinner} />
+        </div>
+      ) : isError ? (
+        <div className={styles.youllLikeThisPlaceholder}>
+          <span className={styles.youllLikeThisPlaceholderText}>Не удалось загрузить подборки</span>
         </div>
       ) : hasSections ? (
         <GenrePlaylistCarousel

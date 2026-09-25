@@ -6,6 +6,7 @@
 Исключения и diversity повторяют механики «Моей Волны», но без random.
 """
 from collections import Counter
+import json
 from typing import Optional, TypedDict
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -82,6 +83,56 @@ def _positive_track_weights(user_id: int) -> dict[str, float]:
     return weights
 
 
+def get_effective_genres(track: Optional[dict]) -> list[tuple[str, float]]:
+    """Возвращает эффективные жанры трека в виде списка пар (genre, confidence_weight).
+
+    Правила приоритета:
+    1. Ручной genre (если не пуст) -> нормализованные жанры с весом 1.0.
+    2. Автоматические auto_genres от Essentia -> жанры с весами confidence.
+    3. При отсутствии обоих -> пустой список.
+    """
+    if not track:
+        return []
+
+    manual_genres = extract_genres(track.get("genre"))
+    if manual_genres:
+        return [(g, 1.0) for g in manual_genres]
+
+    raw_auto = track.get("auto_genres")
+    if not raw_auto:
+        return []
+
+    auto_items = None
+    if isinstance(raw_auto, list):
+        auto_items = raw_auto
+    elif isinstance(raw_auto, str):
+        try:
+            auto_items = json.loads(raw_auto)
+        except Exception:
+            return []
+
+    if not isinstance(auto_items, list):
+        return []
+
+    best_genres: dict[str, tuple[str, float]] = {}
+    for item in auto_items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        try:
+            conf = float(item.get("confidence", 0.0))
+        except (ValueError, TypeError):
+            continue
+        norm_name = normalize_genre(name)
+        if not norm_name or conf <= 0.0:
+            continue
+        key = norm_name.casefold()
+        if key not in best_genres or conf > best_genres[key][1]:
+            best_genres[key] = (norm_name, conf)
+
+    return list(best_genres.values())
+
+
 def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
     """Аффинность пользователя к жанрам, отсортированная по финальному score desc."""
     weights = _positive_track_weights(user_id)
@@ -100,15 +151,14 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
         track = db.get_track(track_id)
         if not track:
             continue
-        genres = extract_genres(track.get("genre"))
-        if not genres:
+        effective = get_effective_genres(track)
+        if not effective:
             continue
         artist_key = _artist_key(track.get("artist"))
-        # Мультижанровый трек делит вклад поровну между своими жанрами:
-        # суммарный вклад трека в профиль равен весу трека.
-        weight_per_genre = weight / len(genres)
-        for genre in genres:
-            genre_weight[genre] = genre_weight.get(genre, 0.0) + weight_per_genre
+        # Мультижанровый трек делит вклад поровну между своими жанрами с учетом весов модели
+        weight_per_genre = weight / len(effective)
+        for genre, genre_weight_from_model in effective:
+            genre_weight[genre] = genre_weight.get(genre, 0.0) + weight_per_genre * genre_weight_from_model
             genre_track_count[genre] = genre_track_count.get(genre, 0) + 1
             if artist_key:
                 genre_artists.setdefault(genre, set()).add(artist_key)
@@ -132,10 +182,80 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
     return affinity
 
 
+def get_catalog_genre_affinity() -> list[GenreAffinity]:
+    """Возвращает жанры каталога для cold-start профиля.
+
+    Автоматические жанры уже являются результатом отбора треков, поэтому при
+    отсутствии истории пользователя используем их как fallback вместо пустой
+    главной секции. Ручные жанры без пользовательского профиля не участвуют.
+    Сортировка стабильная: сначала жанры с большим каталогом.
+    """
+    tracks = db.get_all_tracks()
+    genre_track_ids: dict[str, set[str]] = {}
+    genre_artists: dict[str, set[str]] = {}
+    genre_names: dict[str, str] = {}
+
+    for track in tracks:
+        track_id = str(track["id"])
+        artist_key = _artist_key(track.get("artist"))
+        for genre, _ in _get_auto_genres(track):
+            genre_key = genre.casefold()
+            genre_names.setdefault(genre_key, genre)
+            genre_track_ids.setdefault(genre_key, set()).add(track_id)
+            if artist_key:
+                genre_artists.setdefault(genre_key, set()).add(artist_key)
+
+    affinity: list[GenreAffinity] = []
+    for genre_key, track_ids in genre_track_ids.items():
+        if len(track_ids) < MIN_SECTION_TRACKS:
+            continue
+        genre = genre_names.get(genre_key, genre_key)
+        affinity.append(
+            GenreAffinity(
+                genre=genre,
+                score=float(len(track_ids)),
+                track_count=len(track_ids),
+                artist_count=len(genre_artists.get(genre_key, set())),
+            )
+        )
+
+    affinity.sort(key=lambda item: (-item["track_count"], item["genre"]))
+    return affinity
+
+
+def _get_auto_genres(track: Optional[dict]) -> list[tuple[str, float]]:
+    """Возвращает только auto_genres, без fallback на ручной тег."""
+    if not track:
+        return []
+    raw_auto = track.get("auto_genres")
+    if isinstance(raw_auto, str):
+        try:
+            raw_auto = json.loads(raw_auto)
+        except Exception:
+            return []
+    if not isinstance(raw_auto, list):
+        return []
+
+    result: dict[str, tuple[str, float]] = {}
+    for item in raw_auto:
+        if not isinstance(item, dict):
+            continue
+        genre = normalize_genre(item.get("name"))
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if genre and confidence > 0:
+            key = genre.casefold()
+            if key not in result or confidence > result[key][1]:
+                result[key] = (genre, confidence)
+    return list(result.values())
+
+
 def _track_in_genre(track: dict, target_key: str) -> bool:
-    """Guard жанра: трек обязан нормализоваться в жанр секции."""
-    genres = [normalize_genre(g) for g in extract_genres(track.get("genre"))]
-    return any(g and g.casefold() == target_key for g in genres)
+    """Guard жанра: трек обязан иметь целевой жанр среди effective genres."""
+    effective = get_effective_genres(track)
+    return any(g.casefold() == target_key for g, _ in effective)
 
 
 def _genre_candidates(target_key: str, dislike_ids: set[str], exclude_ids: set[str]) -> list[dict]:
@@ -380,6 +500,8 @@ def get_personalized_genre_sections(
     не добавляются.
     """
     affinity = get_user_genre_affinity(user_id)
+    if not affinity:
+        affinity = get_catalog_genre_affinity()
     dislike_ids = db.get_user_dislike_ids(user_id)
     used_track_ids: set[str] = set()
     sections: list[dict] = []

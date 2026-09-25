@@ -7,6 +7,7 @@ two-tier locking, safe file replacement, and SQLite synchronization.
 import base64
 import io
 import ipaddress
+import json
 import os
 import socket
 from urllib.parse import urlparse
@@ -218,6 +219,16 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     if os.path.isabs(rel_sanitized):
         rel_sanitized = os.path.basename(rel_sanitized)
 
+    raw_auto_genres = db_track.get("auto_genres")
+    auto_genres_val = None
+    if isinstance(raw_auto_genres, list):
+        auto_genres_val = raw_auto_genres
+    elif isinstance(raw_auto_genres, str) and raw_auto_genres.strip():
+        try:
+            auto_genres_val = json.loads(raw_auto_genres)
+        except Exception:
+            auto_genres_val = None
+
     return {
         "id": track_id,
         "title": actual_meta.title or db_track["title"],
@@ -226,6 +237,9 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
         "album_artist": actual_meta.album_artist or db_track.get("album_artist"),
         "year": actual_meta.year or db_track.get("year"),
         "genre": actual_meta.genre or db_track.get("genre"),
+        "auto_genres": auto_genres_val,
+        "auto_genre_model": db_track.get("auto_genre_model"),
+        "auto_genre_updated_at": db_track.get("auto_genre_updated_at"),
         "track_number": actual_meta.track_number or db_track.get("track_number"),
         "disc_number": actual_meta.disc_number or db_track.get("disc_number"),
         "comment": actual_meta.comment or db_track.get("comment"),

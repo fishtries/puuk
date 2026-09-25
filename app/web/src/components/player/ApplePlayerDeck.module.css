@@ -62,21 +62,6 @@
   }
 }
 
-.explicitBadge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  background-color: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: #ffffff;
-}
-
 /* Track Metadata Section */
 .metadataSection {
   margin-bottom: 14px;

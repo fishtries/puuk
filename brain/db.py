@@ -53,6 +53,11 @@ from repositories.tracks import (
     log_mutation_journal,
     update_mutation_journal,
     get_uncommitted_mutations,
+    update_track_auto_genres,
+    get_pending_auto_genre_syncs,
+    mark_auto_genre_sync_complete,
+    mark_auto_genre_failed,
+    reset_failed_auto_genres,
 )
 from repositories.playlists import (
     get_all_playlists,

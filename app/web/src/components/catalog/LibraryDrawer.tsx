@@ -15,6 +15,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { fetchTracks, fetchAlbums, getCoverUrl } from '../../api/tracks';
 import { Track, Album } from '../../types/track';
 import styles from './LibraryDrawer.module.css';
@@ -25,39 +26,6 @@ function formatDuration(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
-
-const DEMO_TRACKS: Track[] = [
-  {
-    id: 'demo-1',
-    title: 'Solar Echoes',
-    artist: 'Antigravity Studio',
-    album: 'Deep Space Horizon',
-    duration: 218,
-    bpm: 124,
-    format: 'flac',
-    is_liked: true,
-  },
-  {
-    id: 'demo-2',
-    title: 'Neon Velocity',
-    artist: 'Cybernetic Drift',
-    album: 'Subsurface 2088',
-    duration: 185,
-    bpm: 130,
-    format: 'mp3',
-    is_liked: false,
-  },
-  {
-    id: 'demo-3',
-    title: 'Midnight Resonance',
-    artist: 'Puuk Synthetics',
-    album: 'Zero Gravity',
-    duration: 242,
-    bpm: 118,
-    format: 'flac',
-    is_liked: true,
-  },
-];
 
 interface LibraryDrawerProps {
   isOpen: boolean;
@@ -75,7 +43,10 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
   const toggleLike = usePlayerStore((state) => state.toggleLike);
   const isWaveActive = usePlayerStore((state) => state.isWaveActive);
   const toggleWave = usePlayerStore((state) => state.toggleWave);
+  const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
   const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -88,7 +59,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
   }, [isOpen]);
 
   const { data: serverTracks = [] } = useQuery({
-    queryKey: ['tracks', searchQuery],
+    queryKey: ['tracks', searchQuery, user?.id ?? null],
     queryFn: () => fetchTracks({ search: searchQuery }),
     staleTime: 30000,
   });
@@ -99,7 +70,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
     staleTime: 60000,
   });
 
-  const tracks = serverTracks.length > 0 ? serverTracks : DEMO_TRACKS;
+  const tracks = serverTracks;
   const isPlaying = status === 'playing';
 
   const displayedTracks =
@@ -291,6 +262,10 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                             aria-label="Редактировать теги ID3"
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (!token) {
+                                setIsLoginOpen(true);
+                                return;
+                              }
                               openTagEditor(track);
                             }}
                           >

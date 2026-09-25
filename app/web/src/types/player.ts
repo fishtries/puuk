@@ -80,5 +80,6 @@ export interface PlayerStoreState {
   toggleLike: (trackId: string) => void;
   recordHistory: (track: Track) => void;
   loadHistory: () => Promise<void>;
+  resetUserData: () => void;
   updateTrackInStore: (trackId: string, updatedTrack: Partial<Track>) => void;
 }

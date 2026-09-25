@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Dict, Any, Set, Optional
 
@@ -10,6 +11,16 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
     track_id = str(r.get("id") or r.get("track_id") or "")
     fav_ids = fav_ids or set()
     cover_ver = r.get("cover_version") or 0
+
+    raw_auto_genres = r.get("auto_genres")
+    auto_genres_val = None
+    if isinstance(raw_auto_genres, list):
+        auto_genres_val = raw_auto_genres
+    elif isinstance(raw_auto_genres, str) and raw_auto_genres.strip():
+        try:
+            auto_genres_val = json.loads(raw_auto_genres)
+        except Exception:
+            auto_genres_val = None
 
     rel_sanitized = r.get("file_path", "")
     if os.path.isabs(rel_sanitized):
@@ -41,6 +52,9 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "coverArt": f"{base_url}/api/cover/{track_id}?v={cover_ver}",
         "cover_version": cover_ver,
         "cover_color": r.get("cover_color"),
+        "auto_genres": auto_genres_val,
+        "auto_genre_model": r.get("auto_genre_model"),
+        "auto_genre_updated_at": r.get("auto_genre_updated_at"),
         "is_liked": track_id in fav_ids,
         "added_at": r.get("added_at"),
         "favorited_at": r.get("favorited_at"),

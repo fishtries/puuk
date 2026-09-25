@@ -87,11 +87,6 @@ export const ApplePlayerDeck: React.FC = () => {
               <Disc3 size={80} className={isPlaying ? styles.spinning : ''} />
             </div>
           )}
-          {currentTrack?.bpm && (
-            <div className={styles.explicitBadge}>
-              <span>{currentTrack.bpm} BPM</span>
-            </div>
-          )}
         </div>
       </div>
 

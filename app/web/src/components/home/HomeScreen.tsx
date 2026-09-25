@@ -49,11 +49,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   const recentlyPlayed = usePlayerStore((state) => state.recentlyPlayed);
   const loadHistory = usePlayerStore((state) => state.loadHistory);
   const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const isAuthLoading = useAuthStore((state) => state.isLoading);
 
   // Load listening history from backend on mount / when user changes
   useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+    if (token && user) loadHistory();
+    else usePlayerStore.getState().resetUserData();
+  }, [loadHistory, token, user]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'home' | 'library' | 'search'>('home');
@@ -70,8 +73,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   });
 
   const { data: serverFavorites = [] } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: ['favorites', user?.id ?? null],
     queryFn: () => fetchFavorites(),
+    enabled: Boolean(!isAuthLoading && token && user),
   });
 
   // Effective track sources
@@ -80,8 +84,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   }, [serverTracks]);
 
   const favorites = useMemo(() => {
-    return serverFavorites.length > 0 ? serverFavorites : allTracks.slice(0, 5);
-  }, [serverFavorites, allTracks]);
+    return serverFavorites;
+  }, [serverFavorites]);
 
   const freshTracks = useMemo(() => {
     return allTracks.slice(2, 6);

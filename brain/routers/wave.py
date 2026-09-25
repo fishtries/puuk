@@ -10,7 +10,7 @@ from pydantic import BaseModel
 # Ensure brain path is available
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import db
-from auth import get_current_user
+from auth import get_current_admin_user, get_current_user
 from user_profile import should_recompute_embedding, update_user_embedding_async
 from qdrant_client import QdrantClient
 
@@ -116,11 +116,8 @@ async def get_user_profile_statistics(current_user: dict = Depends(get_current_u
     return db.get_user_profile_stats(user_id)
 
 @router.get("/admin/wave-stats")
-async def get_wave_admin_statistics(current_user: dict = Depends(get_current_user)):
+async def get_wave_admin_statistics(current_user: dict = Depends(get_current_admin_user)):
     """
     Сводная аналитика эффективности Моей Волны (доступна администратору).
     """
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ только для администраторов")
-    
     return db.get_wave_stats_summary()

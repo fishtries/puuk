@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 # Добавляем brain в sys.path
@@ -89,28 +90,20 @@ class TestPhase2Auth(unittest.TestCase):
         self.assertEqual(data["username"], "admin")
         self.assertTrue(data["is_authenticated"])
 
-    def test_06_get_me_without_token_soft_mode(self):
-        # При REQUIRE_AUTH=False запрос без токена возвращает дефолтного пользователя
-        original_mode = auth.REQUIRE_AUTH
-        try:
-            auth.REQUIRE_AUTH = False
-            resp = self.client.get("/api/auth/me")
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertEqual(data["id"], 1)
-            self.assertFalse(data["is_authenticated"])
-        finally:
-            auth.REQUIRE_AUTH = original_mode
+    def test_06_get_me_without_token_returns_401(self):
+        # Авторизация теперь всегда обязательна: запрос без токена -> 401
+        resp = self.client.get("/api/auth/me")
+        self.assertEqual(resp.status_code, 401)
+        self.assertIn("Требуется авторизация", resp.json()["detail"])
 
-    def test_07_get_me_without_token_strict_mode(self):
-        # При REQUIRE_AUTH=True запрос без токена должен возвращать 401
-        original_mode = auth.REQUIRE_AUTH
-        try:
-            auth.REQUIRE_AUTH = True
-            resp = self.client.get("/api/auth/me")
-            self.assertEqual(resp.status_code, 401)
-        finally:
-            auth.REQUIRE_AUTH = original_mode
+    def test_07_get_optional_current_user_no_token_returns_none(self):
+        # Прямой юнит-тест: get_optional_current_user без токена -> None
+        self.assertIsNone(asyncio.run(auth.get_optional_current_user(token=None)))
+
+        # Опциональная зависимость строго валидирует плохой токен -> 401
+        with self.assertRaises(Exception) as ctx:
+            asyncio.run(auth.get_optional_current_user(token="invalid_gibberish_token_123"))
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 401)
 
     def test_08_get_me_invalid_token(self):
         resp = self.client.get("/api/auth/me", headers={

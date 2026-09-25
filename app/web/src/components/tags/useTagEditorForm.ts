@@ -242,6 +242,7 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
 
     try {
       const updated = await updateTrackMetadata(currentTrackData.id, payload);
+      setCurrentTrackData(updated);
       updateTrackInStore(currentTrackData.id, updated);
       queryClient.setQueryData(['track', currentTrackData.id], updated);
       queryClient.invalidateQueries({ queryKey: ['tracks'] });

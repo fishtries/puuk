@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import re
+import shlex
 
 def strip_ansi(text: str) -> str:
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -136,6 +137,14 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
         "--lyrics",
         "--yt-dlp-args", "--js-runtimes node:/usr/bin/node --extractor-args youtube:player_client=android,web"
     ]
+
+    logging.info(
+        "[spotdl] starting: url=%s output_dir=%s command=%s",
+        url,
+        output_dir,
+        shlex.join(cmd),
+    )
+
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -147,6 +156,22 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
     track_history = []
     output_lines = []
     error_lines = []
+
+    async def read_stderr() -> None:
+        """Drain spotdl stderr while stdout is being processed."""
+        while True:
+            line = await process.stderr.readline()
+            if not line:
+                break
+
+            line_str = strip_ansi(line.decode('utf-8', errors='replace')).strip()
+            if not line_str:
+                continue
+
+            error_lines.append(line_str)
+            logging.warning("[spotdl][stderr] %s", line_str)
+
+    stderr_task = asyncio.create_task(read_stderr())
     
     while True:
         line = await process.stdout.readline()
@@ -158,6 +183,7 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
             continue
             
         output_lines.append(line_str)
+        logging.info("[spotdl][stdout] %s", line_str)
         if any(err_kw in line_str.lower() for err_kw in ("error:", "exception:", "failed", "unavailable", "blocked", "http error")):
             error_lines.append(line_str)
         
@@ -198,17 +224,30 @@ async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progre
                         await progress_cb(f"Трек загружен. Обработка...")
                     
     await process.wait()
-    
-    stderr_data = await process.stderr.read()
-    stderr_str = strip_ansi(stderr_data.decode('utf-8', errors='ignore')).strip()
-    if stderr_str:
-        error_lines.extend([l.strip() for l in stderr_str.splitlines() if l.strip()])
+    await stderr_task
+
+    downloaded_files = []
+    if os.path.isdir(output_dir):
+        downloaded_files = sorted(
+            name for name in os.listdir(output_dir)
+            if os.path.isfile(os.path.join(output_dir, name))
+        )
+
+    logging.info(
+        "[spotdl] finished: returncode=%s total_tracks=%s processed_tracks=%s files=%s",
+        process.returncode,
+        total_tracks,
+        downloaded_tracks,
+        downloaded_files,
+    )
     
     if process.returncode != 0:
+        logging.error("[spotdl] failed with return code %s", process.returncode)
         relevant_errors = "\n".join(error_lines[-5:]) if error_lines else ("\n".join(output_lines[-5:]) if output_lines else "Неизвестная ошибка")
         raise Exception(f"SpotDL Error:\n{relevant_errors}")
         
     if downloaded_tracks == 0:
+        logging.error("[spotdl] completed without processed tracks")
         if error_lines:
             detail = "\n".join(error_lines[-3:])
             raise Exception(f"Ни один трек не был загружен:\n{detail}")

@@ -54,6 +54,14 @@ export const TagsTab: React.FC<TagsTabProps> = ({ form }) => (
             onChange={(e) => SETTER_MAP[key](form)(e.target.value)}
             placeholder={placeholder}
           />
+          {key === 'genre' && !form.genre.trim() && form.currentTrackData.auto_genres && form.currentTrackData.auto_genres.length > 0 && (
+            <div className={styles.autoGenreHint}>
+              <span className={styles.autoGenreLabel}>Определено автоматически:</span>{' '}
+              <span className={styles.autoGenreValues}>
+                {form.currentTrackData.auto_genres.map((g) => g.name).join(', ')}
+              </span>
+            </div>
+          )}
         </div>
       ))}
 

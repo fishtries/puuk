@@ -490,9 +490,8 @@ class TestPersonalizedRecommendationsAPI(unittest.TestCase):
         cls.headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
     def test_01_unauthorized_401(self):
-        # Мягкий fallback (REQUIRE_AUTH=false) отвечает admin; в строгом режиме — 401.
-        with patch.object(auth, "REQUIRE_AUTH", True):
-            resp = self.client.get("/api/recommendations/youll-like-this")
+        # Авторизация обязательна всегда: анонимный запрос -> 401.
+        resp = self.client.get("/api/recommendations/youll-like-this")
         self.assertEqual(resp.status_code, 401)
 
     def test_02_param_validation_422(self):
@@ -505,11 +504,12 @@ class TestPersonalizedRecommendationsAPI(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 422)
 
-    def test_03_empty_profile_returns_no_sections(self):
-        # Пользователь setUpClass пока без истории и лайков.
-        resp = self.client.get(
-            "/api/recommendations/youll-like-this", headers=self.headers
-        )
+    def test_03_empty_profile_without_catalog_genres_returns_no_sections(self):
+        # Пустой профиль без auto_genres-кандидатов остаётся пустым.
+        with patch.object(prs, "get_catalog_genre_affinity", return_value=[]):
+            resp = self.client.get(
+                "/api/recommendations/youll-like-this", headers=self.headers
+            )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), {"sections": []})
 

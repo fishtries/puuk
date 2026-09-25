@@ -5,6 +5,7 @@ import { usePlayerStore } from '../store/usePlayerStore';
 import { fetchFavorites, getCoverUrl } from '../api/tracks';
 import { Track } from '../types/track';
 import styles from './LibraryView.module.css';
+import { useAuthStore } from '../store/useAuthStore';
 
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds)) return '0:00';
@@ -19,11 +20,15 @@ export const LibraryView: React.FC = () => {
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const toggleLike = usePlayerStore((state) => state.toggleLike);
+  const userId = useAuthStore((state) => state.user?.id ?? null);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
 
   const { data: favorites = [], isLoading } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: ['favorites', userId],
     queryFn: () => fetchFavorites(),
     staleTime: 10000,
+    enabled: Boolean(token && user),
   });
 
   const isPlaying = status === 'playing';

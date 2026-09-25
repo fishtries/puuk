@@ -128,7 +128,7 @@ globalThis.Audio = function (): HTMLAudioElement {
 } as unknown as typeof Audio;
 
 globalThis.localStorage = {
-  getItem: () => null,
+  getItem: () => 'test-token',
   setItem: () => {},
   removeItem: () => {},
 } as unknown as Storage;
@@ -157,7 +157,7 @@ function firstFeedbackBody(): Record<string, unknown> | undefined {
 function loadedStreamIds(): string[] {
   return audioInstance.srcLog
     .filter((url) => url.startsWith('/api/stream/'))
-    .map((url) => decodeURIComponent(url.replace('/api/stream/', '')));
+    .map((url) => decodeURIComponent(url.replace('/api/stream/', '').split('?')[0]));
 }
 
 function seedWave(currentTrackId: string, queueIds: string[], playedIds: string[]): void {

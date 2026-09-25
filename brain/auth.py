@@ -22,14 +22,8 @@ JWT_SECRET = os.getenv("JWT_SECRET", "puuk-super-secret-jwt-key-2026-safe-produc
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = int(os.getenv("JWT_EXPIRATION_DAYS", "30"))
 
-# Флаг строгого режима: если False, запросы без токена получают аккаунт admin (id=1)
-REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "false").lower() in ("true", "1", "yes")
-
-def set_require_auth(value: bool):
-    global REQUIRE_AUTH
-    REQUIRE_AUTH = bool(value)
-
-# auto_error=False позволяет обрабатывать запросы без токена в мягком fallback-режиме
+# auto_error=False: обе зависимости (строгая и опциональная) сами решают,
+# как обрабатывать запрос без токена
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 # --- Pydantic модели ---
@@ -81,55 +75,54 @@ def decode_access_token(token: str) -> Optional[dict]:
 
 async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> dict:
     """
-    Извлекает и верифицирует пользователя из заголовка Authorization.
-    При отсутствии токена в режиме REQUIRE_AUTH=False обеспечивает плавный переход,
-    возвращая дефолтного пользователя (admin, id=1).
+    Строго извлекает и верифицирует пользователя из заголовка Authorization.
+    Отсутствие токена, недействительный/просроченный токен или несуществующий
+    пользователь -> 401 Unauthorized.
     """
-    if token:
-        payload = decode_access_token(token)
-        if not payload or "sub" not in payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Недействительный или истекший токен авторизации",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        try:
-            user_id = int(payload["sub"])
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Некорректный идентификатор пользователя в токене",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            
-        user = db.get_user_by_id(user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Пользователь из токена больше не существует",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        user_dict = dict(user)
-        user_dict["is_authenticated"] = True
-        return user_dict
-
-    # Токен отсутствует в запросе
-    if REQUIRE_AUTH:
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Требуется авторизация",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Мягкий fallback-режим для текущих клиентов
-    admin_user = db.get_user_by_id(1)
-    if admin_user:
-        user_dict = dict(admin_user)
-    else:
-        user_dict = {"id": 1, "username": "admin", "role": "admin", "telegram_id": None}
-        
-    user_dict["is_authenticated"] = False
+
+    payload = decode_access_token(token)
+    if not payload or "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительный или истекший токен авторизации",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        user_id = int(payload["sub"])
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Некорректный идентификатор пользователя в токене",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Пользователь из токена больше не существует",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user_dict = dict(user)
+    user_dict["is_authenticated"] = True
     return user_dict
+
+async def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[dict]:
+    """
+    Опциональная аутентификация: для публичных эндпоинтов, которым известен
+    пользователь, если токен передан.
+    Нет токена -> None (эндпоинт сам решает, как отвечать);
+    недействительный/просроченный токен или несуществующий пользователь -> 401.
+    """
+    if not token:
+        return None
+    return await get_current_user(token)
 
 async def get_current_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
     """Проверяет, что текущий пользователь обладает правами администратора."""

@@ -1,4 +1,5 @@
 """Track records: CRUD, search, lyrics columns, audio-derived metadata, mutation journal."""
+import json
 from typing import Optional, List, Dict, Any
 
 from repositories.base import get_connection
@@ -305,3 +306,97 @@ def get_uncommitted_mutations() -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def update_track_auto_genres(
+    track_id: str,
+    auto_genres: Optional[List[Dict[str, Any]]],
+    model_name: Optional[str] = None,
+    updated_at: Optional[str] = None,
+    sync_pending: bool = False,
+) -> None:
+    """Сохраняет автоматически определенные жанры в формате JSON и название модели.
+
+    Ручной genre не изменяется.
+    """
+    serialized = json.dumps(auto_genres, ensure_ascii=False) if auto_genres is not None else None
+    conn = get_connection()
+    cursor = conn.cursor()
+    status = "classified"
+    if updated_at:
+        cursor.execute("""
+            UPDATE tracks
+            SET auto_genres = ?,
+                auto_genre_model = ?,
+                auto_genre_updated_at = ?,
+                auto_genre_status = ?,
+                auto_genre_sync_pending = ?
+            WHERE id = ?
+        """, (serialized, model_name, updated_at, status, int(sync_pending), str(track_id)))
+    else:
+        cursor.execute("""
+            UPDATE tracks
+            SET auto_genres = ?,
+                auto_genre_model = ?,
+                auto_genre_updated_at = CURRENT_TIMESTAMP,
+                auto_genre_status = ?,
+                auto_genre_sync_pending = ?
+            WHERE id = ?
+        """, (serialized, model_name, status, int(sync_pending), str(track_id)))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_auto_genre_syncs() -> List[Dict[str, Any]]:
+    """Возвращает auto-жанры, которые не удалось доставить в Qdrant."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, auto_genres, auto_genre_model, auto_genre_updated_at
+        FROM tracks
+        WHERE auto_genre_sync_pending = 1
+          AND auto_genre_status = 'classified'
+    """)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def mark_auto_genre_sync_complete(track_id: str) -> None:
+    """Помечает auto-жанры как доставленные в Qdrant."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tracks SET auto_genre_sync_pending = 0 WHERE id = ?",
+        (str(track_id),),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_auto_genre_failed(track_id: str) -> None:
+    """Помечает классификацию неуспешной и удаляет устаревший результат."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE tracks
+        SET auto_genres = NULL,
+            auto_genre_model = NULL,
+            auto_genre_status = 'failed',
+            auto_genre_sync_pending = 0,
+            auto_genre_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (str(track_id),))
+    conn.commit()
+    conn.close()
+
+
+def reset_failed_auto_genres() -> int:
+    """Возвращает failed-классификации в очередь backfill."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tracks SET auto_genre_status = NULL WHERE auto_genre_status = 'failed'")
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count

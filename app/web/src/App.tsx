@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { ArrowLeft } from 'lucide-react';
 import { HomeScreen } from './components/home/HomeScreen';
 import { FloatingPlayerDock } from './components/player/FloatingPlayerDock';
@@ -19,15 +19,7 @@ import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaSession } from './hooks/useMediaSession';
 
 import styles from './App.module.css';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-  },
-});
+import { queryClient } from './api/queryClient';
 
 function AppContent() {
   const [viewMode, setViewMode] = useState<'home' | 'lyrics'>('home');

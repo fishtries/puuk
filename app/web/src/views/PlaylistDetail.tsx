@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchFavorites, fetchPlaylistTracks, getCoverUrl } from '../api/tracks';
 import { CollectionDetail } from '../components/collection/CollectionDetail';
 import { Playlist, Track } from '../types/track';
+import { useAuthStore } from '../store/useAuthStore';
 
 const FAVORITES_ID = '__favorites__';
 
@@ -25,20 +26,23 @@ export const PlaylistDetail: React.FC<PlaylistDetailProps> = ({
   coverUrl,
   tracks: propTracks,
 }) => {
+  const userId = useAuthStore((state) => state.user?.id ?? null);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
   const isFav = isFavorites || playlistId === FAVORITES_ID;
   const hasPropTracks = Boolean(propTracks && propTracks.length > 0);
 
   const { data: favData = [], isFetching: isFavLoading } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: ['favorites', userId],
     queryFn: () => fetchFavorites(),
-    enabled: isFav,
+    enabled: isFav && Boolean(token && user),
     staleTime: 15000,
   });
 
   const { data: detail, isFetching: isDetailLoading } = useQuery({
-    queryKey: ['playlist', playlistId],
+    queryKey: ['playlist', playlistId, userId],
     queryFn: () => fetchPlaylistTracks(playlistId),
-    enabled: !isFav && !hasPropTracks,
+    enabled: !isFav && !hasPropTracks && Boolean(token && user),
     staleTime: 60000,
   });
 

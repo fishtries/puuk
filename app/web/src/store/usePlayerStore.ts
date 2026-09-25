@@ -200,7 +200,9 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     if (reportSkip && currentTrack) {
       const listenMs = Math.round(currentTime * 1000);
       const totalMs = Math.round((currentTrack.duration || duration || 0) * 1000);
-      sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs).catch(() => {});
+      if (localStorage.getItem('puuk_token')) {
+        sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs).catch(() => {});
+      }
     }
 
     // Wave active: consume the already-fetched buffer before asking Qdrant again.
@@ -240,7 +242,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
   audioEngine.on('ended', () => {
     const { repeatMode, currentTrack, duration } = get();
-    if (currentTrack) {
+    if (currentTrack && localStorage.getItem('puuk_token')) {
       const trackDurationMs = Math.round((currentTrack.duration || duration || 0) * 1000);
       sendWaveFeedback(currentTrack.id, 'finish', trackDurationMs, trackDurationMs).catch(() => {});
     }
@@ -381,6 +383,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     toggleWave: async (): Promise<boolean> => {
+      if (!localStorage.getItem('puuk_token')) {
+        set({ isLoginOpen: true });
+        return false;
+      }
       const nextWave = !get().isWaveActive;
       const currentTrack = get().currentTrack;
 
@@ -516,6 +522,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     toggleLike: async (trackId: string) => {
+      if (!localStorage.getItem('puuk_token')) {
+        set({ isLoginOpen: true });
+        return;
+      }
       try {
         const currentState = get();
         const track = currentState.currentTrack?.id === trackId 
@@ -545,7 +555,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     recordHistory: (track: Track) => {
-      if (!track?.id || isDemoTrack(track.id)) return;
+      if (!track?.id || isDemoTrack(track.id) || !localStorage.getItem('puuk_token')) return;
 
       set((state) => {
         const withoutDuplicate = state.recentlyPlayed.filter((t) => t.id !== track.id);
@@ -559,6 +569,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     loadHistory: async () => {
+      if (!localStorage.getItem('puuk_token')) {
+        set({ history: [], recentlyPlayed: [], isHistoryLoading: false });
+        return;
+      }
       set({ isHistoryLoading: true });
       try {
         const serverHistory = await fetchHistory(HISTORY_LIMIT);
@@ -573,6 +587,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         console.warn('Could not load listening history:', err);
         set({ isHistoryLoading: false });
       }
+    },
+
+    resetUserData: () => {
+      set({ history: [], recentlyPlayed: [], isHistoryLoading: false });
     },
 
     updateTrackInStore: (trackId: string, updatedTrack: Partial<Track>) => {

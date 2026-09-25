@@ -9,7 +9,6 @@ import test_db_path  # noqa: F401 — изолирует тестовую БД, 
 
 from fastapi.testclient import TestClient
 import db
-import auth
 from security import hash_password
 from api import app
 
@@ -49,28 +48,18 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
             added_by_user_id=cls.charlie_id
         )
 
-    def tearDown(self):
-        # Гарантируем сброс в мягкий режим после каждого теста
-        auth.set_require_auth(False)
-
-    def test_01_soft_mode_fallback(self):
-        auth.set_require_auth(False)
-        
-        # Запрос без токена к /api/auth/me возвращает admin с флагом is_authenticated=False
+    def test_01_anonymous_requests_rejected(self):
+        # Запрос без токена к /api/auth/me -> 401 (авторизация всегда обязательна)
         resp_me = self.client.get("/api/auth/me")
-        self.assertEqual(resp_me.status_code, 200)
-        data = resp_me.json()
-        self.assertEqual(data["username"], "admin")
-        self.assertFalse(data["is_authenticated"])
+        self.assertEqual(resp_me.status_code, 401)
+        self.assertIn("Требуется авторизация", resp_me.json()["detail"])
 
-        # Запрос без токена к /api/favorites проходит (fallback на админа)
+        # Запрос без токена к /api/favorites -> 401
         resp_favs = self.client.get("/api/favorites")
-        self.assertEqual(resp_favs.status_code, 200)
+        self.assertEqual(resp_favs.status_code, 401)
 
-    def test_02_strict_mode_rejects_unauthenticated(self):
-        auth.set_require_auth(True)
-
-        # Запрос без токена к защищенным эндпоинтам -> 401
+    def test_02_anonymous_rejected_on_protected_endpoints(self):
+        # Запросы без токена к защищенным эндпоинтам -> 401
         endpoints_to_test = [
             ("GET", "/api/auth/me"),
             ("GET", "/api/favorites"),
@@ -87,16 +76,14 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
                 r = self.client.post(ep, json={"name": "Test"})
             self.assertEqual(
                 r.status_code, 401,
-                f"Endpoint {method} {ep} should return 401 in strict mode, got {r.status_code}"
+                f"Endpoint {method} {ep} should return 401 without token, got {r.status_code}"
             )
 
         # Запрос с битым токеном -> 401
         invalid_resp = self.client.get("/api/favorites", headers={"Authorization": "Bearer invalid.token.payload"})
         self.assertEqual(invalid_resp.status_code, 401)
 
-    def test_03_strict_mode_accepts_valid_tokens(self):
-        auth.set_require_auth(True)
-
+    def test_03_valid_tokens_accepted(self):
         # Чарли делает запрос с валидным токеном
         resp_me = self.client.get("/api/auth/me", headers=self.headers_c)
         self.assertEqual(resp_me.status_code, 200)
@@ -130,9 +117,7 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
         # Очистка плейлиста
         self.client.delete(f"/api/playlists/{pl_id}", headers=self.headers_c)
 
-    def test_04_public_routes_remain_open_in_strict_mode(self):
-        auth.set_require_auth(True)
-
+    def test_04_public_routes_remain_open(self):
         # Логин работает без токена
         login_resp = self.client.post("/api/auth/login", json={"username": "charlie_p6", "password": "pass_c6"})
         self.assertEqual(login_resp.status_code, 200)
@@ -142,9 +127,70 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
         bad_login = self.client.post("/api/auth/login", json={"username": "charlie_p6", "password": "wrong"})
         self.assertEqual(bad_login.status_code, 401)
 
+    def test_05_guest_public_read_access(self):
+        # Гость читает каталог без токена
+        resp = self.client.get("/api/tracks")
+        self.assertEqual(resp.status_code, 200)
+        tracks = resp.json()
+        self.assertTrue(len(tracks) > 0)
+        self.assertTrue(all(t["is_liked"] is False for t in tracks),
+                        "Гостю все треки должны приходить с is_liked=false")
+
+        # Альбомы доступны гостю
+        resp_albums = self.client.get("/api/albums")
+        self.assertEqual(resp_albums.status_code, 200)
+
+        # Поиск доступен гостю, лайки не подмешиваются
+        resp_search = self.client.get("/api/search", params={"q": "Phase"})
+        self.assertEqual(resp_search.status_code, 200)
+        for t in resp_search.json().get("tracks", []):
+            self.assertFalse(t["is_liked"])
+
+        # Битый токен отклоняется даже публичным эндпоинтом
+        bad = self.client.get("/api/tracks", headers={"Authorization": "Bearer invalid.token.payload"})
+        self.assertEqual(bad.status_code, 401)
+
+    def test_06_guest_protected_writes_rejected(self):
+        # Гостевые запросы к персональным эндпоинтам -> 401
+        endpoints_to_test = [
+            ("GET", "/api/favorites", None),
+            ("GET", "/api/history", None),
+            ("POST", f"/api/tracks/{self.track_id}/like", None),
+            ("GET", "/api/recommendations/youll-like-this", None),
+        ]
+
+        for method, ep, payload in endpoints_to_test:
+            if method == "GET":
+                r = self.client.get(ep)
+            else:
+                r = self.client.post(ep)
+            self.assertEqual(
+                r.status_code, 401,
+                f"Endpoint {method} {ep} should return 401 without token, got {r.status_code}"
+            )
+
+        # Скан библиотеки теперь только для админа: гость -> 401, пользователь -> 403
+        self.assertEqual(self.client.post("/api/library/scan").status_code, 401)
+        self.assertEqual(self.client.post("/api/library/scan", headers=self.headers_c).status_code, 403)
+
+    def test_07_authenticated_tracks_reflect_likes(self):
+        # Чарли лайкает трек
+        like_resp = self.client.post(f"/api/tracks/{self.track_id}/like", headers=self.headers_c)
+        self.assertEqual(like_resp.status_code, 200)
+
+        # С валидным токеном /api/tracks отражает лайк (лимит выше — в общей тестовой БД много треков)
+        resp = self.client.get("/api/tracks", params={"limit": 1000}, headers=self.headers_c)
+        self.assertEqual(resp.status_code, 200)
+        target = next(t for t in resp.json() if t["id"] == self.track_id)
+        self.assertTrue(target["is_liked"])
+
+        # Гость видит тот же трек без лайка
+        guest = self.client.get("/api/tracks", params={"limit": 1000})
+        target_guest = next(t for t in guest.json() if t["id"] == self.track_id)
+        self.assertFalse(target_guest["is_liked"])
+
     @classmethod
     def tearDownClass(cls):
-        auth.set_require_auth(False)
         db.delete_user(cls.charlie_id)
         db.delete_user(cls.diana_id)
         conn = db.get_connection()

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Sparkles, Radio } from 'lucide-react';
 import { fetchWaveProfileStats, WaveProfileStats } from '../../api/wave';
 import styles from './WaveProfileIndicator.module.css';
+import { useAuthStore } from '../../store/useAuthStore';
 
 interface WaveProfileIndicatorProps {
   compact?: boolean;
@@ -13,9 +14,13 @@ export const WaveProfileIndicator: React.FC<WaveProfileIndicatorProps> = ({
   compact = false,
   className = '',
 }) => {
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const userId = user?.id ?? null;
   const { data: profile, isLoading } = useQuery<WaveProfileStats>({
-    queryKey: ['wave-profile-stats'],
+    queryKey: ['wave-profile-stats', userId],
     queryFn: fetchWaveProfileStats,
+    enabled: Boolean(token && user),
     staleTime: 20000,
     refetchInterval: 30000,
     retry: 1,

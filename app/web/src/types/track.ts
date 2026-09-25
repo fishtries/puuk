@@ -20,6 +20,9 @@ export interface Track {
   year?: number;
   album_artist?: string;
   genre?: string;
+  auto_genres?: AutoGenreItem[] | null;
+  auto_genre_model?: string | null;
+  auto_genre_updated_at?: string | null;
   track_number?: string;
   disc_number?: string;
   comment?: string;
@@ -27,6 +30,11 @@ export interface Track {
   file_mtime_ns?: number;
   cover_version?: number;
   dominant_color?: string;
+}
+
+export interface AutoGenreItem {
+  name: string;
+  confidence: number;
 }
 
 export interface TrackEditPayloadDTO {

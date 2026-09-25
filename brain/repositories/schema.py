@@ -129,7 +129,12 @@ def init_db():
         "format": "TEXT",
         "file_size": "INTEGER",
         "file_mtime_ns": "INTEGER",
-        "cover_version": "INTEGER DEFAULT 0"
+        "cover_version": "INTEGER DEFAULT 0",
+        "auto_genres": "TEXT",
+        "auto_genre_model": "TEXT",
+        "auto_genre_updated_at": "TIMESTAMP",
+        "auto_genre_status": "TEXT",
+        "auto_genre_sync_pending": "INTEGER DEFAULT 0"
     })
 
     # Таблица журнала мутаций для надежного восстановления при сбоях (Recovery)

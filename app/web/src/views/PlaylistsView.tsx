@@ -1,6 +1,7 @@
 import React from 'react';
 import { Heart, Music2, Play, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { useAuthStore } from '../store/useAuthStore';
 import { motion } from 'framer-motion';
 import { fetchPlaylists, fetchFavorites, getCoverUrl } from '../api/tracks';
 import { Playlist, Track } from '../types/track';
@@ -31,15 +32,19 @@ interface PlaylistsViewProps {
 }
 
 export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onOpen }) => {
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
   const { data: playlists = [], isFetching: isPlaylistsLoading } = useQuery({
-    queryKey: ['playlists'],
+    queryKey: ['playlists', user?.id ?? null],
     queryFn: () => fetchPlaylists(),
+    enabled: Boolean(token && user),
     staleTime: 30000,
   });
 
   const { data: favorites = [] } = useQuery({
-    queryKey: ['favorites'],
+    queryKey: ['favorites', user?.id ?? null],
     queryFn: () => fetchFavorites(),
+    enabled: Boolean(token && user),
     staleTime: 15000,
   });
 
