@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
 import { HomeScreen } from './components/home/HomeScreen';
 import { FloatingPlayerDock } from './components/player/FloatingPlayerDock';
@@ -11,12 +12,14 @@ import { LibraryDrawer } from './components/catalog/LibraryDrawer';
 import { LoginModal } from './components/auth/LoginModal';
 import { DebugOverlay } from './components/debug/DebugOverlay';
 import { TagEditorModal } from './components/tags/TagEditorModal';
+import { AddToPlaylistModal } from './components/playlists/AddToPlaylistModal';
 import { RightPanel } from './components/layout/RightPanel';
 
 import { useAuthStore } from './store/useAuthStore';
 import { usePlayerStore } from './store/usePlayerStore';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaSession } from './hooks/useMediaSession';
+import { Track } from './types/track';
 
 import styles from './App.module.css';
 import { queryClient } from './api/queryClient';
@@ -24,6 +27,7 @@ import { queryClient } from './api/queryClient';
 function AppContent() {
   const [viewMode, setViewMode] = useState<'home' | 'lyrics'>('home');
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [trackForPlaylist, setTrackForPlaylist] = useState<Track | null>(null);
 
   const checkAuth = useAuthStore((state) => state.checkAuth);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
@@ -40,11 +44,15 @@ function AppContent() {
       {viewMode === 'home' ? (
         /* Sketch-based Home View with Glassmorphism Islands */
         <div className={styles.homeContainer}>
-          <HomeScreen onOpenAuth={() => setIsLoginOpen(true)} />
+          <HomeScreen
+            onOpenAuth={() => setIsLoginOpen(true)}
+            onAddToPlaylist={setTrackForPlaylist}
+          />
 
           <FloatingPlayerDock
             onOpenLyrics={() => setViewMode('lyrics')}
             isLyricsActive={false}
+            onAddToPlaylist={setTrackForPlaylist}
           />
           <CompactTrackInfoIsland />
           <RightPanel />
@@ -65,7 +73,7 @@ function AppContent() {
           </button>
 
           <main className={styles.mainStage} aria-label="Apple Music Player Stage">
-            <ApplePlayerDeck />
+            <ApplePlayerDeck onAddToPlaylist={setTrackForPlaylist} />
             <AppleLyricsStream />
           </main>
         </>
@@ -81,6 +89,11 @@ function AppContent() {
       <LoginModal />
       <DebugOverlay />
       <TagEditorModal />
+
+      {/* Single instance: add-to-playlist dialog (opened from any track row) */}
+      <AddToPlaylistModal track={trackForPlaylist} onClose={() => setTrackForPlaylist(null)} />
+
+      <Toaster theme="dark" position="bottom-right" />
     </div>
   );
 }

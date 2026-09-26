@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
-import { Heart, Play, Shuffle, Music2, Loader2, Tag } from 'lucide-react';
+import { Heart, Play, Shuffle, Music2, Loader2, Tag, ListPlus, Trash2 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { Track } from '../../types/track';
+import { SortableTracklist } from '../playlists/SortableTracklist';
 import styles from './CollectionDetail.module.css';
 
 function formatDuration(seconds?: number): string {
@@ -28,15 +29,19 @@ interface TracklistProps {
   tracks: Track[];
   isLoading?: boolean;
   emptyLabel?: string;
+  renderTrackActions?: (track: Track) => React.ReactNode;
 }
 
-export const Tracklist: React.FC<TracklistProps> = ({ tracks, isLoading, emptyLabel = 'Пусто' }) => {
+export const Tracklist: React.FC<TracklistProps> = ({
+  tracks,
+  isLoading,
+  emptyLabel = 'Пусто',
+  renderTrackActions,
+}) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
-  const toggleLike = usePlayerStore((state) => state.toggleLike);
-  const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
 
   const handleRowClick = (track: Track) => {
     if (currentTrack?.id === track.id) {
@@ -102,35 +107,7 @@ export const Tracklist: React.FC<TracklistProps> = ({ tracks, isLoading, emptyLa
             </div>
 
             <div className={styles.trackActions}>
-              <button
-                type="button"
-                className={`${styles.heartBtn} ${track.is_liked ? styles.heartBtnActive : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleLike(track.id);
-                }}
-                aria-label={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
-                title={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
-              >
-                <Heart size={14} fill={track.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'} />
-              </button>
-
-              <span className={`${styles.trackDuration} tabular-nums`}>
-                {formatDuration(track.duration)}
-              </span>
-
-              <button
-                type="button"
-                className={styles.actionBtn}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openTagEditor(track);
-                }}
-                title="Редактировать теги ID3"
-                aria-label="Редактировать теги ID3"
-              >
-                <Tag size={13} />
-              </button>
+              {renderTrackActions?.(track)}
             </div>
           </li>
         );
@@ -172,6 +149,16 @@ export interface CollectionDetailProps {
   tracks: Track[];
   isLoading?: boolean;
   emptyLabel?: string;
+  /** Extra controls rendered next to the collection title (e.g. actions menu) */
+  headerActions?: React.ReactNode;
+  /** Show per-track "add to playlist" entry point */
+  onAddToPlaylist?: (track: Track) => void;
+  /** Owner-only: optimistic removal of a track from a saved playlist */
+  canRemoveTracks?: boolean;
+  onRemoveTrack?: (track: Track) => void;
+  /** Owner-only: drag-and-drop reorder of a saved playlist */
+  canReorder?: boolean;
+  playlistId?: string;
 }
 
 export const CollectionDetail: React.FC<CollectionDetailProps> = ({
@@ -181,9 +168,17 @@ export const CollectionDetail: React.FC<CollectionDetailProps> = ({
   tracks,
   isLoading,
   emptyLabel,
+  headerActions,
+  onAddToPlaylist,
+  canRemoveTracks,
+  onRemoveTrack,
+  canReorder,
+  playlistId,
 }) => {
   const playTrack = usePlayerStore((state) => state.playTrack);
   const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
+  const toggleLike = usePlayerStore((state) => state.toggleLike);
+  const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
   const isShuffled = usePlayerStore((state) => state.isShuffled);
 
   const totalDuration = useMemo(() => {
@@ -207,14 +202,81 @@ export const CollectionDetail: React.FC<CollectionDetailProps> = ({
     playTrack(tracks[randomIndex], tracks);
   };
 
+  const renderTrackActions = (track: Track): React.ReactNode => (
+    <>
+      <button
+        type="button"
+        className={`${styles.heartBtn} ${track.is_liked ? styles.heartBtnActive : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleLike(track.id);
+        }}
+        aria-label={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
+        title={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
+      >
+        <Heart size={14} fill={track.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'} />
+      </button>
+
+      <span className={`${styles.trackDuration} tabular-nums`}>
+        {formatDuration(track.duration)}
+      </span>
+
+      <button
+        type="button"
+        className={styles.actionBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          openTagEditor(track);
+        }}
+        title="Редактировать теги ID3"
+        aria-label="Редактировать теги ID3"
+      >
+        <Tag size={13} />
+      </button>
+
+      {onAddToPlaylist && (
+        <button
+          type="button"
+          className={styles.actionBtn}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddToPlaylist(track);
+          }}
+          title="Добавить в плейлист"
+          aria-label="Добавить в плейлист"
+        >
+          <ListPlus size={13} />
+        </button>
+      )}
+
+      {canRemoveTracks && onRemoveTrack && (
+        <button
+          type="button"
+          className={styles.actionBtn}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemoveTrack(track);
+          }}
+          title="Удалить из плейлиста"
+          aria-label="Удалить из плейлиста"
+        >
+          <Trash2 size={13} />
+        </button>
+      )}
+    </>
+  );
+
   return (
     <div className={styles.detailStage}>
       <aside className={styles.detailRail}>
         <Cover coverUrl={coverUrl} />
 
-        <h2 className={styles.detailTitle} title={name}>
-          {name}
-        </h2>
+        <div className={styles.detailTitleRow}>
+          <h2 className={styles.detailTitle} title={name}>
+            {name}
+          </h2>
+          {headerActions}
+        </div>
 
         <p className={styles.detailSubtitle}>
           <span>{pluralTracks(tracks.length)}</span>
@@ -256,9 +318,21 @@ export const CollectionDetail: React.FC<CollectionDetailProps> = ({
       </aside>
 
       <section className={styles.detailTracklistCol}>
-        <Tracklist tracks={tracks} isLoading={isLoading} emptyLabel={emptyLabel} />
+        {canReorder && playlistId ? (
+          <SortableTracklist
+            tracks={tracks}
+            playlistId={playlistId}
+            renderTrackActions={renderTrackActions}
+          />
+        ) : (
+          <Tracklist
+            tracks={tracks}
+            isLoading={isLoading}
+            emptyLabel={emptyLabel}
+            renderTrackActions={renderTrackActions}
+          />
+        )}
       </section>
     </div>
   );
 };
-

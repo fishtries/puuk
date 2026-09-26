@@ -1,12 +1,18 @@
 import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Minimize2, Play, Pause, SkipBack, SkipForward, Disc3 } from 'lucide-react';
+import { Minimize2, Play, Pause, SkipBack, SkipForward, Disc3, ListPlus } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { useLyrics } from '../../hooks/useLyrics';
 import { getCoverUrl } from '../../api/tracks';
+import { Track } from '../../types/track';
 import styles from './FullPlayerModal.module.css';
 
-export const FullPlayerModal: React.FC = () => {
+interface FullPlayerModalProps {
+  onAddToPlaylist?: (track: Track) => void;
+}
+
+export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ onAddToPlaylist }) => {
   const isFullscreen = usePlayerStore((state) => state.isFullscreen);
   const setIsFullscreen = usePlayerStore((state) => state.setIsFullscreen);
   const currentTrack = usePlayerStore((state) => state.currentTrack);
@@ -14,6 +20,9 @@ export const FullPlayerModal: React.FC = () => {
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
   const previousTrack = usePlayerStore((state) => state.previousTrack);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const isAuthorized = Boolean(token && user);
 
   const { lyrics, activeIndex, seek } = useLyrics();
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
@@ -81,6 +90,18 @@ export const FullPlayerModal: React.FC = () => {
                 <h1 className={styles.title}>{currentTrack?.title || 'Нет трека'}</h1>
                 <p className={styles.artist}>{currentTrack?.artist || '—'}</p>
                 {currentTrack?.album && <span className={styles.album}>{currentTrack.album}</span>}
+                {currentTrack && isAuthorized && onAddToPlaylist && (
+                  <button
+                    type="button"
+                    className={styles.addToPlaylistBtn}
+                    onClick={() => onAddToPlaylist(currentTrack)}
+                    title="Добавить в плейлист"
+                    aria-label="Добавить в плейлист"
+                  >
+                    <ListPlus size={16} />
+                    <span>В плейлист</span>
+                  </button>
+                )}
               </div>
 
               {/* Minimal transport */}

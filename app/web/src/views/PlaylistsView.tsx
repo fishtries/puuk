@@ -1,10 +1,13 @@
-import React from 'react';
-import { Heart, Music2, Play, Loader2 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { Heart, Music2, Play, Loader2, MoreVertical, Pencil, Trash2, Plus } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/useAuthStore';
 import { motion } from 'framer-motion';
-import { fetchPlaylists, fetchFavorites, getCoverUrl } from '../api/tracks';
+import { deletePlaylist, fetchPlaylists, fetchFavorites, getCoverUrl } from '../api/tracks';
 import { Playlist, Track } from '../types/track';
+import { toast } from 'sonner';
+import { PlaylistFormModal } from '../components/playlists/PlaylistFormModal';
+import { ConfirmDeleteModal } from '../components/playlists/ConfirmDeleteModal';
 import styles from './PlaylistsView.module.css';
 
 export const FAVORITES_ID = '__favorites__';
@@ -23,17 +26,30 @@ export interface PlaylistGridItem {
   coverUrl?: string;
   trackCount: number;
   isFavorites?: boolean;
+  isPublic?: boolean;
+  isOwner?: boolean;
   subtitle?: string;
   tracks?: Track[];
 }
 
 interface PlaylistsViewProps {
   onOpen: (item: PlaylistGridItem) => void;
+  onDeleted?: (playlistId: string) => void;
+  onCreated?: (playlist: Playlist) => void;
 }
 
-export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onOpen }) => {
+export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onOpen, onDeleted, onCreated }) => {
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
+  const queryClient = useQueryClient();
+
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Playlist | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Playlist | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const isAuthorized = Boolean(token && user);
+
   const { data: playlists = [], isFetching: isPlaylistsLoading } = useQuery({
     queryKey: ['playlists', user?.id ?? null],
     queryFn: () => fetchPlaylists(),
@@ -61,13 +77,35 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onOpen }) => {
       ...playlists.map((p: Playlist) => ({
         id: String(p.id),
         name: p.name || p.title || 'Плейлист',
-        coverUrl: getCoverUrl(p),
         trackCount: p.track_count ?? 0,
+        isPublic: p.is_public,
+        isOwner: p.user_id === undefined || String(p.user_id) === String(user?.id ?? '') || user?.role === 'admin',
         subtitle: p.is_public ? 'Публичный' : 'Личный',
       })),
     ];
     return list;
-  }, [playlists, favorites]);
+  }, [playlists, favorites, user]);
+
+  const closeMenu = () => setOpenMenuId(null);
+
+  const findPlaylist = (gridId: string): Playlist | undefined =>
+    playlists.find((p: Playlist) => String(p.id) === gridId);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deletePlaylist(deleteTarget.id);
+      void queryClient.invalidateQueries({ queryKey: ['playlists', user?.id ?? null] });
+      toast.success('Плейлист удалён');
+      onDeleted?.(String(deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      toast.error((err as Error).message || 'Не удалось удалить плейлист');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   if (isPlaylistsLoading) {
     return (
@@ -86,52 +124,149 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({ onOpen }) => {
       transition={{ duration: 0.24, ease: [0.23, 1, 0.32, 1] }}
     >
       <header className={styles.gridHeader}>
-        <span className={styles.gridEyebrow}>библиотека</span>
         <h1 className={styles.gridTitle}>playlists</h1>
-        <span className={styles.gridCount}>
-          {items.length} {items.length === 1 ? 'коллекция' : 'коллекций'}
-        </span>
+        {isAuthorized && (
+          <button
+            type="button"
+            className={styles.createPlaylistBtn}
+            onClick={() => setIsCreateOpen(true)}
+            title="Создать новый плейлист"
+          >
+            <Plus size={15} />
+            <span>new playlist</span>
+          </button>
+        )}
       </header>
 
       <div className={styles.playlistsGrid}>
-        {items.map((item) => (
-          <motion.button
-            key={item.id}
-            type="button"
-            className={styles.playlistCard}
-            onClick={() => onOpen(item)}
-            whileHover={{ y: -3 }}
-            transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-          >
-            <div className={styles.cardCoverWrap}>
-              {item.isFavorites ? (
-                <div className={styles.favoritesCover}>
-                  <Heart size={30} fill="currentColor" />
+        {items.map((item) => {
+          const isMenuOpen = openMenuId === item.id;
+
+          return (
+            <div key={item.id} className={styles.cardWrapper}>
+              <motion.button
+                type="button"
+                className={styles.playlistCard}
+                onClick={() => onOpen(item)}
+                whileHover={{ y: -3 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+              >
+                <div className={styles.cardCoverWrap}>
+                  {item.isFavorites ? (
+                    <div className={styles.favoritesCover}>
+                      <Heart size={30} fill="currentColor" />
+                    </div>
+                  ) : (
+                    <div className={styles.cardCoverFallback}>
+                      <Music2 size={26} />
+                    </div>
+                  )}
+                  <div className={styles.cardPlayHint}>
+                    <Play size={16} fill="currentColor" />
+                  </div>
                 </div>
-              ) : item.coverUrl ? (
-                <img src={item.coverUrl} alt={item.name} className={styles.cardCoverImg} />
-              ) : (
-                <div className={styles.cardCoverFallback}>
-                  <Music2 size={26} />
+
+                <div className={styles.cardMeta}>
+                  <span className={styles.cardTitle} title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className={styles.cardSubtitle}>
+                    {item.subtitle ? `${item.subtitle} · ` : ''}
+                    {pluralTracks(item.trackCount)}
+                  </span>
+                </div>
+              </motion.button>
+
+              {/* Card actions menu — sibling of the card button, not nested; owner/admin only */}
+              {!item.isFavorites && item.isOwner && (
+                <div className={styles.cardMenuRoot}>
+                  <button
+                    type="button"
+                    className={`${styles.cardMenuBtn} ${isMenuOpen ? styles.cardMenuBtnActive : ''}`}
+                    aria-label={`Действия с плейлистом «${item.name}»`}
+                    title="Действия"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenMenuId(isMenuOpen ? null : item.id);
+                    }}
+                  >
+                    <MoreVertical size={15} />
+                  </button>
+
+                  {isMenuOpen && (
+                    <>
+                      <div className={styles.cardMenuOverlay} onClick={closeMenu} />
+                      <div className={styles.cardMenuDropdown} role="menu">
+                        <button
+                          type="button"
+                          className={styles.cardMenuItem}
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            closeMenu();
+                            const playlist = findPlaylist(item.id);
+                            if (playlist) setEditTarget(playlist);
+                          }}
+                        >
+                          <Pencil size={14} />
+                          <span>Редактировать</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`${styles.cardMenuItem} ${styles.cardMenuItemDanger}`}
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            closeMenu();
+                            const playlist = findPlaylist(item.id);
+                            if (playlist) setDeleteTarget(playlist);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                          <span>Удалить</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
-              <div className={styles.cardPlayHint}>
-                <Play size={16} fill="currentColor" />
-              </div>
             </div>
-
-            <div className={styles.cardMeta}>
-              <span className={styles.cardTitle} title={item.name}>
-                {item.name}
-              </span>
-              <span className={styles.cardSubtitle}>
-                {item.subtitle ? `${item.subtitle} · ` : ''}
-                {pluralTracks(item.trackCount)}
-              </span>
-            </div>
-          </motion.button>
-        ))}
+          );
+        })}
       </div>
+
+      <PlaylistFormModal
+        isOpen={editTarget !== null}
+        mode="edit"
+        playlist={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSuccess={(playlist) => {
+          setEditTarget(null);
+          void queryClient.invalidateQueries({ queryKey: ['playlists', user?.id ?? null] });
+          void queryClient.invalidateQueries({ queryKey: ['playlist', String(playlist.id)] });
+        }}
+      />
+
+      <PlaylistFormModal
+        isOpen={isCreateOpen}
+        mode="create"
+        onClose={() => setIsCreateOpen(false)}
+        onSuccess={(playlist) => {
+          setIsCreateOpen(false);
+          void queryClient.invalidateQueries({ queryKey: ['playlists', user?.id ?? null] });
+          onCreated?.(playlist);
+        }}
+      />
+
+      <ConfirmDeleteModal
+        isOpen={deleteTarget !== null}
+        title="Удалить плейлист?"
+        message={`Плейлист «${deleteTarget?.name ?? ''}» будет удалён навсегда. Треки останутся в библиотеке.`}
+        confirmLabel="Удалить"
+        isSubmitting={isDeleting}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDelete}
+      />
     </motion.div>
   );
 };

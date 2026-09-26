@@ -1,0 +1,85 @@
+.wrapper {
+  position: relative;
+}
+
+/* Subtle fade while a reorder request is in flight */
+.tracklistSaving {
+  opacity: 0.72;
+}
+
+/* Row highlighted as the drop destination */
+.dropTarget {
+  outline: 1.5px dashed var(--accent-color, #ff7a00);
+  outline-offset: -2px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+}
+
+/* Row being dragged */
+.dragging {
+  opacity: 0.38;
+  cursor: grabbing;
+}
+
+.reorderButtons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+}
+
+.reorderBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.reorderBtn:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reorderBtn:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+/* Saving indicator pinned under the list */
+.savingBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.savingSpinner {
+  animation: sortableSpin 900ms linear infinite;
+}
+
+@keyframes sortableSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .savingSpinner {
+    animation-duration: 2s;
+  }
+}

@@ -55,12 +55,81 @@ export async function fetchPlaylist(playlistId: string | number): Promise<Playli
   return apiClient<Playlist>(`/api/playlists/${playlistId}`);
 }
 
-export interface PlaylistDetail extends Playlist {
+export interface PlaylistDetail {
+  playlist: Playlist;
   tracks: Track[];
 }
 
 export async function fetchPlaylistTracks(playlistId: string | number): Promise<PlaylistDetail> {
   return apiClient<PlaylistDetail>(`/api/playlists/${playlistId}`);
+}
+
+export interface PlaylistCreatePayload {
+  name: string;
+  is_public?: boolean;
+}
+
+export interface PlaylistUpdatePayload {
+  name: string;
+  is_public?: boolean;
+}
+
+export type AddTrackToPlaylistStatus = 'added' | 'already_exists';
+
+export async function createPlaylist(payload: PlaylistCreatePayload): Promise<Playlist> {
+  return apiClient<Playlist>('/api/playlists', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updatePlaylist(
+  playlistId: string | number,
+  payload: PlaylistUpdatePayload
+): Promise<{ status: string }> {
+  return apiClient<{ status: string }>(`/api/playlists/${playlistId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deletePlaylist(playlistId: string | number): Promise<{ status: string }> {
+  return apiClient<{ status: string }>(`/api/playlists/${playlistId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function addTrackToPlaylist(
+  playlistId: string | number,
+  trackId: string
+): Promise<AddTrackToPlaylistStatus> {
+  const response = await apiClient<{ status: AddTrackToPlaylistStatus }>(
+    `/api/playlists/${playlistId}/tracks`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ track_id: trackId }),
+    }
+  );
+  return response.status;
+}
+
+export async function removeTrackFromPlaylist(
+  playlistId: string | number,
+  trackId: string
+): Promise<void> {
+  await apiClient<{ status: string }>(`/api/playlists/${playlistId}/tracks/${trackId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function reorderPlaylistTracks(
+  playlistId: string | number,
+  trackIds: string[]
+): Promise<void> {
+  await apiClient<{ status: string }>(`/api/playlists/${playlistId}/tracks/order`, {
+    method: 'PUT',
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
 }
 
 export async function fetchFavorites(): Promise<Track[]> {

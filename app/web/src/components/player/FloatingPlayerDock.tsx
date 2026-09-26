@@ -7,16 +7,18 @@ import {
   Shuffle,
   Repeat,
   Repeat1,
-  ListMusic,
   Music2,
   Captions,
-  Tag,
-  Heart,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
-import { getCoverUrl } from '../../api/tracks';
+import { useAuthStore } from '../../store/useAuthStore';
+import { getCoverUrl, fetchPlaylists, addTrackToPlaylist } from '../../api/tracks';
+import { Track } from '../../types/track';
 import { LyricsQuickPeek } from './LyricsQuickPeek';
+import { DockActionsMenu } from './DockActionsMenu';
+import { DockLikeMenu } from './DockLikeMenu';
 import styles from './FloatingPlayerDock.module.css';
 
 function formatTime(seconds: number): string {
@@ -80,11 +82,13 @@ const MarqueeLabel: React.FC<MarqueeLabelProps> = ({ text, className }) => {
 interface FloatingPlayerDockProps {
   onOpenLyrics?: () => void;
   isLyricsActive?: boolean;
+  onAddToPlaylist?: (track: Track) => void;
 }
 
 export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   onOpenLyrics,
   isLyricsActive = false,
+  onAddToPlaylist,
 }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
@@ -103,9 +107,20 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   const toggleTrackInfo = usePlayerStore((state) => state.toggleTrackInfo);
   const toggleLike = usePlayerStore((state) => state.toggleLike);
   const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const userId = user?.id ?? null;
+  const isAuthorized = Boolean(token && user);
 
   const [isLyricsPeekOpen, setIsLyricsPeekOpen] = useState(false);
   const lyricsBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const { data: playlists = [], isPending: isPlaylistsPending } = useQuery({
+    queryKey: ['playlists', userId],
+    queryFn: () => fetchPlaylists(),
+    enabled: isAuthorized,
+    staleTime: 30000,
+  });
 
   const handleToggleRepeat = () => {
     if (repeatMode === 'off') setRepeatMode('all');
@@ -241,19 +256,15 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
         </div>
 
         {/* Like Button (left side, right after metadata) */}
-        {currentTrack && (
-          <button
-            type="button"
-            onClick={() => toggleLike(currentTrack.id)}
-            className={`${styles.actionIconBtn} ${styles.dockLikeBtn} ${currentTrack.is_liked ? styles.likedActionBtn : ''}`}
-            title={currentTrack.is_liked ? 'Удалить из избранного' : 'В избранное'}
-            aria-label="Лайк"
-          >
-            <Heart
-              size={18}
-              fill={currentTrack.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'}
-            />
-          </button>
+        {currentTrack && isAuthorized && (
+          <DockLikeMenu
+            isLiked={Boolean(currentTrack.is_liked)}
+            onLike={() => toggleLike(currentTrack.id)}
+            onRemoveFromFavorites={() => toggleLike(currentTrack.id)}
+            playlists={playlists}
+            isPlaylistsLoading={isPlaylistsPending}
+            onAddToPlaylist={(playlist) => addTrackToPlaylist(playlist.id, currentTrack.id)}
+          />
         )}
 
         {/* Scrubber Timeline */}
@@ -306,27 +317,16 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
             <Captions size={19} />
           </button>
 
-          <button
-            type="button"
-            onClick={toggleTrackInfo}
-            className={`${styles.actionIconBtn} ${isTrackInfoOpen ? styles.activeActionBtn : ''}`}
-            title="Открыть очередь и информацию о треке"
-            aria-label="Open queue"
-          >
-            <ListMusic size={19} />
-          </button>
-
-          {currentTrack && (
-            <button
-              type="button"
-              onClick={() => openTagEditor(currentTrack)}
-              className={styles.actionIconBtn}
-              title="Редактировать теги ID3"
-              aria-label="Редактировать теги"
-            >
-              <Tag size={18} />
-            </button>
-          )}
+          <DockActionsMenu
+            isQueueInfoActive={isTrackInfoOpen}
+            onToggleQueueInfo={toggleTrackInfo}
+            onEditTags={currentTrack ? () => openTagEditor(currentTrack) : undefined}
+            onAddToPlaylist={
+              currentTrack && isAuthorized && onAddToPlaylist
+                ? () => onAddToPlaylist(currentTrack)
+                : undefined
+            }
+          />
         </div>
       </div>
     </div>

@@ -17,14 +17,6 @@
   flex-wrap: wrap;
 }
 
-.gridEyebrow {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
-}
-
 .gridTitle {
   font-size: 40px;
   font-weight: 800;
@@ -34,13 +26,27 @@
   line-height: 1;
 }
 
-.gridCount {
-  font-size: 12px;
+.createPlaylistBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12.5px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.4);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
-  padding-bottom: 4px;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  align-self: center;
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.createPlaylistBtn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 /* ============================================================
@@ -49,14 +55,122 @@
 
 .playlistsGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 26px;
+}
+
+.cardWrapper {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.cardMenuRoot {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 5;
+}
+
+.cardMenuBtn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(20, 21, 26, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: rgba(255, 255, 255, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 150ms ease, transform 150ms ease, background-color 150ms ease,
+              color 150ms ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.cardWrapper:hover .cardMenuBtn,
+.cardMenuBtn:focus-visible,
+.cardMenuBtnActive {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.cardMenuBtn:hover {
+  background: rgba(20, 21, 26, 0.92);
+  color: #ffffff;
+}
+
+/* Invisible click-catcher behind the open dropdown */
+.cardMenuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+
+.cardMenuDropdown {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  min-width: 172px;
+  background: rgba(26, 28, 34, 0.96);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.55),
+    inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  z-index: 20;
+}
+
+.cardMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.cardMenuItem:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
+.cardMenuItemDanger {
+  color: rgba(252, 165, 165, 0.85);
+}
+
+.cardMenuItemDanger:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
 }
 
 .playlistCard {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
   padding: 12px 12px 14px;
   border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -147,6 +261,7 @@
   flex-direction: column;
   gap: 2px;
   padding: 0 2px;
+  min-width: 0;
 }
 
 .cardTitle {
@@ -193,8 +308,8 @@
   }
 
   .playlistsGrid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 18px;
   }
 }
 

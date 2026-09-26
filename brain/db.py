@@ -65,6 +65,7 @@ from repositories.playlists import (
     get_playlist,
     get_playlist_tracks,
     add_track_to_playlist,
+    reorder_playlist_tracks,
     remove_track_from_playlist,
     delete_playlist,
     update_playlist,

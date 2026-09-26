@@ -2,7 +2,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import db
 from auth import get_current_user
@@ -11,10 +11,28 @@ from serializers import serialize_track
 
 router = APIRouter(prefix="/api/playlists", tags=["playlists"])
 
+NAME_MIN_LENGTH = 1
+NAME_MAX_LENGTH = 100
+
+
+def _validate_playlist_name(value: str) -> str:
+    """Trim + проверка длины 1..100; ValueError конвертируется FastAPI в 422."""
+    trimmed = value.strip()
+    if not (NAME_MIN_LENGTH <= len(trimmed) <= NAME_MAX_LENGTH):
+        raise ValueError(
+            f"Playlist name must be {NAME_MIN_LENGTH}..{NAME_MAX_LENGTH} characters after trim"
+        )
+    return trimmed
+
 
 class PlaylistCreate(BaseModel):
     name: str
     is_public: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, value: str) -> str:
+        return _validate_playlist_name(value)
 
 
 class TrackAdd(BaseModel):
@@ -24,6 +42,15 @@ class TrackAdd(BaseModel):
 class PlaylistEditPayload(BaseModel):
     name: str
     is_public: Optional[bool] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, value: str) -> str:
+        return _validate_playlist_name(value)
+
+
+class PlaylistOrderPayload(BaseModel):
+    track_ids: list[str]
 
 
 def _require_owned_playlist(playlist_id: int, current_user: dict, action_error: str):
@@ -93,6 +120,21 @@ def add_track_to_playlist(playlist_id: int, payload: TrackAdd, current_user: dic
     if not success:
         return {"status": "already_exists"}
     return {"status": "added"}
+
+
+@router.put("/{playlist_id}/tracks/order")
+def reorder_playlist_tracks(playlist_id: int, payload: PlaylistOrderPayload, current_user: dict = Depends(get_current_user)):
+    """Сохраняет порядок треков плейлиста (только владелец или админ)."""
+    _require_owned_playlist(playlist_id, current_user, "Вы можете изменять только свои плейлисты")
+    if not payload.track_ids:
+        raise HTTPException(status_code=400, detail="track_ids must not be empty")
+    success = db.reorder_playlist_tracks(playlist_id, payload.track_ids)
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="track_ids must exactly match the playlist contents: no duplicates, no unknown or missing tracks",
+        )
+    return {"status": "success"}
 
 
 @router.delete("/{playlist_id}/tracks/{track_id}")

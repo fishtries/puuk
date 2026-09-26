@@ -1,7 +1,8 @@
 import React from 'react';
-import { Search, Play, Pause, Heart, Music2 } from 'lucide-react';
+import { Search, Play, Pause, Heart, Music2, ListPlus } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { usePlayerStore } from '../store/usePlayerStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { fetchTracks, getCoverUrl } from '../api/tracks';
 import { Track } from '../types/track';
 import styles from './SearchView.module.css';
@@ -15,14 +16,18 @@ function formatDuration(seconds: number): string {
 
 interface SearchViewProps {
   searchQuery: string;
+  onAddToPlaylist?: (track: Track) => void;
 }
 
-export const SearchView: React.FC<SearchViewProps> = ({ searchQuery }) => {
+export const SearchView: React.FC<SearchViewProps> = ({ searchQuery, onAddToPlaylist }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const toggleLike = usePlayerStore((state) => state.toggleLike);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const isAuthorized = Boolean(token && user);
 
   const { data: tracks = [], isLoading } = useQuery({
     queryKey: ['search', searchQuery],
@@ -149,6 +154,21 @@ export const SearchView: React.FC<SearchViewProps> = ({ searchQuery }) => {
                     fill={track.is_liked ? 'var(--accent-color)' : 'none'}
                   />
                 </button>
+
+                {isAuthorized && onAddToPlaylist && (
+                  <button
+                    type="button"
+                    className={styles.likeBtn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddToPlaylist(track);
+                    }}
+                    title="Добавить в плейлист"
+                    aria-label="Добавить в плейлист"
+                  >
+                    <ListPlus size={15} />
+                  </button>
+                )}
               </div>
             </div>
           );

@@ -62,6 +62,37 @@ def apply_migrations(conn):
                     print(f"[DB Migration] Warning applying {sql_file}: {e}")
 
 
+def _ensure_playlist_track_positions(cursor):
+    """
+    Миграция 007: колонка position в playlist_tracks + backfill 0..N-1.
+
+    Колонка добавляется только если её ещё нет; backfill (последовательные
+    position 0..N-1 внутри каждого playlist по ORDER BY added_at ASC,
+    tiebreak по track_id для детерминизма) выполняется только вместе с
+    добавлением колонки. Повторный запуск — no-op: порядок не сбрасывается.
+    """
+    cursor.execute("PRAGMA table_info(playlist_tracks);")
+    existing_cols = {row["name"].lower() for row in cursor.fetchall()}
+    if "position" in existing_cols:
+        return
+    cursor.execute("ALTER TABLE playlist_tracks ADD COLUMN position INTEGER NOT NULL DEFAULT 0;")
+    cursor.execute("""
+        SELECT playlist_id, track_id FROM playlist_tracks
+        ORDER BY playlist_id ASC, added_at ASC, track_id ASC
+    """)
+    counters = {}
+    updates = []
+    for row in cursor.fetchall():
+        playlist_id = row["playlist_id"]
+        next_pos = counters.get(playlist_id, 0)
+        updates.append((next_pos, playlist_id, row["track_id"]))
+        counters[playlist_id] = next_pos + 1
+    cursor.executemany(
+        "UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?",
+        updates,
+    )
+
+
 def init_db():
     """Создает схему БД, применяет миграции, сеет дефолтного админа."""
     conn = get_connection()
@@ -173,12 +204,20 @@ def init_db():
     CREATE TABLE IF NOT EXISTS playlist_tracks (
         playlist_id INTEGER,
         track_id TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (playlist_id, track_id),
         FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
         FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
     );
     """)
+
+    # 6b. Миграция 007: position в playlist_tracks для старых баз.
+    # ALTER ADD COLUMN не идемпотентен, поэтому колонка добавляется и
+    # бэктфиллится здесь (стиль _ensure_columns), а не в SQL-файле:
+    # если колонка уже есть, шаг пропускается и повторный запуск init_db
+    # не сбрасывает сохранённый порядок треков.
+    _ensure_playlist_track_positions(cursor)
 
     # 7. Таблица избранного (лайки пользователей)
     cursor.execute("""

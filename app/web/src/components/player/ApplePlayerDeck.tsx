@@ -12,10 +12,13 @@ import {
   Heart,
   Disc3,
   Tag,
+  ListPlus,
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { getCoverUrl } from '../../api/tracks';
+import { Track } from '../../types/track';
 import styles from './ApplePlayerDeck.module.css';
 
 function formatTime(seconds: number): string {
@@ -33,7 +36,9 @@ function formatRemainingTime(current: number, total: number): string {
   return `-${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export const ApplePlayerDeck: React.FC = () => {
+export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => void }> = ({
+  onAddToPlaylist,
+}) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
   const currentTime = usePlayerStore((state) => state.currentTime);
@@ -53,6 +58,9 @@ export const ApplePlayerDeck: React.FC = () => {
   const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
   const toggleLike = usePlayerStore((state) => state.toggleLike);
   const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
+  const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const isAuthorized = Boolean(token && user);
 
   const isPlaying = status === 'playing';
   const coverUrl = currentTrack ? getCoverUrl(currentTrack) : '';
@@ -118,6 +126,17 @@ export const ApplePlayerDeck: React.FC = () => {
               >
                 <Tag size={19} />
               </button>
+              {isAuthorized && onAddToPlaylist && (
+                <button
+                  type="button"
+                  className={styles.likeBtn}
+                  onClick={() => onAddToPlaylist(currentTrack)}
+                  title="Добавить в плейлист"
+                  aria-label="Добавить в плейлист"
+                >
+                  <ListPlus size={19} />
+                </button>
+              )}
             </div>
           )}
         </div>

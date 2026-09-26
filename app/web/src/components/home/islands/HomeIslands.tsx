@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Music2, Clock, Heart, Loader2 } from 'lucide-react';
+import { Play, Pause, Music2, Clock, Heart, Loader2, ListPlus } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Track } from '../../../types/track';
 import styles from '../HomeScreen.module.css';
@@ -140,10 +140,13 @@ export const FavoritesCard: React.FC<{ favorites: Track[]; onPlayFirst: () => vo
 );
 
 /** Card 4: "fresh tracks". */
-export const FreshTracksCard: React.FC<{ tracks: Track[] } & TrackRowHandlers> = ({
+export const FreshTracksCard: React.FC<
+  { tracks: Track[] } & TrackRowHandlers & { onAddToPlaylist?: (track: Track) => void }
+> = ({
   tracks,
   isCurrentPlaying,
   onTrackClick,
+  onAddToPlaylist,
 }) => (
   <div className={`${styles.glassCard} ${styles.freshTracksCard}`}>
     <div className={styles.cardHeaderWithIcon}>
@@ -182,6 +185,21 @@ export const FreshTracksCard: React.FC<{ tracks: Track[] } & TrackRowHandlers> =
               <Play size={13} fill="currentColor" />
             )}
           </button>
+
+          {onAddToPlaylist && (
+            <button
+              type="button"
+              className={styles.miniPlayBtn}
+              aria-label={`Добавить ${track.title} в плейлист`}
+              title="Добавить в плейлист"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddToPlaylist(track);
+              }}
+            >
+              <ListPlus size={13} />
+            </button>
+          )}
         </div>
       ))}
     </div>

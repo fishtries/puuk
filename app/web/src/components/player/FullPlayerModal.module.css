@@ -143,6 +143,32 @@
   color: var(--text-muted);
 }
 
+.addToPlaylistBtn {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background-color: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--duration-quick) var(--ease-out),
+              border-color var(--duration-quick) var(--ease-out),
+              background-color var(--duration-quick) var(--ease-out);
+}
+
+.addToPlaylistBtn:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.28);
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
 .transport {
   display: flex;
   align-items: center;

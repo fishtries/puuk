@@ -48,15 +48,6 @@
   line-height: 1;
 }
 
-.brandSub {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.4);
-  text-transform: lowercase;
-  margin-top: 4px;
-}
-
 .navGroup {
   display: flex;
   flex-direction: column;
@@ -101,6 +92,75 @@
   height: 6px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.25);
+}
+
+/* Create section: text nav item with an inline expanding menu (authorized only) */
+.createGroup {
+  width: 100%;
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.createBtn {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.createBtn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.createBtnActive {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.createMenu {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.createMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.createMenuItem:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+}
+
+.createMenuItem svg {
+  opacity: 0.7;
 }
 
 /* 2. Main Content Stage */
@@ -290,7 +350,6 @@
     inset 0 1px 1px rgba(255, 255, 255, 0.12);
   padding: 22px 24px;
   transition:
-    transform 220ms cubic-bezier(0.25, 1, 0.5, 1),
     border-color 220ms ease,
     box-shadow 220ms ease;
   cursor: pointer;
@@ -301,7 +360,6 @@
 }
 
 .glassCard:hover {
-  transform: translateY(-3px);
   border-color: rgba(255, 255, 255, 0.18);
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.48),
@@ -392,7 +450,6 @@
   justify-content: center;
   text-align: center;
   transition:
-    transform 240ms cubic-bezier(0.25, 1, 0.5, 1),
     box-shadow 240ms ease,
     border-color 240ms ease;
 }
@@ -411,7 +468,6 @@
 }
 
 .freshMixCard:hover {
-  transform: translateY(-3px);
   border-color: rgba(255, 190, 70, 0.65);
   border-top-color: rgba(255, 230, 130, 0.85);
   box-shadow:
@@ -435,11 +491,6 @@
   object-position: center bottom;
   pointer-events: none;
   user-select: none;
-  transition: transform 320ms cubic-bezier(0.25, 1, 0.5, 1);
-}
-
-.freshMixCard:hover .freshMixBg {
-  transform: scale(1.03);
 }
 
 .yourMixTitle {
@@ -477,7 +528,6 @@
     radial-gradient(circle 140px at 100% 100%, rgba(255, 80, 0, 0.48) 0%, transparent 70%),
     linear-gradient(180deg, #ff4c00 0%, #e03b00 16%, #a02800 38%, #501301 64%, #180703 84%, #080a0d 100%);
   transition:
-    transform 240ms cubic-bezier(0.25, 1, 0.5, 1),
     box-shadow 240ms ease,
     border-color 240ms ease;
 }
@@ -496,7 +546,6 @@
 }
 
 .youllLikeThisCard:hover {
-  transform: translateY(-3px);
   border-color: rgba(255, 140, 40, 0.7);
   border-top-color: rgba(255, 210, 100, 0.9);
   box-shadow:
@@ -851,6 +900,13 @@
   text-overflow: ellipsis;
 }
 
+.shelfCardMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
 .shelfCardArtist {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
@@ -858,6 +914,27 @@
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 2px;
+  min-width: 0;
+}
+
+.shelfAddBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: none;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.shelfAddBtn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
 }
 
 /* Search results overlay — grouped editorial island (DNA: glass capsule + editorial labels) */

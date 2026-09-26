@@ -1,5 +1,5 @@
 import React from 'react';
-import { Heart, Play, Pause, Music2 } from 'lucide-react';
+import { Heart, Play, Pause, Music2, ListPlus } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { fetchFavorites, getCoverUrl } from '../api/tracks';
@@ -14,7 +14,11 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export const LibraryView: React.FC = () => {
+interface LibraryViewProps {
+  onAddToPlaylist?: (track: Track) => void;
+}
+
+export const LibraryView: React.FC<LibraryViewProps> = ({ onAddToPlaylist }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
   const playTrack = usePlayerStore((state) => state.playTrack);
@@ -23,6 +27,7 @@ export const LibraryView: React.FC = () => {
   const userId = useAuthStore((state) => state.user?.id ?? null);
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
+  const isAuthorized = Boolean(token && user);
 
   const { data: favorites = [], isLoading } = useQuery({
     queryKey: ['favorites', userId],
@@ -135,6 +140,21 @@ export const LibraryView: React.FC = () => {
                   >
                     <Heart size={15} fill="var(--accent-color)" />
                   </button>
+
+                  {isAuthorized && onAddToPlaylist && (
+                    <button
+                      type="button"
+                      className={styles.likeBtn}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddToPlaylist(track);
+                      }}
+                      title="Добавить в плейлист"
+                      aria-label="Добавить в плейлист"
+                    >
+                      <ListPlus size={15} />
+                    </button>
+                  )}
                 </div>
               </div>
             );

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
@@ -10,8 +10,9 @@ import {
   X,
   Loader2,
   User,
+  ListPlus,
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { fetchTracks, fetchFavorites, getCoverUrl, searchTracks } from '../../api/tracks';
@@ -21,6 +22,8 @@ import { PlaylistsView, PlaylistGridItem } from '../../views/PlaylistsView';
 import { PlaylistDetail } from '../../views/PlaylistDetail';
 import { AlbumDetail } from '../../views/AlbumDetail';
 import type { PersonalizedPlaylistSection } from '../../types/recommendations';
+import { PlaylistFormModal } from '../playlists/PlaylistFormModal';
+import { UploadMusicModal } from '../playlists/UploadMusicModal';
 import styles from './HomeScreen.module.css';
 
 import { DEMO_MIX } from './demoMix';
@@ -35,9 +38,10 @@ import { WideTrackInfoIsland } from '../player/TrackInfoIslands';
 
 interface HomeScreenProps {
   onOpenAuth: () => void;
+  onAddToPlaylist: (track: Track) => void;
 }
 
-export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
+export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlaylist }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
   const playTrack = usePlayerStore((state) => state.playTrack);
@@ -62,6 +66,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'library' | 'search'>('home');
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [selectedPlaylist, setSelectedPlaylist] = useState<PlaylistGridItem | null>(null);
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [isPlaylistFormOpen, setIsPlaylistFormOpen] = useState(false);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const queryClient = useQueryClient();
+
+  const isAuthorized = Boolean(!isAuthLoading && token && user);
+
+  // Close the "+" create menu on outside click
+  useEffect(() => {
+    if (!isCreateMenuOpen) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (createMenuRef.current && !createMenuRef.current.contains(e.target as Node)) {
+        setIsCreateMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isCreateMenuOpen]);
 
   // Username: "fish" as drawn in sketch, or auth user if logged in
   const displayName = user?.username || 'fish';
@@ -164,13 +187,27 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
     });
   };
 
+  const handlePlaylistCreated = (playlist: { id: string | number; name: string; is_public?: boolean }) => {
+    void queryClient.invalidateQueries({ queryKey: ['playlists', user?.id ?? null] });
+    setIsPlaylistFormOpen(false);
+    setSelectedPlaylist({
+      id: String(playlist.id),
+      name: playlist.name,
+      trackCount: 0,
+      subtitle: playlist.is_public ? 'Публичный' : 'Личный',
+    });
+  };
+
+  const handlePlaylistDeleted = (playlistId: string) => {
+    setSelectedPlaylist((current) => (current && current.id === playlistId ? null : current));
+  };
+
   return (
     <div className={styles.screenWrapper}>
       {/* 1. Left Capsule (Sidebar Island) */}
       <aside className={styles.sidebarIsland} aria-label="Navigation">
         <div className={styles.brandGroup}>
           <h1 className={styles.brandTitle}>puuk</h1>
-          <span className={styles.brandSub}>user</span>
         </div>
 
         <nav className={styles.navGroup}>
@@ -205,6 +242,58 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
             search
           </button>
         </nav>
+
+        {/* Create section: playlists / uploads (authorized only) */}
+        {isAuthorized && (
+          <div className={styles.createGroup} ref={createMenuRef}>
+            <button
+              type="button"
+              className={`${styles.createBtn} ${isCreateMenuOpen ? styles.createBtnActive : ''}`}
+              onClick={() => setIsCreateMenuOpen((v) => !v)}
+              aria-expanded={isCreateMenuOpen}
+              title="Создать плейлист или загрузить музыку"
+            >
+              create
+            </button>
+
+            <AnimatePresence initial={false}>
+              {isCreateMenuOpen && (
+                <motion.div
+                  className={styles.createMenu}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+                  role="menu"
+                  aria-label="Создать"
+                >
+                  <button
+                    type="button"
+                    className={styles.createMenuItem}
+                    role="menuitem"
+                    onClick={() => {
+                      setIsCreateMenuOpen(false);
+                      setIsPlaylistFormOpen(true);
+                    }}
+                  >
+                    <span>Playlist</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.createMenuItem}
+                    role="menuitem"
+                    onClick={() => {
+                      setIsCreateMenuOpen(false);
+                      setIsUploadOpen(true);
+                    }}
+                  >
+                    <span>Upload music</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
         {/* Subtle decorative bottom space inside pill */}
         <div className={styles.sidebarFooter}>
@@ -285,6 +374,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                 subtitle={selectedPlaylist.subtitle}
                 coverUrl={selectedPlaylist.coverUrl}
                 tracks={selectedPlaylist.tracks}
+                onAddToPlaylist={onAddToPlaylist}
+                onDeletedDetail={handlePlaylistDeleted}
               />
             )}
           </motion.section>
@@ -388,6 +479,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                               <Play size={14} fill="currentColor" />
                             )}
                           </button>
+
+                          {isAuthorized && (
+                            <button
+                              type="button"
+                              className={styles.miniPlayBtn}
+                              aria-label="Добавить в плейлист"
+                              title="Добавить в плейлист"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAddToPlaylist(track);
+                              }}
+                            >
+                              <ListPlus size={14} />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -477,7 +583,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
         </motion.section>
         ) : activeTab === 'library' ? (
           /* Playlists grid — library page inside the main stage */
-          <PlaylistsView onOpen={setSelectedPlaylist} />
+          <PlaylistsView
+            onOpen={setSelectedPlaylist}
+            onDeleted={handlePlaylistDeleted}
+            onCreated={handlePlaylistCreated}
+          />
         ) : (
           <>
             {/* Greeting */}
@@ -506,6 +616,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
                 tracks={freshTracks}
                 isCurrentPlaying={isCurrentPlaying}
                 onTrackClick={handleTrackItemClick}
+                onAddToPlaylist={isAuthorized ? onAddToPlaylist : undefined}
               />
             </div>
 
@@ -514,10 +625,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth }) => {
               tracks={recommendedTracks}
               isCurrentPlaying={isCurrentPlaying}
               onTrackClick={handleTrackItemClick}
+              onAddToPlaylist={onAddToPlaylist}
             />
           </>
         ))}
         </main>
+
+        {/* Create playlist / upload music modals */}
+        <PlaylistFormModal
+          isOpen={isPlaylistFormOpen}
+          mode="create"
+          onClose={() => setIsPlaylistFormOpen(false)}
+          onSuccess={handlePlaylistCreated}
+        />
+        <UploadMusicModal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} />
 
         <WideTrackInfoIsland />
       </div>
