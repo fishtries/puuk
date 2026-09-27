@@ -64,7 +64,7 @@ Line two of regular song`;
       artist: 'Antigravity Studio',
       album: 'Deep Space Horizon Deluxe',
       album_artist: 'Antigravity Ensemble',
-      year: 2026,
+      year: '2026',
       genre: 'Ambient Space',
       track_number: '1/10',
       disc_number: '1/1',
@@ -76,7 +76,8 @@ Line two of regular song`;
     };
 
     assert.equal(payload.title, 'Solar Echoes (Remastered)');
-    assert.equal(payload.year, 2026);
+    // Regression: year must be a string — mutagen TDRC (MultiSpec) rejects numbers ("Invalid MultiSpec data")
+    assert.equal(payload.year, '2026');
     assert.equal(payload.cover_action, 'replace');
     assert.ok(payload.cover_base64);
   });

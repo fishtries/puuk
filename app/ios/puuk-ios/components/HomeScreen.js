@@ -151,7 +151,11 @@ const ItemCard = ({ item, onPress, index, isPlaylist, onLongPress }) => (
   >
     <CoverImage source={item.coverArt} style={styles.trackCardImage} />
     <Text style={styles.trackCardTitle} numberOfLines={1}>{isPlaylist ? item.name : item.title}</Text>
-    {!isPlaylist && <Text style={styles.trackCardArtist} numberOfLines={1}>Album</Text>}
+    {!isPlaylist && (
+      <Text style={styles.trackCardArtist} numberOfLines={1}>
+        {item.album_artist || item.artist || 'Album'}
+      </Text>
+    )}
   </AnimatedTouchable>
 );
 

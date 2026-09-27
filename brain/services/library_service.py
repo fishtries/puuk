@@ -26,7 +26,22 @@ def scan_library():
             track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
             try:
                 meta = read_audio_metadata(str(file_path))
-                album_id = db.add_or_get_album(meta.album or "Неизвестный альбом", None)
+                # Идентичность альбома = (название, album_artist); без альбомного
+                # артиста fallback на исполнителя трека — временное значение импорта.
+                album_id = db.resolve_album(
+                    meta.album,
+                    album_artist=meta.album_artist or meta.artist,
+                    year=meta.year,
+                )
+                db_track = db.get_track(track_id)
+                file_changed = False
+                if db_track:
+                    old_size = db_track.get("file_size")
+                    old_mtime = db_track.get("file_mtime_ns")
+                    if (meta.file_size is not None and old_size is not None and old_size != meta.file_size) or \
+                       (meta.file_mtime_ns is not None and old_mtime is not None and old_mtime != meta.file_mtime_ns):
+                        file_changed = True
+
                 db.add_or_update_track(
                     track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
                     duration=meta.duration, genre=meta.genre
@@ -34,10 +49,11 @@ def scan_library():
                 # Режим сканера: пустой жанр в файле не затирает жанр в БД (например,
                 # выставленный вручную через редактор тегов).
                 db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
+
             except Exception as e:
                 print(f"[scan] Error scanning {file_path}: {e}")
                 title, artist, album, lyrics, duration = extract_full_metadata(rel_path)
-                album_id = db.add_or_get_album(album, None)
+                album_id = db.resolve_album(album, album_artist=artist)
                 db.add_or_update_track(track_id, rel_path, title, album_id, artist, lyrics, duration=duration)
 
             added += 1

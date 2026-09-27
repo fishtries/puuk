@@ -29,12 +29,12 @@ async def like_track(track_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Трек не найден")
     
     db.add_favorite(current_user["id"], track_id)
-    return {"status": "liked", "track_id": track_id}
+    return {"status": "liked", "track_id": track_id, "is_liked": True}
 
 @router.delete("/tracks/{track_id}/like", summary="Удалить трек из избранного")
 async def unlike_track(track_id: str, current_user: dict = Depends(get_current_user)):
     db.remove_favorite(current_user["id"], track_id)
-    return {"status": "unliked", "track_id": track_id}
+    return {"status": "unliked", "track_id": track_id, "is_liked": False}
 
 from serializers import serialize_track
 

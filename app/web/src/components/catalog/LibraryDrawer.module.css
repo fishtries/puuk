@@ -299,6 +299,31 @@
   cursor: pointer;
 }
 
+.albumCardBtn {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  border-radius: var(--radius-md);
+  transition: transform var(--duration-press, 0.15s) var(--ease-out, ease);
+}
+
+.albumCardBtn:hover {
+  transform: translateY(-2px);
+}
+
+.albumCardBtn:active {
+  transform: scale(0.98);
+}
+
+.albumCardBtn:focus-visible {
+  outline: 2px solid var(--accent-color, #ffdab9);
+  outline-offset: 2px;
+}
+
 .albumCoverWrap {
   width: 100%;
   aspect-ratio: 1;

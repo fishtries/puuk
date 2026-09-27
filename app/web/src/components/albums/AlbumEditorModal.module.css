@@ -1,0 +1,47 @@
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 218, 185, 0.06);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary, #d4d4d8);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.warning svg {
+  color: var(--accent-color, #ffdab9);
+  flex-shrink: 0;
+}
+
+.coverRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border-radius: var(--radius-md, 12px);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  flex-wrap: wrap;
+}
+
+.coverInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #d4d4d8);
+}
+
+.coverInfo svg {
+  color: var(--text-muted, #a1a1aa);
+  flex-shrink: 0;
+}
+
+.coverBtns {
+  display: flex;
+  gap: 10px;
+}

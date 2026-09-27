@@ -16,6 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useAlbumNavigationStore } from '../../store/useAlbumNavigationStore';
 import { fetchTracks, fetchAlbums, getCoverUrl } from '../../api/tracks';
 import { Track, Album } from '../../types/track';
 import styles from './LibraryDrawer.module.css';
@@ -45,6 +46,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
   const toggleWave = usePlayerStore((state) => state.toggleWave);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
   const openTagEditor = useTagEditorStore((state) => state.openTagEditor);
+  const requestOpenAlbum = useAlbumNavigationStore((state) => state.requestOpenAlbum);
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
 
@@ -202,7 +204,16 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                   {albums.map((album: Album) => {
                     const cover = getCoverUrl(album);
                     return (
-                      <div key={album.id} className={styles.albumCard}>
+                      <button
+                        key={album.id}
+                        type="button"
+                        className={`${styles.albumCard} ${styles.albumCardBtn}`}
+                        onClick={() => {
+                          requestOpenAlbum(album);
+                          onClose();
+                        }}
+                        title={`Открыть альбом «${album.title}»`}
+                      >
                         <div className={styles.albumCoverWrap}>
                           {cover ? (
                             <img src={cover} alt={album.title} className={styles.albumImg} />
@@ -213,8 +224,11 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                           )}
                         </div>
                         <span className={styles.albumName}>{album.title}</span>
-                        <span className={styles.albumArtist}>{album.artist}</span>
-                      </div>
+                        <span className={styles.albumArtist}>
+                          {album.album_artist || album.artist}
+                          {album.year ? ` · ${album.year}` : ''}
+                        </span>
+                      </button>
                     );
                   })}
                 </div>

@@ -33,11 +33,15 @@ def search_library(
         albums = []
         for a in data.get("albums", []):
             cover_track_id = a.get("cover_track_id")
+            artist = a.get("album_artist") or a.get("artist") or "Various Artists"
             albums.append({
                 "id": a["id"],
                 "title": a["title"],
-                "artist": a.get("artist") or "Various Artists",
+                "artist": artist,
+                "album_artist": a.get("album_artist") or "",
+                "year": a.get("year"),
                 "track_count": a.get("track_count", 0),
+                "cover_id": str(cover_track_id) if cover_track_id else None,
                 "coverArt": f"{base_url}/api/cover/{cover_track_id}" if cover_track_id else None
             })
 

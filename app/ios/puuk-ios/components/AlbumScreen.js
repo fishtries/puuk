@@ -1,30 +1,45 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import CoverImage from './CoverImage';
 import { authFetch } from '../utils/api';
 
-export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPlaylist }) {
+export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEllipsis }) {
   const { albumId, albumTitle, coverArt } = route.params;
+  const [album, setAlbum] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState(null);
+
+  const fetchAlbum = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const response = await authFetch(`/api/albums/${albumId}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setAlbum(data.album || null);
+      setTracks(Array.isArray(data.tracks) ? data.tracks : []);
+    } catch (error) {
+      console.error('Fetch album detail error:', error);
+      setErrorMessage('Не удалось загрузить альбом');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [albumId]);
 
   useEffect(() => {
-    const fetchTracks = async () => {
-      try {
-        const response = await authFetch(`/api/albums/${albumId}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        setTracks(data);
-      } catch (error) {
-        console.error("Fetch album tracks error:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchTracks();
-  }, [albumId]);
+    fetchAlbum();
+  }, [fetchAlbum]);
+
+  // Refresh when returning from the album editor.
+  useFocusEffect(
+    useCallback(() => {
+      fetchAlbum();
+    }, [fetchAlbum])
+  );
 
   const renderTrack = ({ item, index }) => (
     <TouchableOpacity
@@ -32,19 +47,26 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPla
       activeOpacity={0.6}
       onPress={() => onPlayTrack(item)}
     >
-      <Text style={styles.trackNumber}>{index + 1}</Text>
+      <Text style={styles.trackNumber}>{item.track_number ? String(item.track_number).split('/')[0] : index + 1}</Text>
       <View style={styles.trackInfo}>
         <Text style={styles.trackTitle} numberOfLines={1}>{item.title}</Text>
         <Text style={styles.trackArtist} numberOfLines={1}>{item.artist}</Text>
       </View>
-      <TouchableOpacity 
+      <TouchableOpacity
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        onPress={() => onAddToPlaylist && onAddToPlaylist(item)}
+        onPress={() => onPressEllipsis && onPressEllipsis(item)}
       >
         <Ionicons name="ellipsis-horizontal" size={18} color="#555" />
       </TouchableOpacity>
     </TouchableOpacity>
   );
+
+  const resolvedTitle = album?.title || albumTitle;
+  const resolvedCover = album?.coverArt || coverArt;
+  const metaParts = [];
+  if (album?.album_artist || album?.artist) metaParts.push(album.album_artist || album.artist);
+  if (album?.year) metaParts.push(String(album.year));
+  if (album?.track_count) metaParts.push(`${album.track_count} трек(ов)`);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -52,12 +74,27 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPla
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="chevron-back" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{albumTitle}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{resolvedTitle}</Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('AlbumEdit', { albumId, album })}
+          style={styles.editButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="create-outline" size={22} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       {isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color="#6C3AED" size="large" />
+        </View>
+      ) : errorMessage ? (
+        <View style={styles.center}>
+          <Ionicons name="alert-circle-outline" size={32} color="#8e8e93" />
+          <Text style={styles.stateText}>{errorMessage}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchAlbum}>
+            <Text style={styles.retryText}>Повторить</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -66,8 +103,16 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onAddToPla
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.albumHeader}>
-              <CoverImage source={coverArt} style={styles.coverImage} />
-              <Text style={styles.albumTitleText}>{albumTitle}</Text>
+              <CoverImage source={resolvedCover} style={styles.coverImage} />
+              <Text style={styles.albumTitleText}>{resolvedTitle}</Text>
+              {metaParts.length > 0 && (
+                <Text style={styles.albumMetaText}>{metaParts.join(' · ')}</Text>
+              )}
+            </View>
+          }
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Text style={styles.stateText}>В этом альбоме пока нет треков</Text>
             </View>
           }
           renderItem={renderTrack}
@@ -100,10 +145,30 @@ const styles = StyleSheet.create({
     color: '#fff',
     flex: 1,
   },
+  editButton: {
+    marginLeft: 12,
+  },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 24,
+    gap: 12,
+  },
+  stateText: {
+    color: '#8e8e93',
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  retryButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#1c1c1e',
+  },
+  retryText: {
+    color: '#fff',
+    fontWeight: '600',
   },
   listContent: {
     paddingBottom: 20,
@@ -111,6 +176,7 @@ const styles = StyleSheet.create({
   albumHeader: {
     alignItems: 'center',
     paddingVertical: 30,
+    paddingHorizontal: 20,
   },
   coverImage: {
     width: 200,
@@ -128,7 +194,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
     textAlign: 'center',
-    paddingHorizontal: 20,
+  },
+  albumMetaText: {
+    fontSize: 14,
+    color: '#8e8e93',
+    marginTop: 8,
+    textAlign: 'center',
   },
   trackRow: {
     flexDirection: 'row',

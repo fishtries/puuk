@@ -197,7 +197,16 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     stat = os.stat(abs_path)
     if stat.st_mtime_ns != db_track.get("file_mtime_ns") or stat.st_size != db_track.get("file_size"):
         # Auto-resync SQLite with actual file state
-        album_id = db.add_or_get_album(actual_meta.album, None) if actual_meta.album else db_track.get("album_id")
+        if actual_meta.album:
+            fallback_artist = (
+                actual_meta.album_artist
+                or db_track.get("album_artist")
+                or actual_meta.artist
+                or db_track.get("artist")
+            )
+            album_id = db.resolve_album(actual_meta.album, album_artist=fallback_artist, year=actual_meta.year)
+        else:
+            album_id = db_track.get("album_id")
         db.update_track_metadata_from_audio(track_id, actual_meta, album_id=album_id, cover_version_inc=False)
         db_track = db.get_track(track_id)
 
@@ -259,7 +268,39 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     }
 
 
-def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], base_url: str = "") -> Dict[str, Any]:
+def prepare_cover_bytes(cover_action: str, cover_base64: Optional[str], cover_url: Optional[str]) -> Tuple[Optional[bytes], Optional[str]]:
+    """
+    Валидирует и подготавливает изображение обложки для записи в файл.
+    Возвращает (cleaned_bytes, mime_type); для действий кроме "replace" — (None, None).
+    """
+    if cover_action != "replace":
+        return None, None
+
+    raw_cover = None
+    if cover_base64:
+        raw_b64 = cover_base64
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            raw_cover = base64.b64decode(raw_b64)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 cover encoding: {e}")
+    elif cover_url:
+        try:
+            raw_cover = fetch_cover_from_url_safe(cover_url)
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
+    if not raw_cover:
+        raise HTTPException(status_code=400, detail="cover_action is 'replace' but no valid image data received")
+
+    try:
+        return clean_cover_bytes(raw_cover)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {ve}")
+
+
+def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], base_url: str = "", target_album_id: Optional[int] = None) -> Dict[str, Any]:
     """
     Executes full safe mutation workflow:
     1. RBAC verification
@@ -269,6 +310,9 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     5. Re-reading verified tags
     6. SQLite commit & journal logging
     7. Dominant color recalculation
+
+    target_album_id — канонический album_id, когда мутацию инициировал
+    альбомный сервис (весь релиз редактируется единым идентификатором).
     """
     db_track = db.get_track(track_id)
     if not db_track:
@@ -279,43 +323,26 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     abs_path, effective_dir = resolve_track_file_path(db_track)
 
     # Process cover if requested
-    cover_bytes = None
-    cover_mime = None
     cover_action = getattr(payload, "cover_action", "keep")
-
-    if cover_action == "replace":
-        raw_cover = None
-        if getattr(payload, "cover_base64", None):
-            raw_b64 = payload.cover_base64
-            if "," in raw_b64:
-                raw_b64 = raw_b64.split(",", 1)[1]
-            try:
-                raw_cover = base64.b64decode(raw_b64)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid base64 cover encoding: {e}")
-        elif getattr(payload, "cover_url", None):
-            try:
-                raw_cover = fetch_cover_from_url_safe(payload.cover_url)
-            except ValueError as ve:
-                raise HTTPException(status_code=400, detail=str(ve))
-
-        if not raw_cover:
-            raise HTTPException(status_code=400, detail="cover_action is 'replace' but no valid image data received")
-
-        try:
-            cover_bytes, cover_mime = clean_cover_bytes(raw_cover)
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=f"Invalid image: {ve}")
+    cover_bytes, cover_mime = prepare_cover_bytes(
+        cover_action,
+        getattr(payload, "cover_base64", None),
+        getattr(payload, "cover_url", None),
+    )
 
     # Build MetadataPatch with explicit model_fields_set
     fs = set(payload.model_fields_set) if hasattr(payload, "model_fields_set") else set()
+    raw_year = getattr(payload, "year", None)
+    normalized_year = str(raw_year).strip() if raw_year is not None else None
+    if normalized_year == "":
+        normalized_year = None
     patch = MetadataPatch(
         fields_set=fs,
         title=getattr(payload, "title", None),
         artist=getattr(payload, "artist", None),
         album=getattr(payload, "album", None),
         album_artist=getattr(payload, "album_artist", None),
-        year=getattr(payload, "year", None),
+        year=normalized_year,
         genre=getattr(payload, "genre", None),
         track_number=getattr(payload, "track_number", None),
         disc_number=getattr(payload, "disc_number", None),
@@ -338,7 +365,20 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
             # Sync SQLite with actual metadata
             album_id = None
             if "album" in fs:
-                album_id = db.add_or_get_album(actual_meta.album or "Unknown Album", None)
+                if target_album_id is not None:
+                    album_id = target_album_id
+                else:
+                    fallback_artist = (
+                        actual_meta.album_artist
+                        or actual_meta.artist
+                        or db_track.get("album_artist")
+                        or db_track.get("artist")
+                    )
+                    album_id = db.resolve_album(
+                        actual_meta.album or db.UNKNOWN_ALBUM_TITLE,
+                        album_artist=fallback_artist,
+                        year=actual_meta.year,
+                    )
 
             cover_inc = (cover_action in ("replace", "remove"))
             db.update_track_metadata_from_audio(
@@ -387,8 +427,17 @@ def resync_track_from_disk(track_id: str, current_user: Optional[Dict[str, Any]]
 
     with track_mutation_lock(track_id, effective_dir):
         actual_meta = read_audio_metadata(abs_path)
-        album_id = db.add_or_get_album(actual_meta.album, None) if actual_meta.album else db_track.get("album_id")
-        
+        if actual_meta.album:
+            fallback_artist = (
+                actual_meta.album_artist
+                or db_track.get("album_artist")
+                or actual_meta.artist
+                or db_track.get("artist")
+            )
+            album_id = db.resolve_album(actual_meta.album, album_artist=fallback_artist, year=actual_meta.year)
+        else:
+            album_id = db_track.get("album_id")
+
         db.update_track_metadata_from_audio(
             track_id=track_id,
             meta=actual_meta,

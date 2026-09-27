@@ -222,14 +222,14 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     setIsSaving(true);
     setErrorMessage(null);
 
-    const parsedYear = year.trim() ? parseInt(year.trim(), 10) : null;
+    const parsedYear = year.trim();
 
     const payload: TrackEditPayloadDTO = {
       title: title.trim(),
       artist: artist.trim(),
       album: album.trim() || null,
       album_artist: albumArtist.trim() || null,
-      year: isNaN(parsedYear as number) ? null : parsedYear,
+      year: parsedYear || null,
       genre: genre.trim() || null,
       track_number: trackNumber.trim() || null,
       disc_number: discNumber.trim() || null,
@@ -247,6 +247,7 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
       queryClient.setQueryData(['track', currentTrackData.id], updated);
       queryClient.invalidateQueries({ queryKey: ['tracks'] });
       queryClient.invalidateQueries({ queryKey: ['albums'] });
+      queryClient.invalidateQueries({ queryKey: ['album-tracks'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
       queryClient.invalidateQueries({ queryKey: ['history'] });
       onClose();

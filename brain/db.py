@@ -36,6 +36,18 @@ from repositories.albums import (
     get_all_albums,
     add_or_get_album,
     get_album_tracks,
+    resolve_album,
+    get_album,
+    find_album_by_identity,
+    get_albums_catalog_rows,
+    update_album_fields,
+    rebind_tracks_to_album,
+    merge_album_into,
+    delete_empty_albums,
+    backfill_album_identities,
+    normalize_text,
+    UNKNOWN_ALBUM_TITLE,
+    VARIOUS_ARTISTS,
 )
 from repositories.tracks import (
     get_all_tracks,

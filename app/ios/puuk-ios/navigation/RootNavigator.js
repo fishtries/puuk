@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import MainTabsScreen from './MainTabs';
 import AlbumScreen from '../components/AlbumScreen';
+import AlbumEditScreen from '../components/AlbumEditScreen';
 import PlaylistScreen from '../components/PlaylistScreen';
 import TrackEditScreen from '../components/TrackEditScreen';
 
@@ -40,6 +41,7 @@ export default function RootNavigator({
       <Stack.Screen name="Album">
         {props => <AlbumScreen {...props} onPlayTrack={playTrack} onPressEllipsis={(track) => setTrackToManage(track)} />}
       </Stack.Screen>
+      <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
         {props => <PlaylistScreen {...props} onPlayTrack={playTrack} />}
       </Stack.Screen>
