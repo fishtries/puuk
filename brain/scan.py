@@ -71,11 +71,21 @@ def process_audio_file(file_path: Path, base_path: Path) -> dict:
             
         bpm_rounded = round(bpm, 2)
         rel_path = str(file_path.relative_to(base_path))
+        stat = file_path.stat()
         
         return {
             "file_path": rel_path,
             "bpm": bpm_rounded,
-            "needs_embedding": True
+            "needs_embedding": True,
+            "file_size": stat.st_size,
+            "file_mtime_ns": stat.st_mtime_ns,
+            "loudness_status": "pending",
+            "loudness_lufs": None,
+            "true_peak_db": None,
+            "normalization_gain_db": None,
+            "loudness_analysis_version": "r128-v1",
+            "loudness_error": None,
+            "loudness_retry_count": 0,
         }
     except Exception as e:
         logger.error(f"Ошибка при обработке файла {file_path.name}: {e}")
@@ -101,16 +111,77 @@ def main():
                 rel_path = str(file_path.relative_to(base_path))
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
                 
+                stat = file_path.stat()
+                file_size = stat.st_size
+                file_mtime_ns = stat.st_mtime_ns
+
                 # Проверяем, существует ли уже трек в Qdrant
                 existing = client.retrieve(
                     collection_name=COLLECTION_NAME,
                     ids=[point_id],
-                    with_payload=False,
-                    with_vectors=False
+                    with_payload=True,
+                    with_vectors=True
                 )
                 if existing:
+                    record = existing[0]
+                    payload = record.payload or {}
+                    stored_size = payload.get("file_size")
+                    stored_mtime = payload.get("file_mtime_ns")
+
+                    file_changed = False
+                    if (
+                        stored_size is None
+                        or stored_mtime is None
+                        or stored_size != file_size
+                        or stored_mtime != file_mtime_ns
+                    ):
+                        file_changed = True
+
+                    if not file_changed:
+                        continue
+
+                    logger.info(
+                        f"Файл изменился: {file_path.name} (size: {stored_size} -> {file_size}, mtime: {stored_mtime} -> {file_mtime_ns}). Обновляем метаданные и loudness..."
+                    )
+                    payload["file_size"] = file_size
+                    payload["file_mtime_ns"] = file_mtime_ns
+                    payload["loudness_status"] = "pending"
+                    payload["normalization_gain_db"] = None
+                    payload["loudness_lufs"] = None
+                    payload["true_peak_db"] = None
+                    payload["loudness_analysis_version"] = "r128-v1"
+                    payload["loudness_error"] = None
+                    payload["loudness_retry_count"] = 0
+
+                    client.upsert(
+                        collection_name=COLLECTION_NAME,
+                        points=[
+                            PointStruct(
+                                id=point_id,
+                                vector=record.vector or ([0.0] * VECTOR_SIZE),
+                                payload=payload,
+                            )
+                        ],
+                    )
+
+                    try:
+                        import db
+                        from metadata import read_audio_metadata
+                        meta = read_audio_metadata(file_path)
+                        if meta:
+                            album_id = db.resolve_album(meta.album, album_artist=meta.album_artist or meta.artist)
+                            db.add_or_update_track(
+                                point_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
+                                duration=meta.duration, genre=meta.genre,
+                                file_size=file_size, file_mtime_ns=file_mtime_ns,
+                            )
+                            db.update_track_metadata_from_audio(point_id, meta, album_id, preserve_empty_genre=True)
+                        db.reset_track_loudness_pending(point_id, file_size=file_size, file_mtime_ns=file_mtime_ns)
+                        logger.info(f"SQLite метаданные и loudness успешно обновлены для {file_path.name}")
+                    except Exception as db_err:
+                        logger.warning(f"Не удалось обновить SQLite для {file_path.name}: {db_err}")
                     continue
-                
+
                 logger.info(f"Новый трек обнаружен: {file_path.name}")
                 metadata = process_audio_file(file_path, base_path)
                 
@@ -154,8 +225,19 @@ def main():
                         import db
                         if sql_meta is not None:
                             title_, artist_, album_, genre_, lyrics_, duration_ = sql_meta
-                            album_id = db.add_or_get_album(album_, None)
-                            db.add_or_update_track(point_id, metadata['file_path'], title_, album_id, artist_, lyrics_, duration=duration_, genre=genre_)
+                            album_id = db.resolve_album(album_, album_artist=artist_)
+                            db.add_or_update_track(
+                                point_id,
+                                metadata['file_path'],
+                                title_,
+                                album_id,
+                                artist_,
+                                lyrics_,
+                                duration=duration_,
+                                genre=genre_,
+                                file_size=metadata.get('file_size'),
+                                file_mtime_ns=metadata.get('file_mtime_ns'),
+                            )
                             logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title_} - {artist_}")
                     except Exception as db_err:
                         logger.warning(f"Не удалось обновить SQLite для {metadata['file_path']}: {db_err}")

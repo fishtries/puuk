@@ -12,6 +12,7 @@ import { LibraryDrawer } from './components/catalog/LibraryDrawer';
 import { LoginModal } from './components/auth/LoginModal';
 import { DebugOverlay } from './components/debug/DebugOverlay';
 import { TagEditorModal } from './components/tags/TagEditorModal';
+import { AlbumEditorModal } from './components/albums/AlbumEditorModal';
 import { AddToPlaylistModal } from './components/playlists/AddToPlaylistModal';
 import { RightPanel } from './components/layout/RightPanel';
 
@@ -89,6 +90,7 @@ function AppContent() {
       <LoginModal />
       <DebugOverlay />
       <TagEditorModal />
+      <AlbumEditorModal />
 
       {/* Single instance: add-to-playlist dialog (opened from any track row) */}
       <AddToPlaylistModal track={trackForPlaylist} onClose={() => setTrackForPlaylist(null)} />

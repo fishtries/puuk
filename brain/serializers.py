@@ -57,6 +57,10 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "auto_genre_model": r.get("auto_genre_model"),
         "auto_genre_updated_at": r.get("auto_genre_updated_at"),
         "is_liked": track_id in fav_ids,
+        "normalization_gain_db": r.get("normalization_gain_db"),
+        "loudness_status": r.get("loudness_status") or "pending",
+        "loudness_lufs": r.get("loudness_lufs"),
+        "true_peak_db": r.get("true_peak_db"),
         "added_at": r.get("added_at"),
         "favorited_at": r.get("favorited_at"),
         "played_at": r.get("played_at")

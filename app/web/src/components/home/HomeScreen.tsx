@@ -15,6 +15,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useAlbumNavigationStore } from '../../store/useAlbumNavigationStore';
 import { fetchTracks, fetchFavorites, getCoverUrl, searchTracks } from '../../api/tracks';
 import { useDebounce } from '../../hooks/useDebounce';
 import { Album, Artist, Track } from '../../types/track';
@@ -24,6 +25,7 @@ import { AlbumDetail } from '../../views/AlbumDetail';
 import type { PersonalizedPlaylistSection } from '../../types/recommendations';
 import { PlaylistFormModal } from '../playlists/PlaylistFormModal';
 import { UploadMusicModal } from '../playlists/UploadMusicModal';
+import { ProfileCapsuleMenu } from '../profile/ProfileCapsuleMenu';
 import styles from './HomeScreen.module.css';
 
 import { DEMO_MIX } from './demoMix';
@@ -47,10 +49,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const toggleWave = usePlayerStore((state) => state.toggleWave);
-  const toggleRightPanel = usePlayerStore((state) => state.toggleRightPanel);
   const isWaveActive = usePlayerStore((state) => state.isWaveActive);
-  const history = usePlayerStore((state) => state.history);
-  const recentlyPlayed = usePlayerStore((state) => state.recentlyPlayed);
   const loadHistory = usePlayerStore((state) => state.loadHistory);
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
@@ -67,10 +66,32 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [selectedPlaylist, setSelectedPlaylist] = useState<PlaylistGridItem | null>(null);
   const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const profilePillRef = useRef<HTMLButtonElement>(null);
+
+  const handleProfileClick = () => {
+    if (!user) {
+      onOpenAuth();
+    } else {
+      setIsProfileMenuOpen((prev) => !prev);
+    }
+  };
   const [isPlaylistFormOpen, setIsPlaylistFormOpen] = useState(false);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
   const queryClient = useQueryClient();
+  const pendingAlbum = useAlbumNavigationStore((state) => state.pendingAlbum);
+  const consumePendingAlbum = useAlbumNavigationStore((state) => state.consumePendingAlbum);
+
+  // Album requested from another surface (e.g. the Library drawer): open its detail.
+  useEffect(() => {
+    if (!pendingAlbum) return;
+    const album = consumePendingAlbum();
+    if (!album) return;
+    setSelectedPlaylist(null);
+    setSelectedAlbum(album);
+    setActiveTab('home');
+  }, [pendingAlbum, consumePendingAlbum]);
 
   const isAuthorized = Boolean(!isAuthLoading && token && user);
 
@@ -164,16 +185,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
     setActiveTab('home');
   };
 
-  const handleLaunchWave = async () => {
-    if (isWaveActive) {
-      await toggleWave();
-      return;
-    }
+  const handleNavChange = (tab: 'home' | 'library' | 'search') => {
+    setActiveTab(tab);
+    setSelectedAlbum(null);
+    setSelectedPlaylist(null);
+  };
 
-    const started = await toggleWave();
-    if (started) {
-      toggleRightPanel('queue');
-    }
+  const handleLaunchWave = async () => {
+    await toggleWave();
   };
 
   const handleOpenPersonalizedPlaylist = (section: PersonalizedPlaylistSection) => {
@@ -214,7 +233,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
           <button
             type="button"
             className={`${styles.navItem} ${activeTab === 'home' ? styles.activeNavItem : ''}`}
-            onClick={() => setActiveTab('home')}
+            onClick={() => handleNavChange('home')}
           >
             home
           </button>
@@ -223,7 +242,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
             type="button"
             className={`${styles.navItem} ${activeTab === 'library' ? styles.activeNavItem : ''}`}
             onClick={() => {
-              setActiveTab('library');
+              handleNavChange('library');
               setSearchQuery('');
             }}
           >
@@ -234,7 +253,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
             type="button"
             className={`${styles.navItem} ${activeTab === 'search' ? styles.activeNavItem : ''}`}
             onClick={() => {
-              setActiveTab('search');
+              handleNavChange('search');
               const input = document.getElementById('sketch-search-input');
               input?.focus();
             }}
@@ -330,17 +349,28 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
             <Search size={17} className={styles.searchIcon} />
           </div>
 
-          <button
-            type="button"
-            className={styles.userProfilePill}
-            onClick={onOpenAuth}
-            title={user ? `Пользователь: ${displayName}` : 'Войти в аккаунт'}
-          >
-            <span className={styles.userName}>{displayName}</span>
-            <div className={styles.userAvatar}>
-              <User size={15} />
-            </div>
-          </button>
+          <div className={styles.userProfileAnchor}>
+            <button
+              ref={profilePillRef}
+              type="button"
+              className={styles.userProfilePill}
+              onClick={handleProfileClick}
+              title={user ? `Пользователь: ${displayName}` : 'Войти в аккаунт'}
+              aria-expanded={isProfileMenuOpen}
+              aria-haspopup="dialog"
+            >
+              <span className={styles.userName}>{displayName}</span>
+              <div className={styles.userAvatar}>
+                <User size={15} />
+              </div>
+            </button>
+            <ProfileCapsuleMenu
+              isOpen={isProfileMenuOpen}
+              onClose={() => setIsProfileMenuOpen(false)}
+              user={user}
+              anchorRef={profilePillRef}
+            />
+          </div>
         </header>
 
         {/* Collection detail view — opened when an album or playlist is clicked */}

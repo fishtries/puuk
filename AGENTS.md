@@ -40,11 +40,36 @@ usePlayerStore.ts — helpers вынесены (accent, lyrics parsing, demo-gua
 5. git init + первичный коммит — до сих пор не сделан, риск для Фазы 3
 6. Декомпозиция HomeScreen глубже (useHomeCatalogData, HomeSearchResults) — 495 строк всё ещё много
 
+💿 Альбомы как доменная сущность (ЗАВЕРШЕНО):
+- Идентичность = (title, album_artist); миграция 008 + backfill в Python: нормализация NFKC/whitespace/case, вывод album_artist/year из треков, слияние дублей с одинаковой идентичностью, уникальный индекс idx_albums_identity; реальная legacy puuk.db мигрирует без потери треков
+- Backend: repositories/albums.py переписан (resolve_album как единая точка, каталог одним SQL без N+1, детерминированный порядок disc→track→title→id, детерминированная обложка, merge/rebind/cleanup); единый resolve_album в library_service/scan/heavy_worker/track_metadata_service
+- API: GET /api/albums → полный DTO (artist, album_artist, year, track_count, total_duration, cover_id/coverArt); GET /api/albums/{id} → конверт {album, tracks} + 404; PATCH /api/albums/{id} → правка релиза (title/album_artist/year в ID3 всех треков, обложка на весь релиз, авто-merge при конфликте идентичности, partial-ответ при сбое отдельного файла)
+- Web: AlbumDetail по конверту + метаданные, AlbumEditorModal (store), кликабельные альбомы в LibraryDrawer через useAlbumNavigationStore, инвалидации кэша
+- iOS: Artist на карточках, AlbumScreen по конверту (artist/year/count, retry/empty), fix ellipsis callback, новый AlbumEditScreen
+- Верификация: brain 164/164, web build+lint+test 34/34, iOS expo export + eslint + jest 7/7
+- ⏳ Остаток: ручной прогон iOS на устройстве (за пользователем)
+
 🌊 «Моя Волна» — рефакторинг (3 этапа, ЗАВЕРШЁН):
 - Этап 1 (web): последовательное потребление пачки в nextTrack(), wavePlayedIds, prefetch, единый in-flight promise, compactWaveQueue, dedup, лимиты буфера
 - Этап 2 (backend): exclude_track_ids + queued_track_ids (уровни: dislike → queued → recent), select_diverse_recommendations (лимит 2 трека/артист), _ArtistResolver (1 SQL-запрос/пачка), artist из file_path как fallback
 - Этап 3 (backend): cold start из пула 50 (random.choice), exploration-пул от вектора вкуса (WAVE_EXPLORE_RATIO=0.25), band-jitter (eps=0.02), payload Qdrant обогащён artist/title (scan.py/heavy_worker.py), WAVE_RECO_DEBUG-счётчики, WAVE_PERSONALIZATION_WEIGHT 0.3→0.35
 - Верификация: brain 60/60, web 12/12, e2e: 40+/40+ уникальных треков, 8 исполнителей/пачка, 0 повторов
+
+🔊 Нормализация громкости (EBU R128 / LUFS) — ЗАВЕРШЕНО (Backend + Web):
+- Алгоритм: EBU R128 / LUFS-I (-14 LUFS, gain [-12 dB, +12 dB], ceiling -1 dBTP). Оригинальные файлы не изменяются.
+- Backend:
+  - Миграция 009: `loudness_lufs`, `true_peak_db`, `normalization_gain_db`, `loudness_status`, `loudness_analyzed_at`, `loudness_analysis_version`, `loudness_file_size`, `loudness_file_mtime_ns`, `loudness_error`, `loudness_retry_count` + индекс `idx_tracks_loudness_status`.
+  - Модуль `brain/services/loudness.py`: расчет безопасного gain, вызов `ffmpeg loudnorm print_format=json` (надёжный JSON-парсер с балансировкой скобок), обработка ошибок, timeout, -inf/NaN, safe clamp [-12, +12].
+  - Схема и миграции: `apply_migrations()` строго идемпотентен (проверка `PRAGMA table_info` перед ADD/DROP COLUMN), откат транзакции при сбое, `verify_and_repair_schema` гарантирует полноту колонок даже на частично мигрированных legacy-базах.
+  - Сканер `scan.py`: отказ от 1-секундного допуска mtime (точное наносекундное локальное сравнение), сохранение `file_size` и `file_mtime_ns` напрямую в SQLite (`add_or_update_track`), сброс в `loudness_status='pending'` с очисткой retry-счетчика.
+  - Воркер `heavy_worker.py`: автоматический retry треков с `status='failed'` (до 3 попыток с cooldown 300с), сохранение ошибки в БД, сохранение наносекундной точности сканера при совпадении SFTP-секунд, поддержка CLI `--loudness-backfill` и `--retry-failed-loudness`.
+  - API & DTO: `normalization_gain_db`, `loudness_status`, `loudness_lufs`, `true_peak_db` в `serialize_track`.
+- Web:
+  - `AudioEngine.ts`: разделение `userVolume` и `normalizationGainDb`, устранение двойного умножения (`audio.volume = 1` при Web Audio, `GainNode.gain = userVolume * normalizationGain`), плавный переход ~200 мс (`setTargetAtTime`), fallback для сред без Web Audio.
+  - `usePlayerStore.ts`: реактивное переключение и пересчет громкости на лету, строгое валидирование localStorage (`puuk:loudness-normalization:v1`) с fallback на `true` для любых поврежденных или неизвестных значений.
+  - UI: `ProfileCapsuleMenu` в `HomeScreen` с доступным переключателем (switch) нормализации, профилем пользователя и логаутом.
+- Верификация: brain 195/195 тестов ✓, web 54/54 тестов + lint + build ✓, iOS jest 7/7 + eslint ✓.
+- ⏳ iOS: добавление нормализации на клиенте Expo Audio отложено отдельным этапом.
 ⚠️ Открытый вопрос перед Фазой 3
 iOS — это JS без тестов и типов; верификация возможна только через Metro bundle + ручной прогон. Начинать с FullPlayerModal.js (самый большой выигрыш), или сначала сделать git init + коммит текущего состояния, чтобы иметь точку отката?
 Также рекомендую перед Фазой 3 закрыть backlog-пункты 1–2 (быстрые, снижают шум при будущих проверках).

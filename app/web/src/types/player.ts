@@ -25,6 +25,7 @@ export interface PlayerStoreState {
   isShuffled: boolean;
   isWaveActive: boolean;
   isWaveLoading: boolean;
+  isLoudnessNormalizationEnabled: boolean;
 
   // Layout & Overlays
   activeView: ActiveView;
@@ -82,4 +83,6 @@ export interface PlayerStoreState {
   loadHistory: () => Promise<void>;
   resetUserData: () => void;
   updateTrackInStore: (trackId: string, updatedTrack: Partial<Track>) => void;
+  toggleLoudnessNormalization: () => void;
+  setLoudnessNormalizationEnabled: (enabled: boolean) => void;
 }

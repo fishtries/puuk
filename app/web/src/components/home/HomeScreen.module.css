@@ -268,11 +268,15 @@
 }
 
 /* User Profile Pill */
-.userProfilePill {
+.userProfileAnchor {
   position: absolute;
   top: 24px;
   right: 36px;
-  z-index: 5;
+  z-index: 15;
+}
+
+.userProfilePill {
+  position: relative;
   height: 44px;
   padding: 4px 8px 4px 18px;
   background: rgba(26, 28, 34, 0.6);

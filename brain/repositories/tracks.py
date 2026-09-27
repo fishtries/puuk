@@ -2,6 +2,7 @@
 import json
 from typing import Optional, List, Dict, Any
 
+from repositories import albums
 from repositories.base import get_connection
 
 
@@ -56,17 +57,22 @@ def search_all(query, limit=30):
     """, (search_term, search_term, search_term, limit))
     tracks = [dict(row) for row in cursor.fetchall()]
 
-    # 2. Albums (matching title or artist)
-    cursor.execute("""
-        SELECT a.id, a.title,
-               (SELECT t.artist FROM tracks t WHERE t.album_id = a.id LIMIT 1) as artist,
+    # 2. Albums (matching title or artist) — из сущности альбома, не из треков
+    cursor.execute(f"""
+        SELECT a.id, a.title, a.album_artist, a.year,
+               COALESCE(a.album_artist,
+                        (SELECT t.artist FROM tracks t WHERE t.album_id = a.id
+                           AND t.artist IS NOT NULL AND t.artist != ''
+                         ORDER BY t.id LIMIT 1)) as artist,
                (SELECT COUNT(*) FROM tracks t WHERE t.album_id = a.id) as track_count,
-               (SELECT t.id FROM tracks t WHERE t.album_id = a.id LIMIT 1) as cover_track_id
+               ({albums.REPRESENTATIVE_TRACK_SQL}) as cover_track_id
         FROM albums a
-        WHERE a.title LIKE ? OR (SELECT t.artist FROM tracks t WHERE t.album_id = a.id LIMIT 1) LIKE ?
+        WHERE a.title LIKE ?
+           OR a.album_artist LIKE ?
+           OR (SELECT t.artist FROM tracks t WHERE t.album_id = a.id LIMIT 1) LIKE ?
         LIMIT ?
-    """, (search_term, search_term, limit))
-    albums = [dict(row) for row in cursor.fetchall()]
+    """, (search_term, search_term, search_term, limit))
+    albums_rows = [dict(row) for row in cursor.fetchall()]
 
     # 3. Artists (grouped by artist name)
     cursor.execute("""
@@ -82,7 +88,7 @@ def search_all(query, limit=30):
     artists = [dict(row) for row in cursor.fetchall()]
 
     conn.close()
-    return {"tracks": tracks, "albums": albums, "artists": artists}
+    return {"tracks": tracks, "albums": albums_rows, "artists": artists}
 
 def _clean_genre(genre: Optional[str]) -> Optional[str]:
     """Жанр из файла для сканера: пустые и заглушки ('Unknown') считаются отсутствием жанра."""
@@ -93,7 +99,20 @@ def _clean_genre(genre: Optional[str]) -> Optional[str]:
         return None
     return cleaned
 
-def add_or_update_track(track_id, file_path, title, album_id, artist, lyrics=None, added_by_user_id=1, cover_color=None, duration=None, genre=None):
+def add_or_update_track(
+    track_id,
+    file_path,
+    title,
+    album_id,
+    artist,
+    lyrics=None,
+    added_by_user_id=1,
+    cover_color=None,
+    duration=None,
+    genre=None,
+    file_size=None,
+    file_mtime_ns=None,
+):
     genre_value = _clean_genre(genre)
     conn = get_connection()
     cursor = conn.cursor()
@@ -104,14 +123,16 @@ def add_or_update_track(track_id, file_path, title, album_id, artist, lyrics=Non
             UPDATE tracks
             SET file_path = ?, title = ?, album_id = ?, artist = ?, lyrics = ?,
                 genre = COALESCE(?, genre),
-                cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration)
+                cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration),
+                file_size = COALESCE(?, file_size),
+                file_mtime_ns = COALESCE(?, file_mtime_ns)
             WHERE id = ?
-        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, track_id))
+        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, file_size, file_mtime_ns, track_id))
     else:
         cursor.execute("""
-            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value))
+            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns))
     conn.commit()
     conn.close()
 
@@ -396,6 +417,118 @@ def reset_failed_auto_genres() -> int:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE tracks SET auto_genre_status = NULL WHERE auto_genre_status = 'failed'")
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count
+
+
+# --- Нормализация громкости (Loudness Normalization: EBU R128) ---
+
+def update_track_loudness(
+    track_id: str,
+    loudness_lufs: Optional[float],
+    true_peak_db: Optional[float],
+    normalization_gain_db: Optional[float],
+    status: str = "analyzed",
+    analysis_version: Optional[str] = None,
+    file_size: Optional[int] = None,
+    file_mtime_ns: Optional[int] = None,
+) -> None:
+    """Сохраняет результаты анализа громкости трека в SQLite."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE tracks
+        SET loudness_lufs = ?,
+            true_peak_db = ?,
+            normalization_gain_db = ?,
+            loudness_status = ?,
+            loudness_analyzed_at = CURRENT_TIMESTAMP,
+            loudness_analysis_version = ?,
+            loudness_file_size = COALESCE(?, loudness_file_size),
+            loudness_file_mtime_ns = COALESCE(?, loudness_file_mtime_ns),
+            file_size = COALESCE(?, file_size),
+            file_mtime_ns = COALESCE(?, file_mtime_ns),
+            loudness_error = NULL,
+            loudness_retry_count = 0
+        WHERE id = ?
+    """, (
+        loudness_lufs,
+        true_peak_db,
+        normalization_gain_db,
+        status,
+        analysis_version,
+        file_size,
+        file_mtime_ns,
+        file_size,
+        file_mtime_ns,
+        str(track_id),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def set_track_loudness_status(track_id: str, status: str, error: Optional[str] = None) -> None:
+    """Обновляет статус обработки громкости (например: 'processing', 'failed')."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if status == "failed":
+        cursor.execute("""
+            UPDATE tracks
+            SET loudness_status = ?,
+                normalization_gain_db = NULL,
+                loudness_analyzed_at = CURRENT_TIMESTAMP,
+                loudness_error = ?,
+                loudness_retry_count = COALESCE(loudness_retry_count, 0) + 1
+            WHERE id = ?
+        """, (status, error, str(track_id)))
+    else:
+        cursor.execute("""
+            UPDATE tracks
+            SET loudness_status = ?,
+                loudness_error = NULL
+            WHERE id = ?
+        """, (status, str(track_id)))
+    conn.commit()
+    conn.close()
+
+
+def reset_track_loudness_pending(
+    track_id: str,
+    file_size: Optional[int] = None,
+    file_mtime_ns: Optional[int] = None,
+) -> None:
+    """Сбрасывает статус громкости на pending при изменении файла."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE tracks
+        SET loudness_status = 'pending',
+            normalization_gain_db = NULL,
+            loudness_file_size = COALESCE(?, loudness_file_size),
+            loudness_file_mtime_ns = COALESCE(?, loudness_file_mtime_ns),
+            file_size = COALESCE(?, file_size),
+            file_mtime_ns = COALESCE(?, file_mtime_ns),
+            loudness_error = NULL,
+            loudness_retry_count = 0
+        WHERE id = ?
+    """, (file_size, file_mtime_ns, file_size, file_mtime_ns, str(track_id)))
+    conn.commit()
+    conn.close()
+
+
+def reset_failed_loudness() -> int:
+    """Возвращает failed-треки в статус pending для повторного анализа."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE tracks
+        SET loudness_status = 'pending',
+            loudness_error = NULL,
+            loudness_retry_count = 0
+        WHERE loudness_status = 'failed'
+    """)
     count = cursor.rowcount
     conn.commit()
     conn.close()

@@ -70,6 +70,10 @@ from repositories.tracks import (
     mark_auto_genre_sync_complete,
     mark_auto_genre_failed,
     reset_failed_auto_genres,
+    update_track_loudness,
+    set_track_loudness_status,
+    reset_track_loudness_pending,
+    reset_failed_loudness,
 )
 from repositories.playlists import (
     get_all_playlists,

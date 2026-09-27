@@ -30,6 +30,10 @@ export interface Track {
   file_mtime_ns?: number;
   cover_version?: number;
   dominant_color?: string;
+  normalization_gain_db?: number | null;
+  loudness_status?: 'pending' | 'processing' | 'analyzed' | 'failed' | string;
+  loudness_lufs?: number | null;
+  true_peak_db?: number | null;
 }
 
 export interface AutoGenreItem {
@@ -42,7 +46,7 @@ export interface TrackEditPayloadDTO {
   artist?: string | null;
   album?: string | null;
   album_artist?: string | null;
-  year?: number | null;
+  year?: string | null;
   genre?: string | null;
   track_number?: string | null;
   disc_number?: string | null;
@@ -83,11 +87,36 @@ export interface Album {
   id: string;
   title: string;
   artist: string;
+  album_artist?: string;
   cover_id?: string;
   coverArt?: string;
   cover_color?: string;
   track_count?: number;
-  year?: number;
+  total_duration?: number;
+  year?: string | number;
+}
+
+export interface AlbumDetail {
+  album: Album;
+  tracks: Track[];
+}
+
+export interface AlbumEditPayloadDTO {
+  title?: string | null;
+  album_artist?: string | null;
+  year?: string | null;
+  cover_action?: 'keep' | 'replace' | 'remove';
+  cover_base64?: string | null;
+  cover_url?: string | null;
+}
+
+export interface AlbumEditResult {
+  status: 'success' | 'partial';
+  changed: boolean;
+  merged?: boolean;
+  album: Album;
+  tracks: Track[];
+  failed_tracks: Array<{ track_id: string; title?: string; error: string }>;
 }
 
 export interface Playlist {

@@ -50,6 +50,8 @@ def scan_library():
                 # выставленный вручную через редактор тегов).
                 db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
 
+                if file_changed:
+                    db.reset_track_loudness_pending(track_id, file_size=meta.file_size, file_mtime_ns=meta.file_mtime_ns)
             except Exception as e:
                 print(f"[scan] Error scanning {file_path}: {e}")
                 title, artist, album, lyrics, duration = extract_full_metadata(rel_path)

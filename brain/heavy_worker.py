@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime, timezone
 import getpass
 import json
 import logging
@@ -27,6 +28,12 @@ from services.audio_genre_classifier import (
     AUTO_GENRE_MIN_CONFIDENCE,
     AUTO_GENRE_TOP_K,
 )
+from services.loudness import (
+    measure_file_loudness,
+    calculate_normalization_gain,
+    LoudnessMeasurement,
+    ANALYSIS_VERSION as LOUDNESS_ANALYSIS_VERSION,
+)
 
 # --- Конфигурация ---
 SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
@@ -43,6 +50,9 @@ VECTOR_SIZE = 400
 AUTO_GENRE_ENABLED = os.getenv("AUTO_GENRE_ENABLED", "true").lower() in ("true", "1", "yes")
 AUTO_GENRE_BACKFILL = os.getenv("AUTO_GENRE_BACKFILL", "false").lower() in ("true", "1", "yes")
 AUTO_GENRE_BACKFILL_LIMIT = int(os.getenv("AUTO_GENRE_BACKFILL_LIMIT", "0")) or None
+
+MAX_LOUDNESS_RETRIES = int(os.getenv("MAX_LOUDNESS_RETRIES", "3"))
+LOUDNESS_RETRY_COOLDOWN_SEC = int(os.getenv("LOUDNESS_RETRY_COOLDOWN_SEC", "300"))
 
 MODEL_FILENAME = BASE_DIR / "discogs-effnet-bs64-1.pb"
 MODEL_URL = "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb"
@@ -271,6 +281,260 @@ def get_backfill_tracks(
     return backfill_tracks
 
 
+def should_retry_failed_loudness(db_track: Optional[dict]) -> bool:
+    """Проверяет, можно ли повторить анализ трека со статусом failed."""
+    if not db_track:
+        return False
+    retries = db_track.get("loudness_retry_count") or 0
+    if retries >= MAX_LOUDNESS_RETRIES:
+        return False
+    analyzed_at_str = db_track.get("loudness_analyzed_at")
+    if not analyzed_at_str:
+        return True
+    try:
+        analyzed_dt = datetime.strptime(analyzed_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        now_dt = datetime.now(timezone.utc)
+        elapsed = (now_dt - analyzed_dt).total_seconds()
+        return elapsed >= LOUDNESS_RETRY_COOLDOWN_SEC
+    except Exception:
+        return True
+
+
+def get_loudness_tracks(
+    client: QdrantClient,
+    limit: Optional[int] = None,
+    include_failed: bool = False,
+    version: str = LOUDNESS_ANALYSIS_VERSION,
+) -> list:
+    """Поиск треков, требующих анализа нормализации громкости."""
+    logger.info("Ищу треки для анализа громкости (loudness_status=pending)...")
+    loudness_tracks = []
+    offset = None
+
+    while True:
+        try:
+            records, next_page = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for r in records:
+                payload = r.payload or {}
+                status = payload.get("loudness_status")
+                analyzed_ver = payload.get("loudness_analysis_version")
+
+                # Сверяемся со SQLite, если возможно (создаем запись при отсутствии)
+                point_id = str(r.id)
+                db_track = db.get_track(point_id)
+                if not db_track:
+                    ensure_track_in_sqlite(point_id, payload)
+                    db_track = db.get_track(point_id)
+
+                if db_track:
+                    db_status = db_track.get("loudness_status")
+                    if db_status:
+                        status = db_status
+                    db_ver = db_track.get("loudness_analysis_version")
+                    if db_ver:
+                        analyzed_ver = db_ver
+
+                needs_analysis = False
+                if status in (None, "pending"):
+                    needs_analysis = True
+                elif status == "failed":
+                    if include_failed or should_retry_failed_loudness(db_track):
+                        needs_analysis = True
+                elif status == "analyzed" and analyzed_ver != version:
+                    needs_analysis = True
+
+                # Проверка изменения файла: size/mtime (по SQLite или payload)
+                if not needs_analysis:
+                    curr_size = (db_track.get("file_size") if db_track else None) or payload.get("file_size")
+                    curr_mtime = (db_track.get("file_mtime_ns") if db_track else None) or payload.get("file_mtime_ns")
+                    l_size = (db_track.get("loudness_file_size") if db_track else None) or payload.get("loudness_file_size")
+                    l_mtime = (db_track.get("loudness_file_mtime_ns") if db_track else None) or payload.get("loudness_file_mtime_ns")
+                    if curr_size is not None and l_size is not None and curr_size != l_size:
+                        needs_analysis = True
+                    elif curr_mtime is not None and l_mtime is not None and curr_mtime != l_mtime:
+                        needs_analysis = True
+
+                if needs_analysis:
+                    loudness_tracks.append(r)
+                    if limit and len(loudness_tracks) >= limit:
+                        return loudness_tracks
+
+            if next_page is None:
+                break
+            offset = next_page
+        except Exception as e:
+            logger.error(f"Ошибка при поиске треков для анализа громкости в Qdrant: {e}")
+            break
+
+    return loudness_tracks
+
+
+def process_loudness_for_track(
+    qdrant_client: QdrantClient,
+    record,
+    sftp: paramiko.SFTPClient,
+) -> bool:
+    """Выполняет ffmpeg loudnorm анализ одного трека, обновляет SQLite и Qdrant."""
+    point_id = str(record.id)
+    payload = record.payload or {}
+    file_path = payload.get("file_path")
+    if not file_path:
+        logger.warning(f"[Loudness] У записи {point_id} нет file_path. Пропускаем.")
+        return False
+
+    ensure_track_in_sqlite(point_id, payload)
+    db.set_track_loudness_status(point_id, "processing")
+
+    remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
+    local_filename = f"loud_{Path(file_path).name}"
+    local_path = TEMP_DIR / local_filename
+
+    # 1. Скачиваем файл через SFTP
+    try:
+        logger.info(f"[Loudness] Скачивание {remote_path} -> {local_path} ...")
+        remote_stat = sftp.stat(remote_path)
+        remote_size = remote_stat.st_size
+        remote_mtime_sec = int(remote_stat.st_mtime)
+
+        # Унификация mtime со SQLite, чтобы не было расхождений nanoseconds vs seconds
+        db_track = db.get_track(point_id)
+        if db_track and db_track.get("file_mtime_ns"):
+            db_mtime_sec = db_track["file_mtime_ns"] // 1_000_000_000
+            if db_mtime_sec == remote_mtime_sec:
+                remote_mtime_ns = db_track["file_mtime_ns"]
+            else:
+                remote_mtime_ns = remote_mtime_sec * 1_000_000_000
+        else:
+            remote_mtime_ns = remote_mtime_sec * 1_000_000_000
+
+        sftp.get(remote_path, str(local_path))
+    except Exception as e:
+        logger.error(f"[Loudness] Не удалось скачать {remote_path}: {e}")
+        db.set_track_loudness_status(point_id, "failed", error=str(e))
+        updated_track = db.get_track(point_id) or {}
+        try:
+            qdrant_client.set_payload(
+                collection_name=COLLECTION_NAME,
+                points=[point_id],
+                payload={
+                    "loudness_status": "failed",
+                    "normalization_gain_db": None,
+                    "loudness_error": str(e),
+                    "loudness_retry_count": updated_track.get("loudness_retry_count", 1),
+                },
+            )
+        except Exception:
+            pass
+        if local_path.exists():
+            try:
+                os.remove(local_path)
+            except Exception:
+                pass
+        return False
+
+    try:
+        # 2. Выполняем анализ loudnorm
+        logger.info(f"[Loudness] Анализ громкости для {file_path} ...")
+        measurement = measure_file_loudness(local_path)
+        logger.info(
+            f"[Loudness] {file_path}: I={measurement.loudness_lufs} LUFS, "
+            f"TP={measurement.true_peak_db} dBTP -> gain={measurement.normalization_gain_db} dB"
+        )
+
+        # 3. Сохраняем в SQLite
+        db.update_track_loudness(
+            track_id=point_id,
+            loudness_lufs=measurement.loudness_lufs,
+            true_peak_db=measurement.true_peak_db,
+            normalization_gain_db=measurement.normalization_gain_db,
+            status="analyzed",
+            analysis_version=measurement.analysis_version,
+            file_size=remote_size,
+            file_mtime_ns=remote_mtime_ns,
+        )
+
+        # 4. Обновляем Qdrant payload
+        qdrant_client.set_payload(
+            collection_name=COLLECTION_NAME,
+            points=[point_id],
+            payload={
+                "loudness_status": "analyzed",
+                "loudness_lufs": measurement.loudness_lufs,
+                "true_peak_db": measurement.true_peak_db,
+                "normalization_gain_db": measurement.normalization_gain_db,
+                "loudness_analysis_version": measurement.analysis_version,
+                "loudness_file_size": remote_size,
+                "loudness_file_mtime_ns": remote_mtime_ns,
+                "loudness_error": None,
+                "loudness_retry_count": 0,
+            },
+        )
+        return True
+    except Exception as e:
+        logger.error(f"[Loudness] Ошибка анализа громкости для {file_path}: {e}")
+        db.set_track_loudness_status(point_id, "failed", error=str(e))
+        updated_track = db.get_track(point_id) or {}
+        try:
+            qdrant_client.set_payload(
+                collection_name=COLLECTION_NAME,
+                points=[point_id],
+                payload={
+                    "loudness_status": "failed",
+                    "normalization_gain_db": None,
+                    "loudness_error": str(e),
+                    "loudness_retry_count": updated_track.get("loudness_retry_count", 1),
+                },
+            )
+        except Exception:
+            pass
+        return False
+    finally:
+        if local_path.exists():
+            try:
+                os.remove(local_path)
+            except Exception:
+                pass
+
+
+def run_loudness_backfill(
+    qdrant_client: QdrantClient,
+    limit: Optional[int] = None,
+    retry_failed: bool = False,
+) -> int:
+    """Запускает процесс backfill нормализации громкости для треков."""
+    logger.info(f"[Loudness Backfill] Поиск треков (limit={limit}, retry_failed={retry_failed})...")
+    tracks = get_loudness_tracks(qdrant_client, limit=limit, include_failed=retry_failed)
+    if not tracks:
+        logger.info("[Loudness Backfill] Нет треков для анализа громкости.")
+        return 0
+
+    logger.info(f"[Loudness Backfill] Найдено {len(tracks)} треков для анализа.")
+    try:
+        ssh, sftp = setup_sftp()
+    except Exception as e:
+        logger.error(f"[Loudness Backfill] Ошибка SSH подключения: {e}")
+        return 0
+
+    processed_count = 0
+    try:
+        for r in tracks:
+            success = process_loudness_for_track(qdrant_client, r, sftp)
+            if success:
+                processed_count += 1
+    finally:
+        sftp.close()
+        ssh.close()
+        logger.info(f"[Loudness Backfill] Завершено. Успешно обработано: {processed_count}/{len(tracks)}")
+
+    return processed_count
+
+
 def process_audio_file(
     local_path: Path,
     extractor,
@@ -393,7 +657,11 @@ def ensure_track_in_sqlite(track_id: str, payload: dict) -> None:
     title = str(payload.get("title") or Path(file_path).stem or track_id)
     artist = payload.get("artist") or parse_artist_from_path(file_path) or "Неизвестный исполнитель"
     album_title = payload.get("album") or payload.get("album_title")
-    album_id = db.add_or_get_album(str(album_title), None) if album_title else None
+    album_artist = payload.get("album_artist") or payload.get("albumartist")
+    album_id = (
+        db.resolve_album(str(album_title), album_artist=(album_artist or artist) if album_title else None)
+        if album_title else None
+    )
     db.add_or_update_track(
         track_id=track_id,
         file_path=file_path or track_id,
@@ -403,6 +671,8 @@ def ensure_track_in_sqlite(track_id: str, payload: dict) -> None:
         lyrics=payload.get("lyrics"),
         duration=payload.get("duration"),
         genre=payload.get("genre"),
+        file_size=payload.get("file_size"),
+        file_mtime_ns=payload.get("file_mtime_ns"),
     )
 
 
@@ -556,6 +826,8 @@ def main():
     parser = argparse.ArgumentParser(description="Heavy Worker ML analysis & auto genre classification")
     parser.add_argument("--genre-backfill", action="store_true", help="Запустить backfill авто-жанров для существующих треков")
     parser.add_argument("--retry-failed-genres", action="store_true", help="Повторно классифицировать треки с failed статусом")
+    parser.add_argument("--loudness-backfill", action="store_true", help="Запустить backfill нормализации громкости для треков")
+    parser.add_argument("--retry-failed-loudness", action="store_true", help="Повторно анализировать треки со статусом failed")
     parser.add_argument("--limit", type=int, default=None, help="Ограничение количества треков для backfill")
     parser.add_argument("--retry-qdrant-sync", action="store_true", help="Повторить доставку pending auto_genres из SQLite в Qdrant")
     parser.add_argument("--resync-sqlite", action="store_true", help="Синхронизировать auto_genres из Qdrant в SQLite")
@@ -568,6 +840,14 @@ def main():
         qdrant_client = QdrantClient(url=QDRANT_URL)
     except Exception as e:
         logger.error(f"Не удалось подключиться к Qdrant: {e}")
+        return
+
+    if args.loudness_backfill:
+        run_loudness_backfill(qdrant_client, limit=args.limit, retry_failed=args.retry_failed_loudness)
+        return
+
+    if args.retry_failed_loudness:
+        run_loudness_backfill(qdrant_client, limit=args.limit, retry_failed=True)
         return
 
     if args.retry_qdrant_sync:
@@ -602,13 +882,12 @@ def main():
     logger.info("Скрипт запущен в режиме постоянного мониторинга новых треков.")
     while True:
         unprocessed_tracks = get_unprocessed_tracks(qdrant_client)
+        loudness_tracks = get_loudness_tracks(qdrant_client, limit=10)
 
-        if not unprocessed_tracks:
+        if not unprocessed_tracks and not loudness_tracks:
             logger.debug("Нет треков для обработки. Ожидание 30 секунд...")
             time.sleep(30)
             continue
-
-        logger.info(f"Найдено треков для обработки: {len(unprocessed_tracks)}.")
 
         try:
             ssh, sftp = setup_sftp()
@@ -619,60 +898,71 @@ def main():
 
         try:
             processed_any = False
-            for record in unprocessed_tracks:
-                point_id = record.id
-                payload = record.payload or {}
-                file_path = payload.get("file_path")
 
-                if not file_path:
-                    logger.warning(f"У записи {point_id} нет file_path. Пропускаем.")
-                    continue
+            # 1. Выполнение ML-анализа для новых треков
+            if unprocessed_tracks:
+                logger.info(f"Найдено треков для ML-обработки: {len(unprocessed_tracks)}.")
+                for record in unprocessed_tracks:
+                    point_id = record.id
+                    payload = record.payload or {}
+                    file_path = payload.get("file_path")
 
-                if not payload.get("artist"):
-                    parsed_artist = parse_artist_from_path(file_path)
-                    if parsed_artist:
-                        payload["artist"] = parsed_artist
+                    if not file_path:
+                        logger.warning(f"У записи {point_id} нет file_path. Пропускаем.")
+                        continue
 
-                remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
-                local_filename = Path(file_path).name
-                local_path = TEMP_DIR / local_filename
+                    if not payload.get("artist"):
+                        parsed_artist = parse_artist_from_path(file_path)
+                        if parsed_artist:
+                            payload["artist"] = parsed_artist
 
-                # 1. Скачиваем файл через SFTP
-                try:
-                    logger.info(f"Скачивание {remote_path} -> {local_path} ...")
-                    sftp.get(remote_path, str(local_path))
-                except Exception as e:
-                    logger.error(f"Не удалось скачать {remote_path}: {e}")
-                    if local_path.exists():
-                        try:
-                            os.remove(local_path)
-                        except Exception:
-                            pass
-                    continue
+                    remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
+                    local_filename = Path(file_path).name
+                    local_path = TEMP_DIR / local_filename
 
-                try:
-                    # 2. Выполнение ML-анализа и предсказания жанров
-                    logger.info(f"Файл скачан: {file_path}, начинаю ML-анализ...")
-                    new_vector, auto_genres, auto_genre_model, auto_genre_updated_at = process_audio_file(
-                        local_path, extractor, genre_classifier
-                    )
-
-                    # 3. Обновление Qdrant и SQLite
-                    update_database_records(
-                        qdrant_client, point_id, new_vector, payload, auto_genres, auto_genre_model, auto_genre_updated_at
-                    )
-                    logger.info(f"Вектор и метаданные для {file_path} успешно обновлены.")
-                    processed_any = True
-                except Exception as e:
-                    logger.error(f"Ошибка ML-инференса для {file_path}: {e}")
-                finally:
-                    # 4. Удаление временного файла
+                    # Скачиваем файл через SFTP
                     try:
-                        if local_path.exists():
-                            os.remove(local_path)
-                            logger.debug(f"Временный файл удален: {local_path}")
+                        logger.info(f"Скачивание {remote_path} -> {local_path} ...")
+                        sftp.get(remote_path, str(local_path))
                     except Exception as e:
-                        logger.warning(f"Не удалось удалить временный файл {local_path}: {e}")
+                        logger.error(f"Не удалось скачать {remote_path}: {e}")
+                        if local_path.exists():
+                            try:
+                                os.remove(local_path)
+                            except Exception:
+                                pass
+                        continue
+
+                    try:
+                        # ML-анализ и предсказание жанров
+                        logger.info(f"Файл скачан: {file_path}, начинаю ML-анализ...")
+                        new_vector, auto_genres, auto_genre_model, auto_genre_updated_at = process_audio_file(
+                            local_path, extractor, genre_classifier
+                        )
+
+                        # Обновление Qdrant и SQLite
+                        update_database_records(
+                            qdrant_client, point_id, new_vector, payload, auto_genres, auto_genre_model, auto_genre_updated_at
+                        )
+                        logger.info(f"Вектор и метаданные для {file_path} успешно обновлены.")
+                        processed_any = True
+                    except Exception as e:
+                        logger.error(f"Ошибка ML-инференса для {file_path}: {e}")
+                    finally:
+                        try:
+                            if local_path.exists():
+                                os.remove(local_path)
+                                logger.debug(f"Временный файл удален: {local_path}")
+                        except Exception as e:
+                            logger.warning(f"Не удалось удалить временный файл {local_path}: {e}")
+
+            # 2. Обработка очереди анализа громкости через единый метод
+            if loudness_tracks:
+                logger.info(f"Найдено треков для анализа громкости: {len(loudness_tracks)}.")
+                for r in loudness_tracks:
+                    ok = process_loudness_for_track(qdrant_client, r, sftp)
+                    if ok:
+                        processed_any = True
 
         finally:
             sftp.close()

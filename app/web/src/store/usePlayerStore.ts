@@ -15,7 +15,7 @@ import { fetchWaveQueue, sendWaveFeedback } from '../api/wave';
 import {
   WAVE_BATCH_SIZE,
   WAVE_PREFETCH_THRESHOLD,
-  WaveExclusionSets,
+  type WaveExclusionSets,
   buildWaveExclusions,
   compactWaveQueue,
   mergeWaveTracks,
@@ -24,6 +24,29 @@ import {
 } from './waveQueue';
 
 const HISTORY_LIMIT = 50;
+const LOUDNESS_STORAGE_KEY = 'puuk:loudness-normalization:v1';
+export const DEFAULT_LOUDNESS_NORMALIZATION = true;
+
+export function getInitialLoudnessSetting(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_LOUDNESS_NORMALIZATION;
+    const val = localStorage.getItem(LOUDNESS_STORAGE_KEY);
+    if (val === null) return DEFAULT_LOUDNESS_NORMALIZATION;
+    if (val === 'true') return true;
+    if (val === 'false') return false;
+    return DEFAULT_LOUDNESS_NORMALIZATION;
+  } catch {
+    return DEFAULT_LOUDNESS_NORMALIZATION;
+  }
+}
+
+export function computeTrackNormalizationGainDb(track: Track | null | undefined, isEnabled: boolean): number {
+  if (!isEnabled || !track) return 0;
+  if (track.loudness_status === 'analyzed' && track.normalization_gain_db != null) {
+    return track.normalization_gain_db;
+  }
+  return 0;
+}
 
 /**
  * Single in-flight wave request. Concurrent Next presses share one HTTP call
@@ -266,6 +289,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     isShuffled: false,
     isWaveActive: false,
     isWaveLoading: false,
+    isLoudnessNormalizationEnabled: getInitialLoudnessSetting(),
 
     activeView: 'home',
     isRightPanelOpen: false,
@@ -313,7 +337,12 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       get().recordHistory(track);
 
       const streamUrl = getStreamUrl(track.id);
-      await audioEngine.load(streamUrl, true);
+      const isLoudnessEnabled = get().isLoudnessNormalizationEnabled;
+      const trackGainDb = computeTrackNormalizationGainDb(track, isLoudnessEnabled);
+      await audioEngine.load(streamUrl, {
+        autoplay: true,
+        normalizationGainDb: trackGainDb,
+      });
     },
 
     togglePlay: () => {
@@ -347,15 +376,34 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
     setVolume: (volume: number) => {
       const clamped = Math.max(0, Math.min(1, volume));
-      audioEngine.setVolume(get().isMuted ? 0 : clamped);
+      audioEngine.setUserVolume(clamped);
+      audioEngine.setMuted(false);
       set({ volume: clamped, isMuted: false });
     },
 
     toggleMute: () => {
-      const { isMuted, volume } = get();
+      const { isMuted } = get();
       const nextMuted = !isMuted;
-      audioEngine.setVolume(nextMuted ? 0 : volume);
+      audioEngine.setMuted(nextMuted);
       set({ isMuted: nextMuted });
+    },
+
+    toggleLoudnessNormalization: () => {
+      const next = !get().isLoudnessNormalizationEnabled;
+      get().setLoudnessNormalizationEnabled(next);
+    },
+
+    setLoudnessNormalizationEnabled: (enabled: boolean) => {
+      try {
+        localStorage.setItem(LOUDNESS_STORAGE_KEY, String(enabled));
+      } catch (err) {
+        console.warn('Failed to save loudness normalization setting to localStorage:', err);
+      }
+      set({ isLoudnessNormalizationEnabled: enabled });
+
+      const { currentTrack } = get();
+      const nextGainDb = computeTrackNormalizationGainDb(currentTrack, enabled);
+      audioEngine.setNormalizationGainDb(nextGainDb);
     },
 
     nextTrack: () => goToNextTrack(true),
@@ -533,7 +581,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
           : currentState.queue.find(t => t.id === trackId);
         
         const currentIsLiked = track?.is_liked || false;
-        const { is_liked } = await toggleLikeTrack(trackId, currentIsLiked);
+        const likeResponse = await toggleLikeTrack(trackId, currentIsLiked);
+        const is_liked = likeResponse.is_liked ?? !currentIsLiked;
 
         // Отправляем feedback лайка для обогащения персонального вектора вкусов
         if (is_liked) {

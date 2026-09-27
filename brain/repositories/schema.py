@@ -1,5 +1,6 @@
 """Schema bootstrap: tables, indexes, migrations, default admin seeding."""
 import os
+import re
 
 try:
     from security import hash_password
@@ -49,17 +50,76 @@ def apply_migrations(conn):
                         script = f.read()
                     statements = [s.strip() for s in script.split(";") if s.strip()]
                     for stmt in statements:
+                        alter_match = re.match(r"^ALTER\s+TABLE\s+([^\s]+)\s+ADD(?:\s+COLUMN)?\s+([^\s(]+)", stmt, re.IGNORECASE)
+                        if alter_match:
+                            tbl, col = alter_match.group(1), alter_match.group(2)
+                            cursor.execute(f"PRAGMA table_info({tbl});")
+                            cols = {
+                                row["name"].lower() if isinstance(row, dict) or hasattr(row, "keys") else row[1].lower()
+                                for row in cursor.fetchall()
+                            }
+                            if col.lower() in cols:
+                                continue
+                        drop_match = re.match(r"^ALTER\s+TABLE\s+([^\s]+)\s+DROP(?:\s+COLUMN)?\s+([^\s(]+)", stmt, re.IGNORECASE)
+                        if drop_match:
+                            tbl, col = drop_match.group(1), drop_match.group(2)
+                            cursor.execute(f"PRAGMA table_info({tbl});")
+                            cols = {
+                                row["name"].lower() if isinstance(row, dict) or hasattr(row, "keys") else row[1].lower()
+                                for row in cursor.fetchall()
+                            }
+                            if col.lower() not in cols:
+                                continue
                         try:
                             cursor.execute(stmt)
                         except Exception as oe:
                             msg = str(oe).lower()
-                            if "duplicate column name" in msg or "no such column" in msg:
+                            if "duplicate column name" in msg or "already exists" in msg:
                                 continue
                             raise
                     cursor.execute("INSERT INTO schema_migrations (version, filename) VALUES (?, ?)", (version, sql_file))
                     conn.commit()
                 except Exception as e:
-                    print(f"[DB Migration] Warning applying {sql_file}: {e}")
+                    conn.rollback()
+                    print(f"[DB Migration] Fatal error applying {sql_file}: {e}")
+                    raise
+
+
+def verify_and_repair_schema(cursor):
+    """
+    Гарантирует полноту схемы даже для нестандартных legacy-баз,
+    где миграция могла быть частично применена или преждевременно
+    отмечена в schema_migrations.
+    """
+    # 1. Поля loudness в tracks
+    _ensure_columns(cursor, "tracks", {
+        "loudness_lufs": "REAL",
+        "true_peak_db": "REAL",
+        "normalization_gain_db": "REAL",
+        "loudness_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "loudness_analyzed_at": "TEXT",
+        "loudness_analysis_version": "TEXT",
+        "loudness_file_size": "INTEGER",
+        "loudness_file_mtime_ns": "INTEGER",
+        "loudness_error": "TEXT",
+        "loudness_retry_count": "INTEGER DEFAULT 0"
+    })
+
+    # 2. Поля альбомов
+    _ensure_columns(cursor, "albums", {
+        "album_artist": "TEXT",
+        "year": "TEXT",
+        "title_normalized": "TEXT",
+        "album_artist_normalized": "TEXT",
+        "created_at": "TIMESTAMP",
+        "updated_at": "TIMESTAMP"
+    })
+
+    # 3. Индексы
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_loudness_status ON tracks(loudness_status);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_title ON albums(title_normalized);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_artist ON albums(album_artist_normalized);")
+
 
 
 def _ensure_playlist_track_positions(cursor):
@@ -113,7 +173,7 @@ def init_db():
     );
     """)
 
-    # 3. Таблица альбомов
+    # 3. Таблица альбомов (identity = (title_normalized, album_artist_normalized) расширяется миграцией 008)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS albums (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,6 +200,7 @@ def init_db():
 
     # Проверяем колонки в tracks на случай обновления старой схемы
     _ensure_columns(cursor, "tracks", {
+        "artist": "TEXT",
         "lyrics": "TEXT",
         "cover_color": "TEXT",
         "added_by_user_id": "INTEGER REFERENCES users(id) ON DELETE SET NULL",
@@ -316,9 +377,18 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_codes_code ON auth_codes(code);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_wave_feedback_user ON user_wave_feedback(user_id, created_at DESC);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_wave_feedback_track ON user_wave_feedback(track_id);")
-
     # Применение SQL-миграций
     apply_migrations(conn)
+
+    # Верификация полноты схемы (гарантия отсутствия частично примененных миграций)
+    verify_and_repair_schema(cursor)
+
+    # Миграция 008: нормализация идентичности альбомов + уникальный индекс.
+    try:
+        from repositories.albums import backfill_album_identities
+        backfill_album_identities()
+    except Exception as e:
+        print(f"[DB Migration] Warning during album identity backfill: {e}")
 
     # 11. Миграция дефолтного администратора
     cursor.execute("SELECT id FROM users WHERE id = 1 OR username = 'admin'")

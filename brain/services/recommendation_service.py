@@ -489,6 +489,10 @@ def build_wave_track_payload(pick, base_url: str, fav_ids: set[str], include_alb
         "coverArt": f"{base_url}/api/cover/{track_id}",
         "cover_color": cover_color,
         "is_liked": track_id in fav_ids,
+        "normalization_gain_db": db_track.get("normalization_gain_db") if db_track else pick.payload.get("normalization_gain_db"),
+        "loudness_status": (db_track.get("loudness_status") if db_track else pick.payload.get("loudness_status")) or "pending",
+        "loudness_lufs": db_track.get("loudness_lufs") if db_track else pick.payload.get("loudness_lufs"),
+        "true_peak_db": db_track.get("true_peak_db") if db_track else pick.payload.get("true_peak_db"),
         "score": round(pick.score, 3),
     }
     if include_album:

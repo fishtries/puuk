@@ -3,7 +3,20 @@ import { AudioEngineEventMap, PlaybackStatus } from '../types/player';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Listener<T> = (data: T) => void;
 
+export interface AudioLoadOptions {
+  autoplay?: boolean;
+  normalizationGainDb?: number;
+}
+
+export const MIN_NORMALIZATION_GAIN_DB = -12.0;
+export const MAX_NORMALIZATION_GAIN_DB = 12.0;
+export const MAX_EFFECTIVE_GAIN = Math.pow(10, MAX_NORMALIZATION_GAIN_DB / 20); // ~3.98107
+
 export class AudioEngine {
+  public static readonly MIN_GAIN_DB = MIN_NORMALIZATION_GAIN_DB;
+  public static readonly MAX_GAIN_DB = MAX_NORMALIZATION_GAIN_DB;
+  public static readonly MAX_GAIN_LINEAR = MAX_EFFECTIVE_GAIN;
+
   private static instance: AudioEngine | null = null;
   private audio: HTMLAudioElement;
   private audioContext: AudioContext | null = null;
@@ -13,6 +26,9 @@ export class AudioEngine {
   private isInitialized = false;
   private status: PlaybackStatus = 'idle';
   private rafId: number | null = null;
+  private userVolume = 1;
+  private normalizationGainDb = 0;
+  private isMuted = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private listeners: Map<keyof AudioEngineEventMap, Set<Listener<any>>> = new Map();
 
@@ -48,6 +64,7 @@ export class AudioEngine {
       this.analyserNode.connect(this.audioContext.destination);
 
       this.isInitialized = true;
+      this.applyEffectiveGain(false);
     } catch (e) {
       console.warn('Web Audio API init deferred:', e);
     }
@@ -123,11 +140,81 @@ export class AudioEngine {
     }
   }
 
-  public async load(url: string, autoplay = true): Promise<void> {
+  public static clampGainDb(gainDb: number): number {
+    if (isNaN(gainDb) || !isFinite(gainDb)) return 0;
+    return Math.max(MIN_NORMALIZATION_GAIN_DB, Math.min(MAX_NORMALIZATION_GAIN_DB, gainDb));
+  }
+
+  public static dbToLinear(gainDb: number): number {
+    if (isNaN(gainDb) || !isFinite(gainDb)) return 1.0;
+    const clamped = AudioEngine.clampGainDb(gainDb);
+    return Math.pow(10, clamped / 20);
+  }
+
+  public getEffectiveGain(): number {
+    if (this.isMuted) return 0;
+    const normLinear = AudioEngine.dbToLinear(this.normalizationGainDb);
+    const raw = this.userVolume * normLinear;
+    return Math.max(0, Math.min(MAX_EFFECTIVE_GAIN, raw));
+  }
+
+  public setUserVolume(val: number): void {
+    const clamped = Math.max(0, Math.min(1, isNaN(val) ? 1 : val));
+    this.userVolume = clamped;
+    this.applyEffectiveGain();
+  }
+
+  public setNormalizationGainDb(gainDb: number, smooth = true): void {
+    this.normalizationGainDb = AudioEngine.clampGainDb(gainDb);
+    this.applyEffectiveGain(smooth);
+  }
+
+  public setMuted(muted: boolean): void {
+    this.isMuted = muted;
+    this.applyEffectiveGain();
+  }
+
+  public getUserVolume(): number {
+    return this.userVolume;
+  }
+
+  public getNormalizationGainDb(): number {
+    return this.normalizationGainDb;
+  }
+
+  public applyEffectiveGain(smooth = true): void {
+    const effectiveGain = this.getEffectiveGain();
+
+    if (this.isInitialized && this.gainNode && this.audioContext) {
+      this.audio.volume = 1;
+      const currentTime = this.audioContext.currentTime;
+      this.gainNode.gain.cancelScheduledValues(currentTime);
+
+      if (smooth) {
+        this.gainNode.gain.setTargetAtTime(effectiveGain, currentTime, 0.06);
+      } else {
+        this.gainNode.gain.setValueAtTime(effectiveGain, currentTime);
+      }
+    } else {
+      this.audio.volume = Math.max(0, Math.min(1, effectiveGain));
+    }
+  }
+
+  public async load(
+    url: string,
+    options: boolean | AudioLoadOptions = true
+  ): Promise<void> {
+    const autoplay = typeof options === 'boolean' ? options : (options.autoplay ?? true);
+    if (typeof options === 'object' && options.normalizationGainDb !== undefined) {
+      this.normalizationGainDb = AudioEngine.clampGainDb(options.normalizationGainDb);
+    }
+
     this.initAudioContext();
     if (this.audioContext?.state === 'suspended') {
       await this.audioContext.resume();
     }
+
+    this.applyEffectiveGain(true);
 
     this.setStatus('loading');
     this.audio.src = url;
@@ -166,11 +253,7 @@ export class AudioEngine {
   }
 
   public setVolume(val: number): void {
-    const clamped = Math.max(0, Math.min(1, val));
-    this.audio.volume = clamped;
-    if (this.gainNode) {
-      this.gainNode.gain.setValueAtTime(clamped, this.audioContext?.currentTime || 0);
-    }
+    this.setUserVolume(val);
   }
 
   public getCurrentTime(): number {

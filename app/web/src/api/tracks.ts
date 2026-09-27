@@ -1,6 +1,9 @@
 import { apiClient } from './client.ts';
 import type {
   Album,
+  AlbumDetail,
+  AlbumEditPayloadDTO,
+  AlbumEditResult,
   Playlist,
   SearchResults,
   Track,
@@ -43,8 +46,18 @@ export async function fetchAlbums(): Promise<Album[]> {
   return apiClient<Album[]>('/api/albums');
 }
 
-export async function fetchAlbumTracks(albumId: string): Promise<Track[]> {
-  return apiClient<Track[]>(`/api/albums/${albumId}`);
+export async function fetchAlbumDetail(albumId: string): Promise<AlbumDetail> {
+  return apiClient<AlbumDetail>(`/api/albums/${albumId}`);
+}
+
+export async function updateAlbum(
+  albumId: string | number,
+  payload: AlbumEditPayloadDTO
+): Promise<AlbumEditResult> {
+  return apiClient<AlbumEditResult>(`/api/albums/${albumId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function fetchPlaylists(): Promise<Playlist[]> {
