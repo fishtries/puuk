@@ -1,5 +1,5 @@
 // Styles for LoginModal (extracted from the original 739-line file).
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Platform } from 'react-native';
 
 const styles = StyleSheet.create({
   overlay: {
@@ -297,3 +297,5 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 });
+
+export default styles;

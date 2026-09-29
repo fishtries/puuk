@@ -16,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import CoverImage from './CoverImage';
 import { authFetch, SERVER_URL } from '../utils/api';
 import { getSettings, addSettingsListener } from '../utils/settings';
+import styles from './trackEditScreenStyles';
 
 export default function TrackEditScreen({ route, navigation }) {
   const { track } = route.params;
@@ -506,4 +507,3 @@ export default function TrackEditScreen({ route, navigation }) {
     </KeyboardAvoidingView>
   );
 }
-import styles from './trackEditScreenStyles';

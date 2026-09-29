@@ -23,6 +23,7 @@ import {
   addSettingsListener,
   t,
 } from '../utils/settings';
+import styles from './loginModalStyles';
 
 const ACCENT_COLORS = [
   { id: 'peach', hex: '#FFDAB9', name: 'Peach' },
@@ -444,4 +445,3 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
     </Modal>
   );
 }
-import styles from './loginModalStyles';
