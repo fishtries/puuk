@@ -69,6 +69,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Patch expo-modules-jsi for Swift 6.2 / Xcode 26
+        run: |
+          echo "--- Applying expo-modules-jsi Swift 6.2 patch ---"
+          node scripts/patch-expo-jsi.js
+
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
@@ -207,6 +212,7 @@ jobs:
           echo "COMMIT=$GITHUB_SHA" >> "$STATUS_DIR/STATUS.txt"
 
           if [ -f build/xcodebuild-archive.log ]; then
+            grep -n -C 2 -E 'error:|fatal error:|Build ExpoModulesJSI' build/xcodebuild-archive.log > "$STATUS_DIR/errors.txt" || true
             tail -n 300 build/xcodebuild-archive.log > "$STATUS_DIR/tail-log.txt"
           fi
 
