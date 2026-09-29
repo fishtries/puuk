@@ -86,6 +86,7 @@ jobs:
             xcodebuild -list -workspace "$WORKSPACE"
             exit 1
           fi
+          set +e
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$APP_SCHEME" \
@@ -94,11 +95,20 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/Puuk.xcarchive \
             -derivedDataPath build/DerivedData \
+            -jobs 1 \
+            -showBuildTimingSummary \
             archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee build/xcodebuild-archive.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            echo "--- ExpoModulesJSI diagnostics ---" >&2
+            grep -n -E 'ExpoModulesJSI|(^|[[:space:]])error:|fatal error:' build/xcodebuild-archive.log | tail -n 200 >&2 || true
+            exit "$STATUS"
+          fi
 
       - name: Verify unsigned .app
         run: |
@@ -130,6 +140,7 @@ jobs:
           path: |
             app/ios/puuk-ios/build/Puuk-unsigned.ipa
             app/ios/puuk-ios/build/Puuk-unsigned.ipa.sha256
+            app/ios/puuk-ios/build/xcodebuild-archive.log
           retention-days: 7
           if-no-files-found: error
 
