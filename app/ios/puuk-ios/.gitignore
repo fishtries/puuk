@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# unsigned IPA build artifacts
+build/
+*.ipa
+Payload/

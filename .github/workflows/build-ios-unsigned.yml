@@ -1,0 +1,130 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-unsigned
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-14
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: app/ios/puuk-ios
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/ios/puuk-ios/package-lock.json
+
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Ensure CocoaPods
+        run: |
+          if ! command -v pod >/dev/null 2>&1; then
+            sudo gem install cocoapods --no-document
+          fi
+          pod --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install --non-interactive
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Inspect Xcode project
+        run: |
+          ls -la ios
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "ERROR: no .xcworkspace found under ios/" >&2
+            exit 1
+          fi
+          xcodebuild -list -workspace "$WORKSPACE"
+
+      - name: Build unsigned archive
+        run: |
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
+          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | sed -n '/Schemes:/,$p' | sed -n '2p' | xargs)"
+          echo "Building workspace: $WORKSPACE, scheme: $SCHEME"
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: no scheme discovered" >&2
+            exit 1
+          fi
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath build/Puuk.xcarchive \
+            -derivedDataPath build/DerivedData \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Verify unsigned .app
+        run: |
+          APP_PATH="$(find build/Puuk.xcarchive/Products -maxdepth 3 -name '*.app' -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: no .app found in archive" >&2
+            find build/Puuk.xcarchive -maxdepth 4 || true
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          file "$APP_PATH/$(basename "$APP_PATH" .app)"
+          echo "--- codesign info (unsigned is expected) ---"
+          codesign -dv --verbose=4 "$APP_PATH" 2>&1 || echo "App has no valid Apple signature, as expected"
+
+      - name: Package IPA
+        run: |
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/Puuk.app
+          cd build
+          zip -r -y -q Puuk-unsigned.ipa Payload
+          shasum -a 256 Puuk-unsigned.ipa > Puuk-unsigned.ipa.sha256
+          unzip -l Puuk-unsigned.ipa | head -n 20
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: puuk-ios-unsigned-ipa
+          path: |
+            app/ios/puuk-ios/build/Puuk-unsigned.ipa
+            app/ios/puuk-ios/build/Puuk-unsigned.ipa.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Unsigned IPA created successfully"
+            echo ""
+            echo "1. Download the artifact \`puuk-ios-unsigned-ipa\` from this run."
+            echo "2. Open the .ipa in Sideloadly, sign with your Apple ID, install on iPhone."
+          } >> "$GITHUB_STEP_SUMMARY"
