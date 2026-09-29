@@ -103,11 +103,20 @@ export default function usePlayerController({ setTracks }) {
     // Экран блокировки, Пункт управления и Dynamic Island iOS
     try {
       if (typeof player.setActiveForLockScreen === 'function') {
-        player.setActiveForLockScreen(true, {
-          title: track.title || 'Unknown Track',
-          artist: track.artist || 'Unknown Artist',
-          artworkUrl: track.coverArt,
-        });
+        player.setActiveForLockScreen(
+          true,
+          {
+            title: track.title || 'Unknown Track',
+            artist: track.artist || 'Unknown Artist',
+            albumTitle: track.album || 'Puuk',
+            artworkUrl: track.coverArt,
+          },
+          {
+            isLiveStream: false,
+            showSeekForward: true,
+            showSeekBackward: true,
+          }
+        );
       }
     } catch (err) {
       console.warn('Failed to set lock screen controls:', err);
