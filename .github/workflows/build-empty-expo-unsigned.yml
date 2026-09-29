@@ -1,0 +1,220 @@
+name: Build Empty Expo Unsigned IPA
+
+on:
+  push:
+    paths:
+      - 'empty-expo/**'
+      - '.github/workflows/build-empty-expo-unsigned.yml'
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build Configuration (Release or Debug)'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-empty-expo-unsigned
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: empty-expo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: empty-expo/package-lock.json
+
+      - name: Select Xcode and inspect environment
+        run: |
+          echo "Available Xcode installations:"
+          ls -d /Applications/Xcode*.app || true
+
+          if [ -d "/Applications/Xcode_26.2.app" ]; then
+            echo "Selecting Xcode 26.2"
+            sudo xcode-select -s "/Applications/Xcode_26.2.app"
+          elif [ -d "/Applications/Xcode.app" ]; then
+            echo "Selecting default Xcode.app"
+            sudo xcode-select -s "/Applications/Xcode.app"
+          fi
+
+          xcodebuild -version
+          swiftc --version
+
+      - name: Ensure CocoaPods
+        run: |
+          if ! command -v pod >/dev/null 2>&1; then
+            sudo gem install cocoapods --no-document
+          fi
+          pod --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install --non-interactive
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Inspect Xcode project
+        run: |
+          ls -la ios
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "ERROR: no .xcworkspace found under ios/" >&2
+            exit 1
+          fi
+          echo "Found workspace: $WORKSPACE"
+          xcodebuild -list -workspace "$WORKSPACE"
+          APP_SCHEME="EmptyExpo"
+          echo "Target scheme: $APP_SCHEME"
+
+      - name: Build unsigned archive
+        run: |
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
+          APP_SCHEME="EmptyExpo"
+          CONFIG="${{ inputs.configuration || 'Release' }}"
+          echo "Building workspace: $WORKSPACE, application scheme: $APP_SCHEME, configuration: $CONFIG"
+
+          ARCHIVE_LOG="$GITHUB_WORKSPACE/empty-expo/build/xcodebuild-archive.log"
+          mkdir -p "$(dirname "$ARCHIVE_LOG")"
+
+          set +e
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$APP_SCHEME" \
+            -configuration "$CONFIG" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath build/EmptyExpo.xcarchive \
+            -derivedDataPath build/DerivedData \
+            -jobs 2 \
+            -showBuildTimingSummary \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee "$ARCHIVE_LOG"
+          STATUS=${PIPESTATUS[0]}
+
+          if [ "$STATUS" -ne 0 ] && [ "$CONFIG" = "Release" ]; then
+            echo "::warning::Release build failed with status $STATUS. Retrying with Debug configuration..."
+            CONFIG="Debug"
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$APP_SCHEME" \
+              -configuration "$CONFIG" \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -archivePath build/EmptyExpo.xcarchive \
+              -derivedDataPath build/DerivedData \
+              -jobs 2 \
+              -showBuildTimingSummary \
+              archive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              2>&1 | tee "$ARCHIVE_LOG"
+            STATUS=${PIPESTATUS[0]}
+          fi
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: xcodebuild archive failed with status $STATUS" >&2
+            echo "--- Last 200 lines of archive log ---" >&2
+            tail -n 200 "$ARCHIVE_LOG" >&2
+            exit "$STATUS"
+          fi
+          echo "Archive completed successfully."
+
+      - name: Verify unsigned .app
+        run: |
+          APP_PATH="$(find build/EmptyExpo.xcarchive/Products -maxdepth 3 -name '*.app' -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: no .app found in archive" >&2
+            find build/EmptyExpo.xcarchive -maxdepth 4 || true
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          file "$APP_PATH/$(basename "$APP_PATH" .app)"
+          echo "--- codesign info ---"
+          codesign -dv --verbose=4 "$APP_PATH" 2>&1 || echo "App is unsigned, as expected"
+
+      - name: Package IPA
+        run: |
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/EmptyExpo.app
+          cd build
+          zip -r -y -q EmptyExpo-unsigned.ipa Payload
+          shasum -a 256 EmptyExpo-unsigned.ipa > EmptyExpo-unsigned.ipa.sha256
+          unzip -l EmptyExpo-unsigned.ipa | head -n 30
+          ls -lh EmptyExpo-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: empty-expo-unsigned-ipa
+          path: |
+            empty-expo/build/EmptyExpo-unsigned.ipa
+            empty-expo/build/EmptyExpo-unsigned.ipa.sha256
+            empty-expo/build/xcodebuild-archive.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Publish build status to ci-status branch
+        if: always()
+        run: |
+          STATUS_DIR="$RUNNER_TEMP/ci-status"
+          rm -rf "$STATUS_DIR"
+          mkdir -p "$STATUS_DIR"
+
+          if [ -f build/EmptyExpo-unsigned.ipa ]; then
+            echo "STATUS=SUCCESS" > "$STATUS_DIR/STATUS.txt"
+            echo "IPA_SIZE=$(ls -lh build/EmptyExpo-unsigned.ipa | awk '{print $5}')" >> "$STATUS_DIR/STATUS.txt"
+            echo -n "SHA256=" >> "$STATUS_DIR/STATUS.txt"
+            cat build/EmptyExpo-unsigned.ipa.sha256 >> "$STATUS_DIR/STATUS.txt"
+          else
+            echo "STATUS=FAILED" > "$STATUS_DIR/STATUS.txt"
+          fi
+
+          echo "JOB_STATUS=${{ job.status }}" >> "$STATUS_DIR/STATUS.txt"
+          echo "RUN_ID=$GITHUB_RUN_ID" >> "$STATUS_DIR/STATUS.txt"
+          echo "RUN_NUMBER=$GITHUB_RUN_NUMBER" >> "$STATUS_DIR/STATUS.txt"
+          echo "COMMIT=$GITHUB_SHA" >> "$STATUS_DIR/STATUS.txt"
+
+          if [ -f build/xcodebuild-archive.log ]; then
+            tail -n 300 build/xcodebuild-archive.log > "$STATUS_DIR/tail-log.txt"
+          fi
+
+          cd "$STATUS_DIR"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b ci/empty-expo-status
+          git add .
+          git commit -m "ci(empty-expo): build status for run $GITHUB_RUN_ID ($GITHUB_RUN_NUMBER) [skip ci]"
+          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY.git" ci/empty-expo-status || echo "Could not push status branch (GITHUB_TOKEN permissions restriction)"
