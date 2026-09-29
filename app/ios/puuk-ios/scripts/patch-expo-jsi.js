@@ -34,13 +34,12 @@ for (const filePath of walk(jsiRoot)) {
     // pointers are valid only for this synchronous callback, as documented in
     // JavaScriptRuntime.swift; explicit capture lists preserve that lifetime
     // while avoiding the false-positive sending diagnostic.
+    //
+    // Pattern: resultPtr.pointee = JavaScriptActor.assumeIsolated {
+    // Replace with capture list: { [thisPtr, argumentsPtr] in
     .replace(
-      'resultPtr.pointee = JavaScriptActor.assumeIsolated {\n        return forwardingSwiftErrorsToJS(runtime: runtime) {',
-      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in\n        return forwardingSwiftErrorsToJS(runtime: runtime) {',
-    )
-    .replace(
-      'resultPtr.pointee = JavaScriptActor.assumeIsolated {\n        return forwardingSwiftErrorsToJS(runtime: runtime) {\n          let arguments = JavaScriptValuesBuffer(runtime, start: argumentsPtr, count: argumentsCount)\n          let thisValue = JavaScriptUnownedValue(runtime.pointee, thisPtr)',
-      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in\n        return forwardingSwiftErrorsToJS(runtime: runtime) {\n          let arguments = JavaScriptValuesBuffer(runtime, start: argumentsPtr, count: argumentsCount)\n          let thisValue = JavaScriptUnownedValue(runtime.pointee, thisPtr)',
+      /resultPtr\.pointee = JavaScriptActor\.assumeIsolated \{(?!\s*\[)/g,
+      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in',
     );
 
   if (filePath.endsWith(`${path.sep}apple${path.sep}Package.swift`)) {

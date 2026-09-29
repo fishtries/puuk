@@ -67,6 +67,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify expo-modules-jsi patch
+        run: |
+          echo "--- Checking if patch was applied ---"
+          RUNTIME_SWIFT="node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift"
+          if ! grep -q "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT"; then
+            echo "ERROR: expo-modules-jsi patch did not apply!" >&2
+            echo "Line 770:" >&2
+            sed -n '770p' "$RUNTIME_SWIFT" >&2
+            echo "Line 813:" >&2
+            sed -n '813p' "$RUNTIME_SWIFT" >&2
+            exit 1
+          fi
+          echo "✓ Patch applied successfully"
+          grep -n "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT" | head -3
+
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
