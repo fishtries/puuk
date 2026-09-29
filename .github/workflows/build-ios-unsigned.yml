@@ -82,6 +82,13 @@ jobs:
           echo "✓ Patch applied successfully"
           grep -n "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT" | head -3
 
+      - name: Invalidate SPM cache for patched ExpoModulesJSI
+        run: |
+          echo "--- Clearing SPM build cache to force rebuild with patched sources ---"
+          JSI_ROOT="node_modules/expo-modules-jsi/apple"
+          rm -rf "$JSI_ROOT/.DerivedData" "$JSI_ROOT/.build" "$JSI_ROOT/.xcframework-slices"
+          echo "✓ SPM cache cleared"
+
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
