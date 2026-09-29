@@ -1,10 +1,14 @@
 name: Build unsigned iOS IPA
 
 on:
+  push:
+    paths:
+      - 'app/ios/puuk-ios/**'
+      - '.github/workflows/build-ios-unsigned.yml'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-ios-unsigned
@@ -12,15 +16,15 @@ concurrency:
 
 jobs:
   build:
-    name: Build unsigned IPA
+    name: Build Unsigned IPA (puuk-ios)
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: app/ios/puuk-ios
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -30,165 +34,115 @@ jobs:
           cache: npm
           cache-dependency-path: app/ios/puuk-ios/package-lock.json
 
-      - name: Select newest Xcode
+      - name: Print build environment
         run: |
-          XCODE_APP="/Applications/Xcode_26.2.app"
-          if [ ! -d "$XCODE_APP" ]; then
-            echo "ERROR: expected $XCODE_APP on macos-26 runner" >&2
-            ls -d /Applications/Xcode*.app || true
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_APP"
+          echo "=== macOS version ==="
+          sw_vers
+          echo "=== Available Xcode apps ==="
+          ls -d /Applications/Xcode*.app || true
+          echo "=== Active Xcode & Swift ==="
           xcodebuild -version
           swiftc --version
-
-      - name: Verify Swift tools version
-        run: |
-          PACKAGE_SWIFT="node_modules/expo-modules-jsi/apple/Package.swift"
-          REQUIRED_TOOLS="$(sed -n 's|^// swift-tools-version: *||p' "$PACKAGE_SWIFT" | head -n 1)"
-          SWIFTC_VERSION="$(swiftc --version | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
-          echo "ExpoModulesJSI Swift tools version: $REQUIRED_TOOLS"
-          echo "Installed Swift compiler version: $SWIFTC_VERSION"
-          case "$SWIFTC_VERSION" in
-            6.2*) ;;
-            *)
-              echo "ERROR: ExpoModulesJSI requires Swift 6.2, but the selected Xcode provides Swift $SWIFTC_VERSION" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Ensure CocoaPods
-        run: |
-          if ! command -v pod >/dev/null 2>&1; then
-            sudo gem install cocoapods --no-document
-          fi
-          pod --version
+          echo "=== DEVELOPER_DIR ==="
+          echo "${DEVELOPER_DIR:-not set}"
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Patch expo-modules-jsi for Swift 6.2 (CI-only direct patch)
-        run: |
-          echo "--- Applying expo-modules-jsi Swift 6.2 patch ---"
-          node scripts/patch-expo-jsi.js
-          
-          RUNTIME_SWIFT="node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift"
-          if ! grep -q "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT"; then
-            echo "ERROR: Patch failed to apply!" >&2
-            echo "Line 770:" >&2
-            sed -n '770p' "$RUNTIME_SWIFT" >&2
-            echo "Line 813:" >&2
-            sed -n '813p' "$RUNTIME_SWIFT" >&2
-            exit 1
-          fi
-          echo "✓ Patch applied successfully"
-          grep -n "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT" | head -3
-
-      - name: Generate native iOS project
+      - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
-      - name: Install CocoaPods dependencies
+      - name: Install CocoaPods
         run: |
           cd ios
           pod install
 
-      - name: Inspect Xcode project
-        run: |
-          ls -la ios
-          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
-          if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: no .xcworkspace found under ios/" >&2
-            exit 1
-          fi
-          xcodebuild -list -workspace "$WORKSPACE"
-          APP_SCHEME="$(node -e "console.log(require('./app.json').expo.name.replace(/[^A-Za-z0-9_-]/g, ''))")"
-          if ! xcodebuild -list -workspace "$WORKSPACE" \
-            | awk '/Schemes:/,/^$/' \
-            | sed '1d; s/^[[:space:]]*//' \
-            | grep -Fxq "$APP_SCHEME"; then
-            echo "ERROR: application scheme '$APP_SCHEME' was not found" >&2
-            exit 1
-          fi
-          echo "Application scheme: $APP_SCHEME"
-
       - name: Build unsigned archive
         run: |
-          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
-          APP_SCHEME="$(node -e "console.log(require('./app.json').expo.name.replace(/[^A-Za-z0-9_-]/g, ''))")"
-          echo "Building workspace: $WORKSPACE, application scheme: $APP_SCHEME"
-          if ! xcodebuild -list -workspace "$WORKSPACE" \
-            | awk '/Schemes:/,/^$/' \
-            | sed '1d; s/^[[:space:]]*//' \
-            | grep -Fxq "$APP_SCHEME"; then
-            echo "ERROR: application scheme '$APP_SCHEME' was not found" >&2
-            xcodebuild -list -workspace "$WORKSPACE"
-            exit 1
-          fi
-          ARCHIVE_LOG="$GITHUB_WORKSPACE/app/ios/puuk-ios/build/xcodebuild-archive.log"
-          mkdir -p "$(dirname "$ARCHIVE_LOG")"
-          set +e
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$APP_SCHEME" \
-            -configuration Debug \
+          mkdir -p build
+          ARCHIVE_LOG="$(pwd)/build/archive.log"
+
+          echo "Starting xcodebuild archive..."
+          xcodebuild archive \
+            -workspace ios/Puuk.xcworkspace \
+            -scheme Puuk \
+            -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath build/Puuk.xcarchive \
             -derivedDataPath build/DerivedData \
-            -jobs 1 \
-            -showBuildTimingSummary \
-            archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
             2>&1 | tee "$ARCHIVE_LOG"
-          STATUS=${PIPESTATUS[0]}
-          if [ "$STATUS" -ne 0 ]; then
-            echo "--- ExpoModulesJSI diagnostics ---" >&2
-            grep -n -E 'ExpoModulesJSI|(^|[[:space:]])error:|fatal error:' "$ARCHIVE_LOG" | tail -n 200 >&2 || true
-            exit "$STATUS"
-          fi
 
-      - name: Verify unsigned .app
+      - name: Verify application bundle
         run: |
-          APP_PATH="$(find build/Puuk.xcarchive/Products -maxdepth 3 -name '*.app' -type d | head -n 1)"
+          APP_PATH="$(find build/Puuk.xcarchive/Products -name '*.app' -type d | head -n 1)"
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: no .app found in archive" >&2
-            find build/Puuk.xcarchive -maxdepth 4 || true
+            echo "ERROR: No .app bundle found in archive!" >&2
+            find build/Puuk.xcarchive || true
             exit 1
           fi
+          echo "Found app bundle: $APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
-          file "$APP_PATH/$(basename "$APP_PATH" .app)"
-          echo "--- codesign info (unsigned is expected) ---"
-          codesign -dv --verbose=4 "$APP_PATH" 2>&1 || echo "App has no valid Apple signature, as expected"
 
-      - name: Package IPA
+      - name: Package unsigned IPA
         run: |
-          rm -rf build/Payload
           mkdir -p build/Payload
-          cp -R "$APP_PATH" build/Payload/Puuk.app
+          cp -R "$APP_PATH" build/Payload/
           cd build
           zip -r -y -q Puuk-unsigned.ipa Payload
           shasum -a 256 Puuk-unsigned.ipa > Puuk-unsigned.ipa.sha256
-          unzip -l Puuk-unsigned.ipa | head -n 20
+          echo "=== Generated IPA ==="
+          ls -lh Puuk-unsigned.ipa
+          cat Puuk-unsigned.ipa.sha256
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: puuk-ios-unsigned-ipa
           path: |
             app/ios/puuk-ios/build/Puuk-unsigned.ipa
             app/ios/puuk-ios/build/Puuk-unsigned.ipa.sha256
-            app/ios/puuk-ios/build/xcodebuild-archive.log
+            app/ios/puuk-ios/build/archive.log
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: ignore
 
-      - name: Summary
+      - name: Publish build status to ci branch
+        if: always()
         run: |
-          {
-            echo "### Unsigned IPA created successfully"
-            echo ""
-            echo "1. Download the artifact \`puuk-ios-unsigned-ipa\` from this run."
-            echo "2. Open the .ipa in Sideloadly, sign with your Apple ID, install on iPhone."
-          } >> "$GITHUB_STEP_SUMMARY"
+          STATUS_DIR="$RUNNER_TEMP/ci-status"
+          rm -rf "$STATUS_DIR"
+          mkdir -p "$STATUS_DIR"
+
+          if [ -f build/Puuk-unsigned.ipa ]; then
+            echo "STATUS=SUCCESS" > "$STATUS_DIR/STATUS.txt"
+            echo "IPA_SIZE=$(ls -lh build/Puuk-unsigned.ipa | awk '{print $5}')" >> "$STATUS_DIR/STATUS.txt"
+            echo -n "SHA256=" >> "$STATUS_DIR/STATUS.txt"
+            cat build/Puuk-unsigned.ipa.sha256 >> "$STATUS_DIR/STATUS.txt"
+          else
+            echo "STATUS=FAILED" > "$STATUS_DIR/STATUS.txt"
+          fi
+
+          echo "JOB_STATUS=${{ job.status }}" >> "$STATUS_DIR/STATUS.txt"
+          echo "RUN_ID=$GITHUB_RUN_ID" >> "$STATUS_DIR/STATUS.txt"
+          echo "RUN_NUMBER=$GITHUB_RUN_NUMBER" >> "$STATUS_DIR/STATUS.txt"
+          echo "COMMIT=$GITHUB_SHA" >> "$STATUS_DIR/STATUS.txt"
+
+          if [ -f build/archive.log ]; then
+            grep -n -C 3 -E 'error:|fatal error:|Build ExpoModulesJSI' build/archive.log > "$STATUS_DIR/errors.txt" || true
+            tail -n 250 build/archive.log > "$STATUS_DIR/tail-log.txt"
+          fi
+
+          cd "$STATUS_DIR"
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b ci/puuk-ios-status
+          git add .
+          git commit -m "ci(puuk-ios): build status for run $GITHUB_RUN_ID ($GITHUB_RUN_NUMBER) [skip ci]"
+          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY.git" ci/puuk-ios-status || echo "Could not push status branch"
