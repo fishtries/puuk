@@ -147,8 +147,10 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
     genre_track_count: dict[str, int] = {}
     genre_artists: dict[str, set[str]] = {}
 
+    # Один batch-SELECT на все позитивные треки вместо get_track на каждый.
+    tracks_by_id = db.get_tracks_by_ids(weights.keys())
     for track_id, weight in weights.items():
-        track = db.get_track(track_id)
+        track = tracks_by_id.get(track_id)
         if not track:
             continue
         effective = get_effective_genres(track)
@@ -182,15 +184,16 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
     return affinity
 
 
-def get_catalog_genre_affinity() -> list[GenreAffinity]:
+def get_catalog_genre_affinity(catalog: Optional[list[dict]] = None) -> list[GenreAffinity]:
     """Возвращает жанры каталога для cold-start профиля.
 
     Автоматические жанры уже являются результатом отбора треков, поэтому при
     отсутствии истории пользователя используем их как fallback вместо пустой
     главной секции. Ручные жанры без пользовательского профиля не участвуют.
     Сортировка стабильная: сначала жанры с большим каталогом.
+    catalog позволяет переиспользовать одну выгрузку на запрос.
     """
-    tracks = db.get_all_tracks()
+    tracks = catalog if catalog is not None else db.get_catalog_tracks()
     genre_track_ids: dict[str, set[str]] = {}
     genre_artists: dict[str, set[str]] = {}
     genre_names: dict[str, str] = {}
@@ -258,11 +261,16 @@ def _track_in_genre(track: dict, target_key: str) -> bool:
     return any(g.casefold() == target_key for g, _ in effective)
 
 
-def _genre_candidates(target_key: str, dislike_ids: set[str], exclude_ids: set[str]) -> list[dict]:
+def _genre_candidates(
+    target_key: str,
+    dislike_ids: set[str],
+    exclude_ids: set[str],
+    catalog: Optional[list[dict]] = None,
+) -> list[dict]:
     """SQLite-треки, чьи нормализованные жанры содержат целевой, без исключённых."""
     candidates: list[dict] = []
     seen: set[str] = set()
-    for track in db.get_all_tracks():
+    for track in (catalog if catalog is not None else db.get_catalog_tracks()):
         track_id = str(track["id"])
         if track_id in seen or track_id in dislike_ids or track_id in exclude_ids:
             continue
@@ -384,6 +392,7 @@ def generate_genre_playlist(
     limit: int = 20,
     exclude_ids: Optional[set[str]] = None,
     base_url: str = "",
+    catalog: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Персональная пачка треков одного жанра.
 
@@ -392,6 +401,7 @@ def generate_genre_playlist(
     Дозаполнение до limit всегда идёт из SQLite-порядка.
     Недавно прослушанные убираются, только если после исключения хватает
     альтернатив (>= MIN_SECTION_TRACKS), иначе возвращаются в пачку.
+    catalog позволяет переиспользовать одну выгрузку каталога на запрос.
     """
     target = normalize_genre(genre)
     if limit <= 0 or not target:
@@ -408,7 +418,7 @@ def generate_genre_playlist(
         _artist_key(a) for a in db.get_recent_artists(user_id, limit=5)
     } - {None}
 
-    candidates = _genre_candidates(target_key, dislike_ids, exclude)
+    candidates = _genre_candidates(target_key, dislike_ids, exclude, catalog=catalog)
     # Guard жанра: последняя линия защиты от треков с чужим/пустым genre.
     candidates = [t for t in candidates if _track_in_genre(t, target_key)]
     if not candidates:
@@ -465,7 +475,8 @@ def generate_genre_playlist(
         if track_id in ranked_scores:
             point = points_by_id[track_id]
             point.score = ranked_scores[track_id]
-            payloads.append(build_wave_track_payload(point, base_url, favorite_ids))
+            # Строка каталога уже загружена — без повторного db.get_track.
+            payloads.append(build_wave_track_payload(point, base_url, favorite_ids, db_track=track))
             continue
         payloads.append(
             {
@@ -490,6 +501,7 @@ def get_personalized_genre_sections(
     section_limit: int = 3,
     track_limit: int = 20,
     base_url: str = "",
+    catalog: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Секции «{Genre} for you» по топ-жанрам пользователя.
 
@@ -499,9 +511,14 @@ def get_personalized_genre_sections(
     один трек не попадает в две секции. Случайные жанры-заполнители
     не добавляются.
     """
+    # Одна выгрузка каталога (без lyrics) на весь запрос — в том числе для
+    # cold-start аффинности: иначе get_catalog_genre_affinity загрузит его
+    # повторно. Секции и пайплайн генерации переиспользуют её же.
+    catalog = catalog if catalog is not None else db.get_catalog_tracks()
+
     affinity = get_user_genre_affinity(user_id)
     if not affinity:
-        affinity = get_catalog_genre_affinity()
+        affinity = get_catalog_genre_affinity(catalog)
     dislike_ids = db.get_user_dislike_ids(user_id)
     used_track_ids: set[str] = set()
     sections: list[dict] = []
@@ -510,7 +527,7 @@ def get_personalized_genre_sections(
         if len(sections) >= max(0, section_limit):
             break
         genre = item["genre"]
-        available = _genre_candidates(genre.casefold(), dislike_ids, used_track_ids)
+        available = _genre_candidates(genre.casefold(), dislike_ids, used_track_ids, catalog=catalog)
         if len(available) < MIN_SECTION_TRACKS:
             continue
         tracks = generate_genre_playlist(
@@ -519,6 +536,7 @@ def get_personalized_genre_sections(
             limit=track_limit,
             exclude_ids=used_track_ids,
             base_url=base_url,
+            catalog=catalog,
         )
         # Достаточность жанра проверяется выше по available (>= MIN_SECTION_TRACKS).
         # Здесь отбрасываем только пустую выдачу, чтобы явный limit < 5 не ронял

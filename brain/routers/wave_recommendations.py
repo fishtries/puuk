@@ -151,4 +151,9 @@ def get_wave_queue_endpoint(
         return []
 
     fav_ids = db.get_favorite_track_ids(user_id)
-    return [build_wave_track_payload(pick, base_url, fav_ids) for pick in recommendations]
+    # Один batch-SELECT на пачку вместо db.get_track на каждый трек.
+    tracks_by_id = db.get_tracks_by_ids([str(pick.id) for pick in recommendations])
+    return [
+        build_wave_track_payload(pick, base_url, fav_ids, db_track=tracks_by_id.get(str(pick.id)))
+        for pick in recommendations
+    ]

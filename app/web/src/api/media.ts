@@ -1,12 +1,14 @@
-import { authorizedFetch, isTrustedApiOrigin } from './client';
+import { API_BASE_URL, apiClient, authorizedFetch, isTrustedApiOrigin } from './client';
 
-// Авторизованные медиа (обложки, аудио): backend отдаёт их только с Bearer JWT,
-// поэтому <img src> / audio.src получают одноразовый blob: URL, а не ссылку с токеном.
+// Обложки (небольшие файлы) качаются авторизованным fetch в blob: URL.
+// Аудио так не грузится: blob ждёт ВЕСЬ файл, и 30-минутный трек блокировал
+// переключение на десятки секунд. Аудио стримится напрямую — /api/stream/{id}
+// с короткоживущим media-тикетом (JWT, привязанный к треку, TTL 10 мин),
+// потому что <audio> не умеет отправлять Authorization-заголовок.
 const CACHE_LIMIT = 120;
 
 const objectUrlBySource = new Map<string, string>();
 const sourceByObjectUrl = new Map<string, string>();
-let currentAudioObjectUrl: string | null = null;
 
 export function resolveMediaSource(objectUrl: string): string {
   return sourceByObjectUrl.get(objectUrl) ?? objectUrl;
@@ -33,7 +35,7 @@ function rememberObjectUrl(sourceUrl: string, objectUrl: string): void {
     const oldest = objectUrlBySource.keys().next().value;
     if (oldest === undefined) break;
     const oldestObjectUrl = objectUrlBySource.get(oldest);
-    if (oldestObjectUrl !== undefined && oldestObjectUrl !== currentAudioObjectUrl) {
+    if (oldestObjectUrl !== undefined) {
       revokeObjectUrl(oldestObjectUrl);
     } else {
       break;
@@ -71,12 +73,24 @@ export async function fetchAuthorizedBlobUrl(sourceUrl: string): Promise<string>
   return objectUrl;
 }
 
-export async function fetchAuthorizedAudioUrl(streamUrl: string): Promise<string> {
-  if (currentAudioObjectUrl) {
-    revokeObjectUrl(currentAudioObjectUrl);
-    currentAudioObjectUrl = null;
+export interface MediaTicketResponse {
+  url: string;
+  expires_in: number;
+}
+
+/**
+ * Потоковый URL аудио с media-тикетом. Билет запрашивается по Bearer
+ * (обычный apiClient-вызов), сам <audio> играет прямой URL /api/stream/{id}?mt=...
+ * — браузер начинает воспроизведение на первых чанках и тянет остальное
+ * по Range, не дожидаясь полного файла.
+ */
+export async function resolveAuthorizedAudioUrl(trackId: string): Promise<string> {
+  const ticket = await apiClient<MediaTicketResponse>('/api/media-ticket', {
+    method: 'POST',
+    body: JSON.stringify({ track_id: trackId }),
+  });
+  if (!ticket?.url) {
+    throw new Error('Media ticket response has no url');
   }
-  const objectUrl = await fetchAuthorizedBlobUrl(streamUrl);
-  currentAudioObjectUrl = objectUrl;
-  return objectUrl;
+  return ticket.url.startsWith('/') ? `${API_BASE_URL}${ticket.url}` : ticket.url;
 }

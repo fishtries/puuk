@@ -12,6 +12,8 @@ export const MIN_NORMALIZATION_GAIN_DB = -12.0;
 export const MAX_NORMALIZATION_GAIN_DB = 12.0;
 export const MAX_EFFECTIVE_GAIN = Math.pow(10, MAX_NORMALIZATION_GAIN_DB / 20); // ~3.98107
 
+export type WebAudioStatus = 'idle' | 'active' | 'unavailable';
+
 export class AudioEngine {
   public static readonly MIN_GAIN_DB = MIN_NORMALIZATION_GAIN_DB;
   public static readonly MAX_GAIN_DB = MAX_NORMALIZATION_GAIN_DB;
@@ -24,6 +26,7 @@ export class AudioEngine {
   private analyserNode: AnalyserNode | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
   private isInitialized = false;
+  private webAudioStatus: WebAudioStatus = 'idle';
   private status: PlaybackStatus = 'idle';
   private rafId: number | null = null;
   private userVolume = 1;
@@ -46,27 +49,53 @@ export class AudioEngine {
     return AudioEngine.instance;
   }
 
-  private initAudioContext(): void {
-    if (this.isInitialized) return;
+  private initAudioContext(): boolean {
+    if (this.isInitialized) return true;
 
     try {
       const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioContextClass();
+      if (!AudioContextClass) throw new Error('Web Audio API is not supported');
 
-      this.gainNode = this.audioContext.createGain();
-      this.analyserNode = this.audioContext.createAnalyser();
-      this.analyserNode.fftSize = 128;
-      this.analyserNode.smoothingTimeConstant = 0.8;
-
-      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
-      this.sourceNode.connect(this.gainNode);
-      this.gainNode.connect(this.analyserNode);
-      this.analyserNode.connect(this.audioContext.destination);
+      // Частичная инициализация из прошлой попытки переиспользуется: узлы создаются
+      // только при отсутствии, а createMediaElementSource допустим ровно один раз
+      // на элемент (повторный вызов бросает InvalidStateError).
+      if (!this.audioContext) {
+        this.audioContext = new AudioContextClass();
+      }
+      if (!this.gainNode) {
+        this.gainNode = this.audioContext.createGain();
+      }
+      if (!this.analyserNode) {
+        this.analyserNode = this.audioContext.createAnalyser();
+        this.analyserNode.fftSize = 128;
+        this.analyserNode.smoothingTimeConstant = 0.8;
+      }
+      if (!this.sourceNode) {
+        this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
+        this.sourceNode.connect(this.gainNode);
+        this.gainNode.connect(this.analyserNode);
+        this.analyserNode.connect(this.audioContext.destination);
+      }
 
       this.isInitialized = true;
+      this.webAudioStatus = 'active';
       this.applyEffectiveGain(false);
+      return true;
     } catch (e) {
-      console.warn('Web Audio API init deferred:', e);
+      if (this.webAudioStatus !== 'unavailable') {
+        console.warn('Web Audio API init failed, falling back to element volume:', e);
+      }
+      this.webAudioStatus = 'unavailable';
+      return false;
+    }
+  }
+
+  private async resumeAudioContext(): Promise<void> {
+    if (!this.audioContext || this.audioContext.state !== 'suspended') return;
+    try {
+      await this.audioContext.resume();
+    } catch (e) {
+      console.warn('AudioContext resume failed:', e);
     }
   }
 
@@ -182,6 +211,19 @@ export class AudioEngine {
     return this.normalizationGainDb;
   }
 
+  public getWebAudioStatus(): WebAudioStatus {
+    return this.webAudioStatus;
+  }
+
+  /**
+   * True, когда Web Audio недоступен и треку требуется усиление (>0 dB):
+   * HTMLAudioElement.volume ограничен 1.0, поэтому boost в fallback-режиме
+   * обрезается и нормализация считается неполной.
+   */
+  public isNormalizationDegraded(): boolean {
+    return this.webAudioStatus !== 'active' && this.normalizationGainDb > 0.01;
+  }
+
   public applyEffectiveGain(smooth = true): void {
     const effectiveGain = this.getEffectiveGain();
 
@@ -210,9 +252,7 @@ export class AudioEngine {
     }
 
     this.initAudioContext();
-    if (this.audioContext?.state === 'suspended') {
-      await this.audioContext.resume();
-    }
+    await this.resumeAudioContext();
 
     this.applyEffectiveGain(true);
 
@@ -232,10 +272,25 @@ export class AudioEngine {
 
   public async play(): Promise<void> {
     this.initAudioContext();
-    if (this.audioContext?.state === 'suspended') {
-      await this.audioContext.resume();
-    }
+    await this.resumeAudioContext();
+    // Между stop() прежнего трека и load() нового источника нет: play() без
+    // src бросил бы NotSupportedError и вешал на плеер статус 'error'.
+    if (!this.audio.currentSrc) return;
     return this.audio.play();
+  }
+
+  /**
+   * Немедленное отключение звучащего источника: пауза + сброс src. Вызывается
+   * при переключении трека ДО запроса нового потока, чтобы прежняя дорожка не
+   * звучала, пока готовится новый источник. Собственных событий статуса не
+   * эмитит: store сам переводит трек в 'loading', а 'pause'-listener подавлен
+   * внутренним loading-статусом.
+   */
+  public stop(): void {
+    this.status = 'loading';
+    this.audio.pause();
+    this.audio.src = '';
+    this.stopTimeLoop();
   }
 
   public pause(): void {
@@ -306,6 +361,12 @@ export class AudioEngine {
       this.audioContext.close();
     }
     this.listeners.clear();
+    this.audioContext = null;
+    this.gainNode = null;
+    this.analyserNode = null;
+    this.sourceNode = null;
+    this.isInitialized = false;
+    this.webAudioStatus = 'idle';
     AudioEngine.instance = null;
   }
 }

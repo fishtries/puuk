@@ -75,6 +75,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     if (queueReplyOverride) return await queueReplyOverride();
     return jsonResponse(waveQueueReplies.shift() ?? []);
   }
+  if (url.includes('/api/media-ticket')) {
+    const trackId = String(body?.track_id ?? '');
+    return jsonResponse({ url: `/api/stream/${trackId}?mt=ticket-${trackId}`, expires_in: 600 });
+  }
   return jsonResponse({});
 }) as typeof fetch;
 
@@ -110,9 +114,16 @@ class FakeAudioElement {
 
   load(): void {}
   play(): Promise<void> {
+    this.paused = false;
     return Promise.resolve();
   }
-  pause(): void {}
+  pause(): void {
+    this.paused = true;
+  }
+
+  get currentSrc(): string {
+    return this.srcValue;
+  }
 
   fire(type: string): void {
     for (const listener of this.handlers.get(type) ?? []) {
@@ -160,11 +171,11 @@ function firstFeedbackBody(): Record<string, unknown> | undefined {
 }
 
 function loadedStreamIds(): string[] {
-  // Закрытый режим: аудио грузится авторизованным fetch в blob: URL,
-  // поэтому факт загрузки трека наблюдаем по сетевым запросам стрима.
-  return networkCalls
-    .filter((call) => call.method === 'GET' && call.url.includes('/api/stream/'))
-    .map((call) => decodeURIComponent(call.url.split('/api/stream/')[1].split('?')[0]));
+  // Стрим по media-тикету: файл тянет сам <audio>, поэтому факт загрузки трека
+  // наблюдаем по смене src аудио-элемента на /api/stream/{id}?mt=...
+  return audioInstance.srcLog
+    .filter((src) => src.includes('/api/stream/'))
+    .map((src) => decodeURIComponent(src.split('/api/stream/')[1].split('?')[0]));
 }
 
 function seedWave(currentTrackId: string, queueIds: string[], playedIds: string[]): void {

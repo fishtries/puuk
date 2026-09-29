@@ -6,6 +6,22 @@ import { WAVE_MAX_BUFFER_SIZE } from '../../store/waveQueue';
 import { audioEngine } from '../../engine/AudioEngine';
 import styles from './DebugOverlay.module.css';
 
+interface LoudnessSnapshot {
+  webAudio: string;
+  appliedGainDb: number;
+  effectiveGain: number;
+  degraded: boolean;
+}
+
+function readLoudnessSnapshot(): LoudnessSnapshot {
+  return {
+    webAudio: audioEngine.getWebAudioStatus(),
+    appliedGainDb: audioEngine.getNormalizationGainDb(),
+    effectiveGain: audioEngine.getEffectiveGain(),
+    degraded: audioEngine.isNormalizationDegraded(),
+  };
+}
+
 export const DebugOverlay: React.FC = () => {
   const isDebugOpen = usePlayerStore((state) => state.isDebugOpen);
   const setIsDebugOpen = usePlayerStore((state) => state.setIsDebugOpen);
@@ -22,6 +38,7 @@ export const DebugOverlay: React.FC = () => {
   const lyrics = usePlayerStore((state) => state.lyrics);
 
   const [audioContextState, setAudioContextState] = useState('unknown');
+  const [loudness, setLoudness] = useState<LoudnessSnapshot>(() => readLoudnessSnapshot());
 
   const playedSet = new Set(wavePlayedIds);
   const upcomingBufferCount = queue
@@ -30,9 +47,12 @@ export const DebugOverlay: React.FC = () => {
 
   useEffect(() => {
     if (isDebugOpen) {
-      const interval = setInterval(() => {
+      const refresh = () => {
         setAudioContextState(audioEngine.getAudioContextState());
-      }, 500);
+        setLoudness(readLoudnessSnapshot());
+      };
+      refresh();
+      const interval = setInterval(refresh, 500);
       return () => clearInterval(interval);
     }
   }, [isDebugOpen]);
@@ -130,6 +150,55 @@ export const DebugOverlay: React.FC = () => {
                 <span className={styles.statLabel}>Queue Items:</span>
                 <span className={`${styles.statValue} tabular-nums`}>
                   {queue.length}
+                </span>
+              </div>
+            </div>
+
+            <div className={styles.section}>
+              <div className={styles.sectionTitle}>
+                <Volume2 size={14} />
+                <span>Loudness Normalization</span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Web Audio:</span>
+                <span className={`${styles.statValue} ${styles.statusBadge} ${loudness.degraded ? styles.statusWarn : ''}`}>
+                  {loudness.webAudio}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Track Status:</span>
+                <span className={styles.statValue}>
+                  {currentTrack?.loudness_status ?? '—'}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Track Gain:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  {currentTrack?.normalization_gain_db != null
+                    ? `${currentTrack.normalization_gain_db.toFixed(2)} dB`
+                    : '—'}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Applied Gain:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  {loudness.appliedGainDb.toFixed(2)} dB
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Effective Gain:</span>
+                <span className={`${styles.statValue} tabular-nums`}>
+                  ×{loudness.effectiveGain.toFixed(3)}
+                </span>
+              </div>
+              <div className={styles.statsRow}>
+                <span className={styles.statLabel}>Mode:</span>
+                <span className={`${styles.statValue} ${loudness.degraded ? styles.statusWarn : ''}`}>
+                  {loudness.webAudio === 'active'
+                    ? 'GainNode (full)'
+                    : loudness.degraded
+                      ? 'Fallback: boost clipped at 100%'
+                      : 'Fallback (attenuation only)'}
                 </span>
               </div>
             </div>

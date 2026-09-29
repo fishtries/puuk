@@ -264,6 +264,10 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
         "coverArt": cover_art_url,
         "cover_version": cover_ver,
         "cover_color": db_track.get("cover_color"),
+        "normalization_gain_db": db_track.get("normalization_gain_db"),
+        "loudness_status": db_track.get("loudness_status") or "pending",
+        "loudness_lufs": db_track.get("loudness_lufs"),
+        "true_peak_db": db_track.get("true_peak_db"),
         "added_by_user_id": db_track.get("added_by_user_id")
     }
 

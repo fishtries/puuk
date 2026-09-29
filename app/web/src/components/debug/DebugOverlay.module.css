@@ -105,6 +105,11 @@
   font-weight: 700;
 }
 
+.statusWarn {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
 .footer {
   margin-top: 14px;
   padding-top: 10px;

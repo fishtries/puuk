@@ -3,10 +3,13 @@ import os
 from typing import Dict, Any, Set, Optional
 
 
-def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]] = None) -> Dict[str, Any]:
+def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]] = None, include_lyrics: bool = True) -> Dict[str, Any]:
     """
     Standardized, unified serializer for Track objects across all endpoints:
     /api/tracks, /api/albums/{id}, /api/playlists/{id}, /api/favorites, /api/history, /api/search.
+
+    include_lyrics=False для списков: плеер берёт текст из /tracks/{id}/lyrics,
+    поэтому списковым DTO килобайты LRC не нужны.
     """
     track_id = str(r.get("id") or r.get("track_id") or "")
     fav_ids = fav_ids or set()
@@ -40,7 +43,7 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "track_number": r.get("track_number"),
         "disc_number": r.get("disc_number"),
         "comment": r.get("comment"),
-        "lyrics": r.get("lyrics") or "",
+        "lyrics": (r.get("lyrics") or "") if include_lyrics else "",
         "duration": r.get("duration") or 0.0,
         "bitrate": r.get("bitrate"),
         "sample_rate": r.get("sample_rate"),

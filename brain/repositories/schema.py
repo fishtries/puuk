@@ -373,6 +373,7 @@ def init_db():
     # Индексы для быстрой фильтрации и поиска
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON user_favorites(user_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id, played_at);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_user ON user_dislikes(user_id);")

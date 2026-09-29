@@ -46,6 +46,7 @@ export default function TrackEditScreen({ route, navigation }) {
 
   // Saving state
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -229,6 +230,37 @@ export default function TrackEditScreen({ route, navigation }) {
 
   const hasCustomCover = !!(coverUrl || coverBase64);
 
+  // Delete track from library (irreversible: Qdrant vector, audio file, DB row)
+  const handleDelete = () => {
+    Alert.alert(
+      'Delete Track',
+      `«${title.trim() || track.title}» will be removed from the library together with its audio file on disk. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              const res = await authFetch(`/api/tracks/${track.id}`, { method: 'DELETE' });
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || 'Failed to delete track');
+              }
+              DeviceEventEmitter.emit('PUUK_TRACK_DELETED', { id: track.id });
+              navigation.goBack();
+            } catch (e) {
+              Alert.alert('Error', e.message);
+            } finally {
+              setIsDeleting(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container} 
@@ -240,6 +272,16 @@ export default function TrackEditScreen({ route, navigation }) {
           <Ionicons name="chevron-back" size={28} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Track</Text>
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={handleDelete}
+          disabled={isDeleting || isSaving}
+          activeOpacity={0.7}
+        >
+          {isDeleting
+            ? <ActivityIndicator size="small" color="#FF453A" />
+            : <Ionicons name="trash-outline" size={22} color="#FF453A" />}
+        </TouchableOpacity>
       </View>
 
       <ScrollView 

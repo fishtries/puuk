@@ -215,7 +215,7 @@ export const CollectionDetail: React.FC<CollectionDetailProps> = ({
         aria-label={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
         title={track.is_liked ? 'Убрать из избранного' : 'В избранное'}
       >
-        <Heart size={14} fill={track.is_liked ? 'var(--accent-color, #ff7a00)' : 'none'} />
+        <Heart size={14} fill={track.is_liked ? 'var(--accent-color)' : 'none'} />
       </button>
 
       <span className={`${styles.trackDuration} tabular-nums`}>

@@ -1,7 +1,7 @@
 """User-track interactions: favorites, listening history, dislikes."""
 import sqlite3
 
-from repositories.base import get_connection
+from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
 
 
 # --- Избранное (Favorites) ---
@@ -38,8 +38,8 @@ def is_favorite(user_id: int, track_id: str) -> bool:
 def get_user_favorites(user_id: int) -> list[dict]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT t.*, a.title AS album, uf.added_at as favorited_at
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, uf.added_at as favorited_at
         FROM tracks t
         JOIN user_favorites uf ON t.id = uf.track_id
         LEFT JOIN albums a ON a.id = t.album_id
@@ -70,8 +70,8 @@ def add_history(user_id: int, track_id: str):
 def get_user_history(user_id: int, limit: int = 50) -> list[dict]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT t.*, a.title AS album, uh.played_at
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, uh.played_at
         FROM user_history uh
         JOIN tracks t ON t.id = uh.track_id
         LEFT JOIN albums a ON a.id = t.album_id

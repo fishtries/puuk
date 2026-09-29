@@ -3,7 +3,7 @@ import json
 from typing import Optional, List, Dict, Any
 
 from repositories import albums
-from repositories.base import get_connection
+from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
 
 
 def get_all_tracks():
@@ -19,6 +19,62 @@ def get_all_tracks():
     conn.close()
     return tracks
 
+def get_tracks_page(limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    """Страница каталога для списковых эндпоинтов: без lyrics, LIMIT в SQL."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album
+        FROM tracks t
+        LEFT JOIN albums a ON a.id = t.album_id
+        ORDER BY t.title
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+    tracks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tracks
+
+def get_tracks_by_ids(track_ids) -> Dict[str, Dict[str, Any]]:
+    """Карта id -> строка каталога (без lyrics) для пачек (Волна, жанровые подборки)."""
+    ids = [str(track_id) for track_id in (track_ids or []) if track_id]
+    if not ids:
+        return {}
+    conn = get_connection()
+    placeholders = ",".join("?" for _ in ids)
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album
+        FROM tracks t
+        LEFT JOIN albums a ON a.id = t.album_id
+        WHERE t.id IN ({placeholders})
+    """, ids)
+    mapping = {row["id"]: dict(row) for row in cursor.fetchall()}
+    conn.close()
+    return mapping
+
+def get_catalog_tracks() -> List[Dict[str, Any]]:
+    """Весь каталог без lyrics: для жанровых подборок (одна выгрузка на запрос)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album
+        FROM tracks t
+        LEFT JOIN albums a ON a.id = t.album_id
+        ORDER BY t.title
+    """)
+    tracks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tracks
+
+def get_track_artist_map() -> Dict[str, Optional[str]]:
+    """Маппинг id -> artist для резолвера артистов (вместо полной выгрузки каталога)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, artist FROM tracks")
+    mapping = {row["id"]: row["artist"] for row in cursor.fetchall()}
+    conn.close()
+    return mapping
+
 def get_track(track_id):
     conn = get_connection()
     cursor = conn.cursor()
@@ -27,12 +83,33 @@ def get_track(track_id):
     conn.close()
     return dict(row) if row else None
 
+def delete_track(track_id) -> bool:
+    """
+    Удаляет трек и его журнал мутаций одной транзакцией.
+    Зависимые строки (playlist_tracks, favorites, history, dislikes,
+    wave_feedback, track_stats) уходят по FK-каскаду (foreign_keys=ON).
+    Возвращает True, если трек существовал.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        deleted = cursor.rowcount > 0
+        cursor.execute("DELETE FROM track_mutation_journal WHERE track_id = ?", (track_id,))
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 def search_tracks(query, limit=30):
     conn = get_connection()
     cursor = conn.cursor()
     search_term = f"%{query}%"
-    cursor.execute("""
-        SELECT t.*, a.title as album_title
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title as album_title
         FROM tracks t
         LEFT JOIN albums a ON t.album_id = a.id
         WHERE t.title LIKE ? OR t.artist LIKE ? OR a.title LIKE ?
@@ -48,8 +125,8 @@ def search_all(query, limit=30):
     search_term = f"%{query}%"
 
     # 1. Tracks (matching title, artist or album)
-    cursor.execute("""
-        SELECT t.*, a.title as album_title
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title as album_title
         FROM tracks t
         LEFT JOIN albums a ON t.album_id = a.id
         WHERE t.title LIKE ? OR t.artist LIKE ? OR a.title LIKE ?

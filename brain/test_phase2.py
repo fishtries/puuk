@@ -1,7 +1,6 @@
 import os
 import sys
 import unittest
-import asyncio
 from datetime import datetime, timezone, timedelta
 
 # Добавляем brain в sys.path
@@ -98,11 +97,12 @@ class TestPhase2Auth(unittest.TestCase):
 
     def test_07_get_optional_current_user_no_token_returns_none(self):
         # Прямой юнит-тест: get_optional_current_user без токена -> None
-        self.assertIsNone(asyncio.run(auth.get_optional_current_user(token=None)))
+        # (функция синхронная: FastAPI исполняет её в threadpool)
+        self.assertIsNone(auth.get_optional_current_user(token=None))
 
         # Опциональная зависимость строго валидирует плохой токен -> 401
         with self.assertRaises(Exception) as ctx:
-            asyncio.run(auth.get_optional_current_user(token="invalid_gibberish_token_123"))
+            auth.get_optional_current_user(token="invalid_gibberish_token_123")
         self.assertEqual(getattr(ctx.exception, "status_code", None), 401)
 
     def test_08_get_me_invalid_token(self):

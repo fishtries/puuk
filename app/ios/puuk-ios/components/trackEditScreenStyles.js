@@ -23,6 +23,11 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     letterSpacing: -0.3,
+    flex: 1,
+  },
+  deleteButton: {
+    marginLeft: 12,
+    padding: 6,
   },
   scrollContent: {
     padding: 16,

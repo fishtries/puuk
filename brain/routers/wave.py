@@ -51,7 +51,7 @@ def get_qdrant_client():
     return QdrantClient(url=QDRANT_URL)
 
 @router.post("/feedback")
-async def record_wave_feedback(
+def record_wave_feedback(
     request: Request,
     feedback: WaveFeedbackRequest,
     background_tasks: BackgroundTasks,
@@ -98,7 +98,7 @@ async def record_wave_feedback(
     return {"status": "ok"}
 
 @router.get("/profile-stats")
-async def get_profile_statistics(current_user: dict = Depends(get_current_user)):
+def get_profile_statistics(current_user: dict = Depends(get_current_user)):
     """
     Возвращает статус готовности профиля вкусов текущего пользователя.
     Используется веб-клиентом для отображения бейджа адаптации.
@@ -111,12 +111,12 @@ async def get_profile_statistics(current_user: dict = Depends(get_current_user))
 user_router = APIRouter(prefix="/api/user", tags=["user"])
 
 @user_router.get("/profile-stats")
-async def get_user_profile_statistics(current_user: dict = Depends(get_current_user)):
+def get_user_profile_statistics(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     return db.get_user_profile_stats(user_id)
 
 @router.get("/admin/wave-stats")
-async def get_wave_admin_statistics(current_user: dict = Depends(get_current_admin_user)):
+def get_wave_admin_statistics(current_user: dict = Depends(get_current_admin_user)):
     """
     Сводная аналитика эффективности Моей Волны (доступна администратору).
     """

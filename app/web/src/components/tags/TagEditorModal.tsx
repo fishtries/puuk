@@ -9,8 +9,10 @@ import {
   Check,
   AlertCircle,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
+import { ConfirmDeleteModal } from '../playlists/ConfirmDeleteModal';
 import styles from './TagEditorModal.module.css';
 import { useTagEditorForm } from './useTagEditorForm';
 import { TagsTab } from './TagsTab';
@@ -108,24 +110,49 @@ function TagEditorForm({ initialTrack, onClose }: { initialTrack: import('../../
           </div>
         )}
 
-        <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={form.isSaving}>
-          Отмена
-        </button>
+        <div className={styles.footerActions}>
+          <button
+            type="button"
+            className={styles.deleteBtn}
+            onClick={() => form.setIsDeleteConfirmOpen(true)}
+            disabled={form.isSaving || form.isResyncing || form.isDeleting}
+            aria-label="Удалить трек из библиотеки"
+          >
+            <Trash2 size={15} />
+            <span>Удалить трек</span>
+          </button>
 
-        <button type="button" className={styles.saveBtn} onClick={form.handleSave} disabled={form.isSaving}>
-          {form.isSaving ? (
-            <>
-              <Loader2 size={15} className={styles.spinner} />
-              <span>Сохранение...</span>
-            </>
-          ) : (
-            <>
-              <Check size={15} />
-              <span>Сохранить изменения</span>
-            </>
-          )}
-        </button>
+          <div className={styles.footerSpacer} />
+
+          <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={form.isSaving}>
+            Отмена
+          </button>
+
+          <button type="button" className={styles.saveBtn} onClick={form.handleSave} disabled={form.isSaving}>
+            {form.isSaving ? (
+              <>
+                <Loader2 size={15} className={styles.spinner} />
+                <span>Сохранение...</span>
+              </>
+            ) : (
+              <>
+                <Check size={15} />
+                <span>Сохранить изменения</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
+
+      <ConfirmDeleteModal
+        isOpen={form.isDeleteConfirmOpen}
+        title="Удалить трек?"
+        message={`«${currentTrackData.title} — ${currentTrackData.artist}» будет удалён из библиотеки вместе с аудиофайлом на диске. Действие необратимо.`}
+        confirmLabel={form.isDeleting ? 'Удаление...' : 'Удалить безвозвратно'}
+        isSubmitting={form.isDeleting}
+        onClose={() => form.setIsDeleteConfirmOpen(false)}
+        onConfirm={form.handleDelete}
+      />
     </motion.div>
   );
 }

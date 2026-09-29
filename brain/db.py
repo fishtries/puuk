@@ -52,7 +52,12 @@ from repositories.albums import (
 )
 from repositories.tracks import (
     get_all_tracks,
+    get_tracks_page,
+    get_tracks_by_ids,
+    get_catalog_tracks,
+    get_track_artist_map,
     get_track,
+    delete_track,
     search_tracks,
     search_all,
     add_or_update_track,

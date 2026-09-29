@@ -150,6 +150,15 @@ export default function LibraryScreen({
     return () => sub.remove();
   }, [handleCreatePlaylist]);
 
+  // Track deleted from library (TrackEditScreen): drop it from local lists
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('PUUK_TRACK_DELETED', ({ id }) => {
+      setFavorites((prev) => prev.filter((t) => t.id !== id));
+      setHistory((prev) => prev.filter((t) => t.id !== id));
+    });
+    return () => sub.remove();
+  }, []);
+
   // Playlist management menu (rename, delete)
   const handlePlaylistLongPress = (playlist) => {
     ActionSheetIOS.showActionSheetWithOptions(

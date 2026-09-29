@@ -5,6 +5,20 @@ import sqlite3
 from config import DB_PATH
 
 
+# Каталожные колонки треков без тяжёлых текстов (lyrics_*): списки, поиск и
+# пачки Волны не должны тянуть и передавать килобайты LRC на каждый трек.
+# Живёт в base, чтобы albums/playlists/interactions использовали её без
+# циклического импорта через tracks.
+TRACK_SUMMARY_COLUMNS = """
+    t.id, t.file_path, t.title, t.album_id, t.artist, t.cover_color,
+    t.album_artist, t.year, t.genre, t.track_number, t.disc_number, t.comment,
+    t.duration, t.bitrate, t.sample_rate, t.channels, t.format,
+    t.file_size, t.file_mtime_ns, t.cover_version,
+    t.auto_genres, t.auto_genre_model, t.auto_genre_updated_at,
+    t.normalization_gain_db, t.loudness_status, t.loudness_lufs, t.true_peak_db
+"""
+
+
 def get_connection() -> sqlite3.Connection:
     """
     Открывает соединение с включенными foreign_keys, busy_timeout и row_factory.

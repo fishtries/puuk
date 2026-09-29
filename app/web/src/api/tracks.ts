@@ -175,11 +175,6 @@ export async function searchTracks(query: string, limit = 30): Promise<SearchRes
   return apiClient<SearchResults>(`/api/search?${params.toString()}`);
 }
 
-export function getStreamUrl(trackId: string): string {
-  const baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL) || '';
-  return `${baseUrl}/api/stream/${trackId}`;
-}
-
 export function getCoverUrl(
   item?: Track | Album | Playlist | { id?: string; cover_id?: string; coverArt?: string; cover_version?: number } | string | null
 ): string {
@@ -242,6 +237,17 @@ export async function searchOnlineLyrics(query: string): Promise<LyricsSearchRes
 export async function resyncTrack(trackId: string): Promise<Track> {
   return apiClient<Track>(`/api/tracks/${trackId}/resync`, {
     method: 'POST',
+  });
+}
+
+export interface TrackDeletionResult {
+  status: string;
+  file_deleted: boolean;
+}
+
+export async function deleteTrack(trackId: string): Promise<TrackDeletionResult> {
+  return apiClient<TrackDeletionResult>(`/api/tracks/${trackId}`, {
+    method: 'DELETE',
   });
 }
 

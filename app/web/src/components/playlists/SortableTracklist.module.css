@@ -9,7 +9,7 @@
 
 /* Row highlighted as the drop destination */
 .dropTarget {
-  outline: 1.5px dashed var(--accent-color, #ff7a00);
+  outline: 1.5px dashed var(--accent-color);
   outline-offset: -2px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 10px;

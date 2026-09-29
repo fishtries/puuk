@@ -9,7 +9,7 @@ import sqlite3
 import unicodedata
 from typing import Any, Dict, List, Optional
 
-from repositories.base import get_connection
+from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
 
 UNKNOWN_ALBUM_TITLE = "Unknown Album"
 VARIOUS_ARTISTS = "Various Artists"
@@ -146,7 +146,7 @@ def get_album_tracks(album_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
-        SELECT t.*, a.title AS album, a.album_artist AS album_title_artist
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, a.album_artist AS album_title_artist
         FROM tracks t
         LEFT JOIN albums a ON a.id = t.album_id
         WHERE t.album_id = ?

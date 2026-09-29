@@ -51,20 +51,21 @@ class _ArtistResolver:
     """
     Резолвер исполнителя на время одного recommendation-запроса.
     Кэширует нормализованные ключи, чтобы не делать отдельный SQLite-запрос
-    на каждого кандидата из пула.
+    на каждого кандидата из пула. Из БД тянется только (id, artist),
+    без полной выгрузки каталога.
     """
 
     def __init__(self):
         self._cache: dict[str, Optional[str]] = {}
-        self._db_tracks: Optional[dict[str, dict]] = None
+        self._artist_map: Optional[dict[str, Optional[str]]] = None
 
-    def _load_db_tracks(self) -> dict[str, dict]:
-        if self._db_tracks is None:
+    def _load_artist_map(self) -> dict[str, Optional[str]]:
+        if self._artist_map is None:
             try:
-                self._db_tracks = {str(t["id"]): dict(t) for t in db.get_all_tracks()}
+                self._artist_map = db.get_track_artist_map()
             except Exception:
-                self._db_tracks = {}
-        return self._db_tracks
+                self._artist_map = {}
+        return self._artist_map
 
     def key(self, payload: dict, track_id: str) -> Optional[str]:
         cached = self._cache.get(track_id, _UNSET)
@@ -75,8 +76,7 @@ class _ArtistResolver:
         artist = payload.get("artist")
 
         if not artist:
-            db_track = self._load_db_tracks().get(str(track_id))
-            artist = db_track.get("artist") if db_track else None
+            artist = self._load_artist_map().get(str(track_id))
 
         if not artist:
             artist = _artist_from_file_path(payload.get("file_path"))
@@ -461,10 +461,21 @@ def scroll_any_track():
     return _pick_random_from_scroll(None)
 
 
-def build_wave_track_payload(pick, base_url: str, fav_ids: set[str], include_album: bool = False) -> dict:
-    """Формирует JSON-ответ трека Волны из точки Qdrant с обогащением из SQLite."""
+def build_wave_track_payload(
+    pick,
+    base_url: str,
+    fav_ids: set[str],
+    include_album: bool = False,
+    db_track: Optional[dict] = None,
+) -> dict:
+    """Формирует JSON-ответ трека Волны из точки Qdrant с обогащением из SQLite.
+
+    db_track позволяет пачкам (например /wave/queue) переиспользовать один
+    batch-SELECT вместо отдельных db.get_track на каждый трек.
+    """
     track_id = str(pick.id)
-    db_track = db.get_track(track_id)
+    if db_track is None:
+        db_track = db.get_track(track_id)
     if not db_track:
         from services.media_locations import extract_full_metadata
         title, artist, _, _, duration = extract_full_metadata(pick.payload.get("file_path", ""))

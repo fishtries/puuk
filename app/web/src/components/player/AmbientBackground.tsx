@@ -168,7 +168,7 @@ function extractArtTheme(img: HTMLImageElement): ExtractedTheme | null {
 }
 
 function generateFallbackTheme(baseHex?: string, fallbackSeed: string = 'puuk'): ExtractedTheme {
-  let [h, s] = [230, 45];
+  let [h, s] = [16, 45];
   if (baseHex && baseHex.startsWith('#') && baseHex.length >= 4) {
     [h, s] = hexToHsl(baseHex);
   } else {
@@ -182,7 +182,7 @@ function generateFallbackTheme(baseHex?: string, fallbackSeed: string = 'puuk'):
   const sat = Math.min(55, Math.max(25, s));
 
   return {
-    bgDark: '#000000',
+    bgDark: '#111116',
     colors: [
       `hsla(${h}, ${sat}%, 12%, 0.85)`,
       `hsla(${(h + 20) % 360}, ${Math.max(20, sat - 5)}%, 16%, 0.75)`,

@@ -93,7 +93,7 @@ def get_playlist_details(playlist_id: int, request: Request, current_user: dict 
     records = db.get_playlist_tracks(playlist_id)
     fav_ids = db.get_favorite_track_ids(current_user["id"])
     base_url = get_base_url(request)
-    tracks = [serialize_track(r, base_url, fav_ids) for r in records]
+    tracks = [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in records]
     return {"playlist": playlist, "tracks": tracks}
 
 

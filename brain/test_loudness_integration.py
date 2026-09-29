@@ -134,6 +134,138 @@ class TestLoudnessIntegration(unittest.TestCase):
         self.assertIsNone(track["loudness_error"])
         self.assertEqual(track["loudness_retry_count"], 0)
 
+    def test_metadata_details_expose_loudness_fields(self):
+        """GET /api/tracks/{id} — единственный источник свежих loudness-данных клиента."""
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import services.track_metadata_service as tms
+
+        track_id = "test-loudness-meta-details-1"
+        db.add_or_update_track(
+            track_id,
+            self.file_path,
+            "Test Loudness Track",
+            None,
+            "Test Artist",
+            duration=120.0,
+        )
+        db.update_track_loudness(
+            track_id=track_id,
+            loudness_lufs=-18.5,
+            true_peak_db=-2.3,
+            normalization_gain_db=3.2,
+            status="analyzed",
+        )
+
+        tmp_dir = tempfile.mkdtemp(prefix="puuk_meta_")
+        tmp_file = Path(tmp_dir) / "test_loudness.mp3"
+        tmp_file.write_bytes(b"fake audio bytes")
+        stat = tmp_file.stat()
+        db.add_or_update_track(
+            track_id,
+            self.file_path,
+            "Test Loudness Track",
+            None,
+            "Test Artist",
+            duration=120.0,
+            file_size=stat.st_size,
+            file_mtime_ns=stat.st_mtime_ns,
+        )
+
+        fake_meta = SimpleNamespace(
+            title=None, album=None, album_artist=None, artist=None, year=None, genre=None,
+            track_number=None, disc_number=None, comment=None, lyrics="",
+            duration=120.0, bitrate=None, sample_rate=None, channels=None,
+            format="mp3", file_size=None, has_cover=False,
+        )
+        with patch.object(tms, "resolve_track_file_path", return_value=(str(tmp_file), tmp_dir)), \
+             patch.object(tms, "read_audio_metadata", return_value=fake_meta):
+            details = tms.get_track_metadata_details(track_id, {"id": 1}, "http://localhost:8000")
+
+        self.assertEqual(details["loudness_status"], "analyzed")
+        self.assertEqual(details["normalization_gain_db"], 3.2)
+        self.assertEqual(details["loudness_lufs"], -18.5)
+        self.assertEqual(details["true_peak_db"], -2.3)
+
+    def test_resync_loudness_from_qdrant_to_sqlite(self):
+        """scan.py --resync-loudness: analyzed из Qdrant доезжает до SQLite сервера."""
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        import scan
+
+        track_id = "test-loudness-scan-resync-1"
+        db.add_or_update_track(track_id, "audio/resync.mp3", "Resync", None, "Artist")
+
+        analyzed_point = SimpleNamespace(
+            id=track_id,
+            payload={
+                "loudness_status": "analyzed",
+                "loudness_lufs": -16.0,
+                "true_peak_db": -1.2,
+                "normalization_gain_db": 2.5,
+                "loudness_analysis_version": "r128-v1",
+                "loudness_file_size": 111,
+                "loudness_file_mtime_ns": 222,
+            },
+        )
+        pending_point = SimpleNamespace(
+            id="test-loudness-scan-resync-pending",
+            payload={"loudness_status": "pending", "normalization_gain_db": None},
+        )
+        client = Mock()
+        client.scroll.return_value = ([analyzed_point, pending_point], None)
+
+        count = scan.resync_loudness_from_qdrant(client)
+
+        self.assertEqual(count, 1)
+        row = db.get_track(track_id)
+        self.assertEqual(row["loudness_status"], "analyzed")
+        self.assertEqual(row["normalization_gain_db"], 2.5)
+        self.assertEqual(row["loudness_lufs"], -16.0)
+        self.assertEqual(row["true_peak_db"], -1.2)
+        self.assertEqual(row["file_size"], 111)
+        self.assertEqual(row["file_mtime_ns"], 222)
+        self.assertIsNone(db.get_track("test-loudness-scan-resync-pending"))
+
+    def test_resync_loudness_creates_missing_track_row(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        import scan
+
+        track_id = "test-loudness-scan-resync-2"
+        self.assertIsNone(db.get_track(track_id))
+
+        point = SimpleNamespace(
+            id=track_id,
+            payload={
+                "file_path": "music/unknown track.mp3",
+                "title": "Unknown Track",
+                "artist": "Someone",
+                "duration": 42.0,
+                "loudness_status": "analyzed",
+                "loudness_lufs": -15.0,
+                "true_peak_db": -0.8,
+                "normalization_gain_db": 1.5,
+                "loudness_analysis_version": "r128-v1",
+            },
+        )
+        client = Mock()
+        client.scroll.return_value = ([point], None)
+
+        count = scan.resync_loudness_from_qdrant(client)
+
+        self.assertEqual(count, 1)
+        row = db.get_track(track_id)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["title"], "Unknown Track")
+        self.assertEqual(row["loudness_status"], "analyzed")
+        self.assertEqual(row["normalization_gain_db"], 1.5)
+
     def test_file_change_resets_pending(self):
         db.update_track_loudness(
             track_id=self.track_id,

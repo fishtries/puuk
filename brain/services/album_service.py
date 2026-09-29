@@ -66,7 +66,7 @@ def get_album_detail(album_id: int, current_user: Optional[Dict[str, Any]], base
         },
         base_url,
     )
-    tracks = [serialize_track(r, base_url, fav_ids) for r in track_rows]
+    tracks = [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in track_rows]
     return {"album": dto, "tracks": tracks}
 
 

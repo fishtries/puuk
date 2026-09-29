@@ -94,12 +94,85 @@ def process_audio_file(file_path: Path, base_path: Path) -> dict:
 import argparse
 import time
 
+def resync_loudness_from_qdrant(client: QdrantClient) -> int:
+    """Переносит готовые loudness-результаты из общего Qdrant в локальную SQLite.
+
+    heavy_worker анализирует файлы и пишет результат в свою SQLite и в общий
+    Qdrant. Серверный API читает свою SQLite (deploy не синкает *.db), поэтому
+    без этого переноса его база остаётся pending для проанализированных треков.
+    """
+    logger.info("Перенос loudness-результатов из Qdrant в SQLite...")
+    import db
+
+    synced = 0
+    offset = None
+    while True:
+        try:
+            records, next_page = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as e:
+            logger.error(f"Ошибка чтения Qdrant: {e}")
+            break
+
+        for record in records:
+            payload = record.payload or {}
+            if payload.get("loudness_status") != "analyzed":
+                continue
+            if payload.get("normalization_gain_db") is None:
+                continue
+
+            point_id = str(record.id)
+            try:
+                if db.get_track(point_id) is None:
+                    file_path = str(payload.get("file_path") or point_id)
+                    title = str(payload.get("title") or Path(file_path).stem or point_id)
+                    artist = str(payload.get("artist") or "Неизвестный исполнитель")
+                    db.add_or_update_track(
+                        point_id,
+                        file_path,
+                        title,
+                        None,
+                        artist,
+                        duration=payload.get("duration"),
+                    )
+                db.update_track_loudness(
+                    track_id=point_id,
+                    loudness_lufs=payload.get("loudness_lufs"),
+                    true_peak_db=payload.get("true_peak_db"),
+                    normalization_gain_db=payload.get("normalization_gain_db"),
+                    status="analyzed",
+                    analysis_version=payload.get("loudness_analysis_version"),
+                    file_size=payload.get("loudness_file_size"),
+                    file_mtime_ns=payload.get("loudness_file_mtime_ns"),
+                )
+                synced += 1
+            except Exception as e:
+                logger.warning(f"Не удалось перенести loudness для {point_id}: {e}")
+
+        if next_page is None:
+            break
+        offset = next_page
+
+    logger.info(f"Loudness перенесено для {synced} треков.")
+    return synced
+
 def main():
     parser = argparse.ArgumentParser(description="Сканер треков для Puuk")
     parser.add_argument("--reset", action="store_true", help="Принудительно пересоздать коллекцию Qdrant (все векторы будут удалены)")
+    parser.add_argument("--resync-loudness", action="store_true", help="Перенести готовые loudness-результаты из Qdrant в локальную SQLite и выйти")
     args = parser.parse_args()
 
     client = init_qdrant(reset=args.reset)
+
+    if args.resync_loudness:
+        resync_loudness_from_qdrant(client)
+        return
+
     base_path = Path(MUSIC_DIR)
     
     logger.info("Скрипт запущен в режиме постоянного мониторинга (каждые 5 минут).")

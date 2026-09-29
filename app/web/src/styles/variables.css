@@ -1,31 +1,46 @@
 :root {
-  /* Surface & Background Palette (iOS-aligned) */
-  --bg-app: #000000;
-  --bg-surface: #0c0c0e;
-  --bg-surface-elevated: #1c1c1e;
-  --bg-surface-hover: #2c2c2e;
-  --bg-surface-active: #3a3a3c;
+  /* Surface & Background Palette */
+  --bg-app: #111116;
+  --bg-surface: #19171c;
+  --bg-surface-elevated: #211b20;
+  --bg-surface-hover: #292328;
+  --bg-surface-active: #332b31;
 
-  /* Accent — iOS default peach */
-  --accent-color: #ffdab9;
-  --accent-hover: #ffcda0;
-  --accent-active: #ffbf85;
-  --accent-subtle: rgba(255, 218, 185, 0.14);
-  --accent-glow: rgba(255, 218, 185, 0.28);
+  /* Glass Surfaces Tint */
+  --bg-glass: rgba(25, 23, 28, 0.72);
+  --bg-glass-card: rgba(25, 23, 28, 0.60);
+  --bg-glass-dock: rgba(25, 23, 28, 0.82);
+
+  /* Primary Accent — Warm Peach (#FF9B76) */
+  --accent-color: #ff9b76;
+  --accent-hover: #ffb596;
+  --accent-active: #e87958;
+  --accent-subtle: rgba(255, 155, 118, 0.15);
+  --accent-glow: rgba(255, 155, 118, 0.25);
+  --accent-terracotta: #e87958;
+  --accent-contrast: #201311;
+
+  /* AI Accent — Punchy Bright Orange (#FF4A0A) */
+  --accent-ai: #ff4a0a;
+  --accent-ai-hover: #ff632b;
+  --accent-ai-active: #e03b00;
+  --accent-ai-glow: rgba(255, 74, 10, 0.35);
+  --accent-ai-subtle: rgba(255, 74, 10, 0.16);
 
   /* Typography & Contrast */
-  --text-primary: #ffffff;
-  --text-secondary: #8e8e93;
-  --text-muted: #636366;
-  --text-disabled: #48484a;
+  --text-primary: #f5ece8;
+  --text-secondary: #9f9290;
+  --text-muted: #6e6463;
+  --text-disabled: #4a4241;
 
   /* Borders & Dividers */
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-medium: rgba(255, 255, 255, 0.14);
-  --border-focus: rgba(255, 218, 185, 0.6);
+  --border-subtle: rgba(58, 48, 51, 0.65);
+  --border-medium: #3a3033;
+  --border-focus: rgba(255, 155, 118, 0.65);
+  --border-glass-top: rgba(245, 236, 232, 0.18);
 
-  /* Anti-UI Slop: Dark Mode Image Outline (prevents cover bleeds into pitch dark) */
-  --image-outline: 1px solid rgba(255, 255, 255, 0.10);
+  /* Anti-UI Slop: Dark Mode Image Outline (prevents cover bleeds into dark background) */
+  --image-outline: 1px solid rgba(245, 236, 232, 0.09);
   --image-outline-offset: -1px;
 
   /* Concentric Border Radii: R_outer = R_inner + padding */

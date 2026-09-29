@@ -20,16 +20,16 @@
 
 /* Glassmorphism Capsule Base */
 .glassCapsule {
-  background: rgba(26, 28, 34, 0.65);
+  background: var(--bg-glass-dock, rgba(32, 24, 29, 0.78));
   backdrop-filter: blur(28px) saturate(190%);
   -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 9999px;
   box-shadow:
     0 16px 40px rgba(0, 0, 0, 0.5),
     0 4px 12px rgba(0, 0, 0, 0.3),
-    inset 0 1px 1px rgba(255, 255, 255, 0.14);
+    inset 0 1px 1px rgba(255, 230, 215, 0.16);
   display: flex;
   align-items: center;
   transition:
@@ -39,11 +39,11 @@
 }
 
 .glassCapsule:hover {
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--border-medium);
   box-shadow:
     0 20px 48px rgba(0, 0, 0, 0.55),
     0 6px 16px rgba(0, 0, 0, 0.35),
-    inset 0 1px 1px rgba(255, 255, 255, 0.2);
+    inset 0 1px 1px rgba(255, 230, 215, 0.22);
 }
 
 /* 1. Modes Capsule (Shuffle & Repeat) */
@@ -84,8 +84,8 @@
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background-color: var(--accent-color, #ffdab9);
-  box-shadow: 0 0 6px var(--accent-color, #ffdab9);
+  background-color: var(--accent-color);
+  box-shadow: 0 0 6px var(--accent-glow);
 }
 
 /* 2. Center Main Capsule */
@@ -237,7 +237,7 @@
 .progressBar {
   position: relative;
   height: 4px;
-  background: #ffffff;
+  background: var(--accent-color);
   border-radius: 2px;
   display: flex;
   align-items: center;
@@ -248,15 +248,15 @@
 
 .scrubberTrack:hover .progressBar {
   height: 6px;
-  background: var(--accent-color, #ffffff);
+  background: var(--accent-hover);
 }
 
 .scrubberThumb {
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+  background: var(--accent-color);
+  box-shadow: 0 0 8px var(--accent-glow);
   transform: scale(0);
   transition: transform 150ms ease;
   margin-right: -5px;
@@ -358,15 +358,15 @@
 .playPauseBtn {
   width: 50px;
   height: 50px;
-  background: #ffffff;
-  color: #0f1013;
-  box-shadow: 0 4px 14px rgba(255, 255, 255, 0.2);
+  background: var(--accent-color);
+  color: var(--accent-contrast, #2a171b);
+  box-shadow: 0 4px 16px var(--accent-glow);
 }
 
 .playPauseBtn:hover {
-  background: #ffffff;
-  color: #000000;
-  box-shadow: 0 6px 18px rgba(255, 255, 255, 0.35);
+  background: var(--accent-hover);
+  color: var(--accent-contrast, #2a171b);
+  box-shadow: 0 6px 20px var(--accent-glow);
   transform: scale(1.06);
 }
 

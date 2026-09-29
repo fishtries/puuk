@@ -65,6 +65,7 @@ export interface PlayerStoreState {
   toggleWave: () => Promise<boolean>;
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;
+  purgeTrackFromQueue: (trackId: string) => void;
   clearQueue: () => void;
   setActiveView: (view: ActiveView) => void;
   setIsRightPanelOpen: (isOpen: boolean) => void;
@@ -85,4 +86,5 @@ export interface PlayerStoreState {
   updateTrackInStore: (trackId: string, updatedTrack: Partial<Track>) => void;
   toggleLoudnessNormalization: () => void;
   setLoudnessNormalizationEnabled: (enabled: boolean) => void;
+  refreshTrackLoudness: (trackId: string) => Promise<void>;
 }

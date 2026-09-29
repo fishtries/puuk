@@ -2,14 +2,14 @@ import { create } from 'zustand';
 import { PlayerStoreState, RepeatMode, ActiveView, RightPanelTab, PlaybackStatus } from '../types/player';
 import { Track } from '../types/track';
 import { audioEngine } from '../engine/AudioEngine';
-import { fetchAuthorizedAudioUrl } from '../api/media';
+import { resolveAuthorizedAudioUrl } from '../api/media';
 import { parseLRC } from '../engine/lrcParser';
 import { parseLyricsPayload, isDemoTrack } from './playerStoreHelpers';
 import {
   fetchLyrics as apiFetchLyrics,
   fetchHistory,
+  fetchTrack,
   fetchTracks,
-  getStreamUrl,
   recordTrackHistory,
   toggleLikeTrack,
 } from '../api/tracks';
@@ -26,6 +26,7 @@ import {
 } from './waveQueue';
 
 const HISTORY_LIMIT = 50;
+const INITIAL_VOLUME = 0.85;
 const LOUDNESS_STORAGE_KEY = 'puuk:loudness-normalization:v1';
 export const DEFAULT_LOUDNESS_NORMALIZATION = true;
 
@@ -61,6 +62,13 @@ let waveFetchPromise: Promise<Track[]> | null = null;
  * Next press cannot walk the fetch path in parallel and replay the batch head.
  */
 let waveAdvanceInFlight: Promise<void> | null = null;
+
+/**
+ * Поколение загрузки аудио. Каждый playTrack наращивает счётчик; ответ
+ * (media-тикет или ошибка) устаревшего поколения игнорируется — быстрые
+ * переключения не дают позднему ответу запустить чужой трек или статус 'error'.
+ */
+let audioLoadGeneration = 0;
 
 function requestWaveBatch(
   currentTrackId: string | undefined,
@@ -257,6 +265,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     }
   }
 
+  audioEngine.setUserVolume(INITIAL_VOLUME);
+
   audioEngine.on('timeupdate', ({ currentTime, duration }) => {
     set({ currentTime, duration: duration || get().duration });
   });
@@ -285,7 +295,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     status: 'idle',
     currentTime: 0,
     duration: 0,
-    volume: 0.85,
+    volume: INITIAL_VOLUME,
     isMuted: false,
     repeatMode: 'off',
     isShuffled: false,
@@ -300,7 +310,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     isFullscreen: false,
     isDebugOpen: false,
     isLoginOpen: false,
-    accentColor: '#ffdab9',
+    accentColor: '#ff9b76',
 
      queue: [],
     history: [],
@@ -317,6 +327,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const state = get();
       const updatedQueue = newQueue || (state.queue.length > 0 ? state.queue : [track]);
       const index = updatedQueue.findIndex((t) => t.id === track.id);
+      const generation = ++audioLoadGeneration;
 
       // A manual jump inside an active wave counts as "already heard".
       const nextPlayedIds = state.isWaveActive
@@ -335,18 +346,31 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         rawLyricsText: '',
       });
 
+      // Глушим прежний источник синхронно: UI уже показывает новый трек,
+      // и старый не должен звучать, пока запрашивается media-тикет и
+      // открывается новый поток.
+      audioEngine.stop();
+
       get().fetchLyrics(track.id);
       get().recordHistory(track);
 
       try {
-        const streamUrl = await fetchAuthorizedAudioUrl(getStreamUrl(track.id));
+        const streamUrl = await resolveAuthorizedAudioUrl(track.id);
+        if (generation !== audioLoadGeneration) return;
         const isLoudnessEnabled = get().isLoudnessNormalizationEnabled;
         const trackGainDb = computeTrackNormalizationGainDb(track, isLoudnessEnabled);
         await audioEngine.load(streamUrl, {
           autoplay: true,
           normalizationGainDb: trackGainDb,
         });
+        // DTO мог устать в каталоге: дотягиваем свежий loudness, если он
+        // ещё не проанализирован (анализированный не дёргаем лишним запросом).
+        if (track.loudness_status !== 'analyzed') {
+          void get().refreshTrackLoudness(track.id);
+        }
       } catch (err) {
+        // Ошибка неактуального переключения не должна помечать текущий трек.
+        if (generation !== audioLoadGeneration) return;
         console.warn('playTrack: failed to load track audio:', err);
         set({ status: 'error' });
       }
@@ -428,6 +452,34 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const { currentTrack } = get();
       const nextGainDb = computeTrackNormalizationGainDb(currentTrack, enabled);
       audioEngine.setNormalizationGainDb(nextGainDb);
+    },
+
+    refreshTrackLoudness: async (trackId: string) => {
+      try {
+        const fresh = await fetchTrack(trackId);
+        if (fresh.loudness_status !== 'analyzed' || fresh.normalization_gain_db == null) return;
+
+        const { currentTrack, queue, isLoudnessNormalizationEnabled } = get();
+        if (currentTrack?.id !== trackId) return;
+
+        const loudnessPatch: Partial<Track> = {
+          loudness_status: fresh.loudness_status,
+          normalization_gain_db: fresh.normalization_gain_db,
+          loudness_lufs: fresh.loudness_lufs ?? null,
+          true_peak_db: fresh.true_peak_db ?? null,
+        };
+
+        set({
+          currentTrack: { ...currentTrack, ...loudnessPatch },
+          queue: queue.map((t) => (t.id === trackId ? { ...t, ...loudnessPatch } : t)),
+        });
+
+        if (isLoudnessNormalizationEnabled) {
+          audioEngine.setNormalizationGainDb(computeTrackNormalizationGainDb(get().currentTrack, true));
+        }
+      } catch {
+        // Метаданные громкости некритичны для воспроизведения.
+      }
     },
 
     nextTrack: () => goToNextTrack(true),
@@ -519,6 +571,30 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       });
     },
 
+    // Track deleted from the library: drop every upcoming occurrence so playback
+    // never lands on a dead entry, but let the currently playing copy finish.
+    purgeTrackFromQueue: (trackId: string) => {
+      set((state) => {
+        const kept: Track[] = [];
+        let removedBeforeCurrent = 0;
+        state.queue.forEach((t, index) => {
+          const isPlayingSlot =
+            t.id === trackId && state.currentTrackIndex >= 0 && index === state.currentTrackIndex;
+          if (isPlayingSlot) {
+            kept.push(t);
+            return;
+          }
+          if (t.id === trackId) {
+            if (index < state.currentTrackIndex) removedBeforeCurrent += 1;
+            return;
+          }
+          kept.push(t);
+        });
+        if (kept.length === state.queue.length) return {};
+        return { queue: kept, currentTrackIndex: state.currentTrackIndex - removedBeforeCurrent };
+      });
+    },
+
     clearQueue: () => {
       set({ queue: [], currentTrackIndex: -1 });
     },
@@ -572,6 +648,9 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       set({ isLyricsLoading: true, lyrics: [], rawLyricsText: '' });
       try {
         const data = await apiFetchLyrics(trackId, force);
+        // Ответ устаревшего запроса (трек уже переключили) не должен
+        // перезаписывать текст актуального трека.
+        if (get().currentTrack?.id !== trackId) return;
         const { lyrics: parsed, rawLyricsText } = parseLyricsPayload(data);
 
         set({
@@ -580,6 +659,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
           isLyricsLoading: false,
         });
       } catch (err) {
+        if (get().currentTrack?.id !== trackId) return;
         console.warn('Could not fetch lyrics:', err);
         set({ lyrics: [], rawLyricsText: '', isLyricsLoading: false });
       }

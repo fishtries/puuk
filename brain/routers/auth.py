@@ -19,7 +19,7 @@ from auth import (
 router = APIRouter()
 
 @router.post("/login", response_model=TokenResponse, summary="Вход по логину и паролю")
-async def login(req: LoginRequest):
+def login(req: LoginRequest):
     user = db.get_user_by_username(req.username)
     if not user:
         raise HTTPException(
@@ -47,7 +47,7 @@ async def login(req: LoginRequest):
     )
 
 @router.post("/verify-code", response_model=TokenResponse, summary="Вход по одноразовому Telegram-коду (OTP)")
-async def verify_code(req: VerifyCodeRequest):
+def verify_code(req: VerifyCodeRequest):
     code_clean = req.code.strip()
     user = db.verify_and_consume_auth_code(code_clean)
     if not user:
@@ -70,7 +70,7 @@ async def verify_code(req: VerifyCodeRequest):
     )
 
 @router.get("/me", response_model=UserProfile, summary="Профиль текущего пользователя")
-async def get_my_profile(current_user: dict = Depends(get_current_user)):
+def get_my_profile(current_user: dict = Depends(get_current_user)):
     return UserProfile(
         id=current_user["id"],
         username=current_user["username"],

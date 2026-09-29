@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
@@ -36,6 +36,9 @@ class FakeAudioElement {
   duration = 0;
   volume = 1;
   src = '';
+  get currentSrc(): string {
+    return this.src;
+  }
   private handlers = new Map<string, ((event: Event) => void)[]>();
 
   addEventListener(type: string, listener: (event: Event) => void): void {
@@ -56,11 +59,77 @@ globalThis.Audio = function (): HTMLAudioElement {
   return fakeAudio as unknown as HTMLAudioElement;
 } as unknown as typeof Audio;
 
+class FakeGainParam {
+  value = 1;
+  setTargets: Array<{ target: number; time: number; tc: number }> = [];
+  setValues: Array<{ value: number; time: number }> = [];
+
+  cancelScheduledValues(): void {}
+  setTargetAtTime(target: number, startTime: number, timeConstant: number): void {
+    this.setTargets.push({ target, time: startTime, tc: timeConstant });
+  }
+  setValueAtTime(value: number, startTime: number): void {
+    this.setValues.push({ value, time: startTime });
+  }
+}
+
+class FakeGainNode {
+  gain = new FakeGainParam();
+  connect(): void {}
+}
+
+class FakeAnalyserNode {
+  fftSize = 0;
+  smoothingTimeConstant = 0;
+  frequencyBinCount = 64;
+  connect(): void {}
+  getByteFrequencyData(): void {}
+}
+
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
+  destination = {};
+  state: AudioContextState = 'running';
+  currentTime = 123.5;
+  resumeCalls = 0;
+  readonly gain = new FakeGainNode();
+  readonly analyser = new FakeAnalyserNode();
+  private sourceCreated = false;
+
+  constructor() {
+    FakeAudioContext.instances.push(this);
+  }
+
+  createGain(): FakeGainNode {
+    return this.gain;
+  }
+  createAnalyser(): FakeAnalyserNode {
+    return this.analyser;
+  }
+  createMediaElementSource(): { connect(): void } {
+    if (this.sourceCreated) {
+      throw new Error('InvalidStateError: MediaElementSource already created');
+    }
+    this.sourceCreated = true;
+    return { connect: () => {} };
+  }
+  resume(): Promise<void> {
+    this.resumeCalls += 1;
+    this.state = 'running';
+    return Promise.resolve();
+  }
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 const { AudioEngine } = await import('../AudioEngine.ts');
+const storeModule = await import('../../store/usePlayerStore.ts');
 const {
   computeTrackNormalizationGainDb,
   getInitialLoudnessSetting,
-} = await import('../../store/usePlayerStore.ts');
+  usePlayerStore,
+} = storeModule;
 import type { Track } from '../../types/track.ts';
 
 describe('Loudness Normalization (Web Unit Tests)', () => {
@@ -260,6 +329,216 @@ describe('Loudness Normalization (Web Unit Tests)', () => {
         localStorage.setItem('puuk:loudness-normalization:v1', val);
         assert.equal(getInitialLoudnessSetting(), true, `Expected true for corrupted value: "${val}"`);
       }
+    });
+  });
+
+  describe('5. Load-time gain application and Web Audio init states', () => {
+    const engine = AudioEngine.getInstance();
+
+    beforeEach(() => {
+      engine.setUserVolume(1.0);
+      engine.setNormalizationGainDb(0);
+      engine.setMuted(false);
+    });
+
+    it('load() persists normalization gain and clamps element volume in fallback', async () => {
+      await engine.load('https://cdn.example/t.mp3', { autoplay: false, normalizationGainDb: 6 });
+
+      assert.equal(engine.getNormalizationGainDb(), 6);
+      assert.equal(engine.getWebAudioStatus(), 'unavailable');
+      assert.equal(engine.isNormalizationDegraded(), true);
+      assert.equal(fakeAudio.volume, 1.0);
+    });
+
+    it('toggling normalization during playback updates fallback volume immediately', () => {
+      engine.setUserVolume(0.5);
+      engine.setNormalizationGainDb(-6);
+
+      assert.equal(Math.round(engine.getEffectiveGain() * 1000) / 1000, 0.251);
+      assert.equal(Math.round(fakeAudio.volume * 1000) / 1000, 0.251);
+
+      engine.setNormalizationGainDb(0);
+      assert.equal(fakeAudio.volume, 0.5);
+    });
+
+    it('reports degraded normalization only when fallback cannot boost', () => {
+      engine.setNormalizationGainDb(6);
+      assert.equal(engine.isNormalizationDegraded(), true);
+
+      engine.setNormalizationGainDb(-6);
+      assert.equal(engine.isNormalizationDegraded(), false);
+
+      engine.setNormalizationGainDb(0);
+      assert.equal(engine.isNormalizationDegraded(), false);
+    });
+
+    it('re-initializes Web Audio on a later load after an earlier failure', async () => {
+      (globalThis as unknown as { window: unknown }).window = { AudioContext: FakeAudioContext };
+
+      await engine.load('https://cdn.example/t2.mp3', { autoplay: false, normalizationGainDb: 6 });
+
+      assert.equal(engine.getWebAudioStatus(), 'active');
+      assert.equal(engine.isNormalizationDegraded(), false);
+
+      const ctx = FakeAudioContext.instances.at(-1)!;
+      const lastTarget = ctx.gain.gain.setTargets.at(-1)?.target;
+      assert.ok(lastTarget !== undefined);
+      assert.ok(Math.abs(lastTarget - AudioEngine.dbToLinear(6)) < 1e-9);
+
+      assert.equal(fakeAudio.volume, 1);
+
+      engine.setNormalizationGainDb(-6);
+      const attenuated = ctx.gain.gain.setTargets.at(-1)?.target;
+      const expectedAttenuated = AudioEngine.dbToLinear(-6);
+      assert.ok(attenuated !== undefined);
+      assert.ok(Math.abs(attenuated - expectedAttenuated) < 1e-9);
+
+      engine.setNormalizationGainDb(0);
+    });
+
+    it('resumes a suspended AudioContext during play()', async () => {
+      const ctx = FakeAudioContext.instances.at(-1)!;
+      ctx.state = 'suspended';
+
+      await engine.play();
+
+      assert.equal(ctx.resumeCalls, 1);
+      assert.equal(ctx.state, 'running');
+    });
+
+    after(() => {
+      delete (globalThis as unknown as { window?: unknown }).window;
+    });
+  });
+
+  describe('6. Stale track DTO refresh at playback', () => {
+    const engine = AudioEngine.getInstance();
+
+    const STALE_ID = 'stale-track-1';
+    const FRESH_ID = 'fresh-track-1';
+
+    let fetchCalls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    const originalLocalStorage = (globalThis as unknown as { localStorage?: Storage }).localStorage;
+
+    function stubFetch(trackReply: Record<string, unknown>): void {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        fetchCalls.push(url);
+        if (url === `/api/tracks/${STALE_ID}`) {
+          return new Response(JSON.stringify({ id: STALE_ID, ...trackReply }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url === '/api/media-ticket') {
+          const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as { track_id?: string }) : {};
+          return new Response(
+            JSON.stringify({ url: `/api/stream/${body.track_id ?? 'x'}?mt=ticket`, expires_in: 600 }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as typeof fetch;
+    }
+
+    async function settle(times = 8): Promise<void> {
+      for (let i = 0; i < times; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+
+    beforeEach(() => {
+      engine.setUserVolume(1.0);
+      engine.setNormalizationGainDb(0);
+      engine.setMuted(false);
+      fetchCalls = [];
+      (globalThis as unknown as { localStorage: Storage }).localStorage = {
+        getItem: () => 'test-token',
+        setItem: () => {},
+        removeItem: () => {},
+      } as unknown as Storage;
+      (globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = () => 'blob:mock';
+      (globalThis.URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
+      usePlayerStore.setState({
+        currentTrack: null,
+        queue: [],
+        currentTrackIndex: -1,
+        status: 'idle',
+        isLoudnessNormalizationEnabled: true,
+      });
+    });
+
+    it('patches a stale pending DTO when API already has analyzed gain', async () => {
+      stubFetch({ loudness_status: 'analyzed', normalization_gain_db: -12 });
+      const stale: Track = {
+        id: STALE_ID,
+        title: 'Stale',
+        artist: 'Artist',
+        duration: 100,
+        loudness_status: 'pending',
+        normalization_gain_db: null,
+      };
+
+      await usePlayerStore.getState().playTrack(stale, [stale]);
+      await settle();
+
+      const current = usePlayerStore.getState().currentTrack;
+      assert.equal(current?.loudness_status, 'analyzed');
+      assert.equal(current?.normalization_gain_db, -12);
+      assert.equal(usePlayerStore.getState().queue[0]?.normalization_gain_db, -12);
+
+      assert.equal(engine.getNormalizationGainDb(), -12);
+      const lastTarget = FakeAudioContext.instances.at(-1)!.gain.gain.setTargets.at(-1)?.target;
+      assert.ok(Math.abs((lastTarget ?? 0) - AudioEngine.dbToLinear(-12)) < 1e-9);
+    });
+
+    it('keeps gain at 0 when API still reports pending', async () => {
+      stubFetch({ loudness_status: 'pending', normalization_gain_db: null });
+      const stale: Track = {
+        id: STALE_ID,
+        title: 'Stale',
+        artist: 'Artist',
+        duration: 100,
+        loudness_status: 'pending',
+        normalization_gain_db: null,
+      };
+
+      await usePlayerStore.getState().playTrack(stale, [stale]);
+      await settle();
+
+      assert.equal(usePlayerStore.getState().currentTrack?.loudness_status, 'pending');
+      assert.equal(engine.getNormalizationGainDb(), 0);
+    });
+
+    it('skips the refresh request when DTO is already analyzed', async () => {
+      stubFetch({ loudness_status: 'pending', normalization_gain_db: null });
+      const fresh: Track = {
+        id: FRESH_ID,
+        title: 'Fresh',
+        artist: 'Artist',
+        duration: 100,
+        loudness_status: 'analyzed',
+        normalization_gain_db: 4.5,
+      };
+
+      await usePlayerStore.getState().playTrack(fresh, [fresh]);
+      await settle();
+
+      assert.equal(engine.getNormalizationGainDb(), 4.5);
+      assert.equal(
+        fetchCalls.some((url) => url === `/api/tracks/${FRESH_ID}`),
+        false,
+        'refreshTrackLoudness must not fetch for an already-analyzed DTO',
+      );
+    });
+
+    after(() => {
+      globalThis.fetch = originalFetch;
+      (globalThis as unknown as { localStorage?: Storage }).localStorage = originalLocalStorage;
     });
   });
 });

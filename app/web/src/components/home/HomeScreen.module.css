@@ -15,11 +15,11 @@
 .sidebarIsland {
   width: 140px;
   height: calc(100vh - 48px);
-  background: rgba(26, 28, 34, 0.6);
+  background: var(--bg-glass, rgba(33, 26, 32, 0.72));
   backdrop-filter: blur(28px) saturate(190%);
   -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 36px;
   padding: 28px 16px;
   display: flex;
@@ -27,7 +27,7 @@
   align-items: center;
   box-shadow:
     0 16px 40px rgba(0, 0, 0, 0.45),
-    inset 0 1px 1px rgba(255, 255, 255, 0.15);
+    inset 0 1px 1px rgba(255, 230, 215, 0.16);
   flex-shrink: 0;
   user-select: none;
 }
@@ -97,10 +97,10 @@
 }
 
 .activeNavItem {
-  background: rgba(255, 255, 255, 0.12) !important;
-  color: #ffffff !important;
-  border-color: rgba(255, 255, 255, 0.18) !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  background: var(--accent-active, #e87958) !important;
+  color: var(--text-primary, #f5ece8) !important;
+  border-color: rgba(255, 181, 150, 0.28) !important;
+  box-shadow: 0 4px 14px rgba(232, 121, 88, 0.35);
 }
 
 .sidebarFooter {
@@ -247,15 +247,15 @@
   width: 480px;
   max-width: 65%;
   height: 44px;
-  background: rgba(26, 28, 34, 0.6);
+  background: var(--bg-glass, rgba(33, 26, 32, 0.72));
   backdrop-filter: blur(28px) saturate(190%);
   -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 9999px;
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.35),
-    inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    inset 0 1px 1px rgba(255, 230, 215, 0.12);
   display: flex;
   align-items: center;
   padding: 0 18px;
@@ -263,10 +263,11 @@
 }
 
 .searchCapsule:focus-within {
-  border-color: rgba(255, 255, 255, 0.24);
+  border-color: var(--border-focus);
   box-shadow:
     0 10px 30px rgba(0, 0, 0, 0.45),
-    inset 0 1px 1px rgba(255, 255, 255, 0.18);
+    0 0 16px var(--accent-glow),
+    inset 0 1px 1px rgba(255, 230, 215, 0.18);
 }
 
 .searchInput {
@@ -275,16 +276,16 @@
   border: none;
   outline: none;
   font-size: 14.5px;
-  color: #ffffff;
+  color: var(--text-primary);
   padding-right: 8px;
 }
 
 .searchInput::placeholder {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--text-muted);
 }
 
 .searchIcon {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
@@ -300,15 +301,15 @@
   position: relative;
   height: 44px;
   padding: 4px 8px 4px 18px;
-  background: rgba(26, 28, 34, 0.6);
+  background: var(--bg-glass, rgba(33, 26, 32, 0.72));
   backdrop-filter: blur(28px) saturate(190%);
   -webkit-backdrop-filter: blur(28px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 9999px;
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.35),
-    inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    inset 0 1px 1px rgba(255, 230, 215, 0.12);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -317,14 +318,14 @@
 }
 
 .userProfilePill:hover {
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--border-medium);
   transform: translateY(-1px);
 }
 
 .userName {
   font-size: 14.5px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
@@ -332,11 +333,11 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--accent-color, #ff9b76);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
+  color: var(--accent-contrast, #201311);
 }
 
 /* Greeting */
@@ -364,15 +365,15 @@
 
 /* Glass Card Base */
 .glassCard {
-  background: rgba(26, 28, 34, 0.55);
+  background: var(--bg-glass-card, rgba(46, 36, 43, 0.58));
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 28px;
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.38),
-    inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    inset 0 1px 1px rgba(255, 230, 215, 0.12);
   padding: 22px 24px;
   transition:
     border-color 220ms ease,
@@ -385,23 +386,23 @@
 }
 
 .glassCard:hover {
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--border-medium);
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.48),
-    inset 0 1px 1px rgba(255, 255, 255, 0.18);
+    inset 0 1px 1px rgba(255, 230, 215, 0.18);
 }
 
 .handwrittenTitle {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: #ffffff;
+  color: var(--text-primary);
   line-height: 1.25;
 }
 
 .cardSubtitle {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
@@ -419,12 +420,12 @@
 }
 
 .cardLinkArrow {
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--text-muted);
   transition: transform 180ms ease, color 180ms ease;
 }
 
 .glassCard:hover .cardLinkArrow {
-  color: #ffffff;
+  color: var(--text-primary);
   transform: translate(2px, -2px);
 }
 
@@ -439,8 +440,8 @@
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  background: var(--accent-subtle);
+  color: var(--accent-color);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -449,8 +450,9 @@
 }
 
 .glassCard:hover .cardActionPlayBtn {
-  background: #ffffff;
-  color: #121316;
+  background: var(--accent-color);
+  color: var(--accent-contrast, #2a171b);
+  box-shadow: 0 4px 14px var(--accent-glow);
   transform: scale(1.08);
 }
 
@@ -463,11 +465,11 @@
   height: 245px;
   min-height: 245px;
   border-radius: 28px;
-  border: 1px solid rgba(255, 160, 40, 0.38);
-  border-top: 1px solid rgba(255, 210, 100, 0.65);
+  border: 1px solid rgba(255, 74, 10, 0.42);
+  border-top: 1px solid rgba(255, 140, 60, 0.75);
   box-shadow:
-    0 0 32px rgba(255, 120, 0, 0.35),
-    0 0 12px rgba(255, 80, 0, 0.25),
+    0 0 32px var(--accent-ai-glow),
+    0 0 12px rgba(255, 74, 10, 0.25),
     0 12px 32px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   display: flex;
@@ -487,24 +489,24 @@
   pointer-events: none;
   z-index: 1;
   box-shadow:
-    inset 0 0 24px rgba(255, 130, 20, 0.32),
-    inset 0 1px 2px rgba(255, 240, 160, 0.5);
+    inset 0 0 24px rgba(255, 74, 10, 0.32),
+    inset 0 1px 2px rgba(255, 200, 140, 0.5);
   transition: box-shadow 240ms ease;
 }
 
 .freshMixCard:hover {
-  border-color: rgba(255, 190, 70, 0.65);
-  border-top-color: rgba(255, 230, 130, 0.85);
+  border-color: rgba(255, 120, 40, 0.75);
+  border-top-color: rgba(255, 180, 100, 0.95);
   box-shadow:
-    0 0 46px rgba(255, 130, 0, 0.5),
-    0 0 18px rgba(255, 90, 0, 0.38),
+    0 0 46px rgba(255, 74, 10, 0.55),
+    0 0 18px rgba(255, 74, 10, 0.38),
     0 18px 44px rgba(0, 0, 0, 0.52);
 }
 
 .freshMixCard:hover::after {
   box-shadow:
-    inset 0 0 30px rgba(255, 150, 30, 0.45),
-    inset 0 1px 2px rgba(255, 255, 180, 0.7);
+    inset 0 0 30px rgba(255, 74, 10, 0.45),
+    inset 0 1px 2px rgba(255, 230, 160, 0.7);
 }
 
 .freshMixBg {
@@ -528,7 +530,7 @@
   line-height: 1.2;
 }
 
-/* Card 2: You'll Like This (без реализации) */
+/* Card 2: You'll Like This */
 .youllLikeThisCard {
   position: relative;
   overflow: hidden;
@@ -541,17 +543,17 @@
   justify-content: space-between;
   padding: 16px 22px 14px 22px;
   cursor: default;
-  border: 1px solid rgba(255, 110, 20, 0.42);
-  border-top: 1px solid rgba(255, 180, 70, 0.75);
+  border: 1px solid rgba(255, 74, 10, 0.42);
+  border-top: 1px solid rgba(255, 140, 60, 0.75);
   box-shadow:
-    0 0 36px rgba(255, 85, 0, 0.35),
-    0 0 14px rgba(255, 60, 0, 0.25),
+    0 0 36px var(--accent-ai-glow),
+    0 0 14px rgba(255, 74, 10, 0.25),
     0 12px 32px rgba(0, 0, 0, 0.48);
   background:
-    radial-gradient(ellipse 95% 70% at 50% -8%, rgba(255, 95, 0, 0.98) 0%, rgba(255, 60, 0, 0.8) 42%, rgba(185, 38, 0, 0.35) 72%, transparent 100%),
-    radial-gradient(circle 140px at 0% 100%, rgba(255, 80, 0, 0.48) 0%, transparent 70%),
-    radial-gradient(circle 140px at 100% 100%, rgba(255, 80, 0, 0.48) 0%, transparent 70%),
-    linear-gradient(180deg, #ff4c00 0%, #e03b00 16%, #a02800 38%, #501301 64%, #180703 84%, #080a0d 100%);
+    radial-gradient(ellipse 95% 70% at 50% -8%, rgba(255, 74, 10, 0.98) 0%, rgba(224, 59, 0, 0.8) 42%, rgba(160, 40, 0, 0.35) 72%, transparent 100%),
+    radial-gradient(circle 140px at 0% 100%, rgba(255, 74, 10, 0.48) 0%, transparent 70%),
+    radial-gradient(circle 140px at 100% 100%, rgba(255, 74, 10, 0.48) 0%, transparent 70%),
+    linear-gradient(180deg, #ff4a0a 0%, #e03b00 16%, #a02800 38%, #501301 64%, #180703 84%, #111116 100%);
   transition:
     box-shadow 240ms ease,
     border-color 240ms ease;
@@ -565,17 +567,17 @@
   pointer-events: none;
   z-index: 1;
   box-shadow:
-    inset 0 0 28px rgba(255, 90, 0, 0.32),
-    inset 0 1px 2px rgba(255, 200, 120, 0.6);
+    inset 0 0 28px var(--accent-ai-glow),
+    inset 0 1px 2px rgba(255, 180, 120, 0.6);
   transition: box-shadow 240ms ease;
 }
 
 .youllLikeThisCard:hover {
-  border-color: rgba(255, 140, 40, 0.7);
-  border-top-color: rgba(255, 210, 100, 0.9);
+  border-color: rgba(255, 120, 40, 0.75);
+  border-top-color: rgba(255, 180, 100, 0.95);
   box-shadow:
-    0 0 50px rgba(255, 95, 0, 0.52),
-    0 0 20px rgba(255, 70, 0, 0.38),
+    0 0 50px rgba(255, 74, 10, 0.55),
+    0 0 20px rgba(255, 74, 10, 0.40),
     0 18px 44px rgba(0, 0, 0, 0.55);
 }
 
@@ -837,11 +839,11 @@
 }
 
 .shelfTrackCard {
-  background: rgba(26, 28, 34, 0.5);
+  background: var(--bg-glass-card, rgba(46, 36, 43, 0.58));
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-glass-top);
   border-radius: 20px;
   padding: 12px;
   cursor: pointer;
@@ -853,7 +855,7 @@
 }
 
 .shelfTrackCard:hover {
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--border-medium);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
 }
 
@@ -878,7 +880,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--text-muted);
 }
 
 .shelfPlayOverlayBtn {
@@ -889,8 +891,8 @@
   height: 36px;
   border-radius: 50%;
   border: none;
-  background: #ffffff;
-  color: #121316;
+  background: var(--accent-color);
+  color: var(--accent-contrast, #2a171b);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -898,7 +900,7 @@
   opacity: 0;
   transform: scale(0.85);
   transition: all 180ms ease;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 .shelfTrackCard:hover .shelfPlayOverlayBtn {

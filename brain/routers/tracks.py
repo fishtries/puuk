@@ -54,13 +54,18 @@ def _validate_uuid(track_id: str):
 
 
 @router.get("/tracks")
-def get_all_tracks(request: Request, limit: int = 50, current_user: Optional[dict] = Depends(get_current_user)):
-    """Возвращает список треков из базы данных SQLite с персональными лайками."""
+def get_all_tracks(
+    request: Request,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user),
+):
+    """Возвращает страницу треков из базы данных SQLite (без lyrics) с персональными лайками."""
     try:
-        records = db.get_all_tracks()
+        records = db.get_tracks_page(limit=limit, offset=offset)
         fav_ids = db.get_favorite_track_ids(current_user["id"]) if current_user else set()
         base_url = get_base_url(request)
-        return [serialize_track(r, base_url, fav_ids) for r in records[:limit]]
+        return [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in records]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -88,6 +93,14 @@ def resync_track(track_id: str, request: Request, current_user: dict = Depends(g
     from services.track_metadata_service import resync_track_from_disk
     base_url = get_base_url(request)
     return resync_track_from_disk(track_id, current_user, base_url)
+
+
+@router.delete("/tracks/{track_id}")
+def delete_track(track_id: str, current_user: dict = Depends(get_current_user)):
+    """Removes the track everywhere: Qdrant vector, audio file, SQLite row, empty albums."""
+    from services.track_deletion_service import delete_track_everywhere
+    _validate_uuid(track_id)
+    return delete_track_everywhere(track_id, current_user)
 
 
 @router.get("/tracks/{track_id}/lyrics")

@@ -1,7 +1,7 @@
 """Playlists and playlist-track links."""
 import sqlite3
 
-from repositories.base import get_connection
+from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
 
 
 def get_all_playlists(user_id: int = None):
@@ -56,8 +56,8 @@ def get_playlist(playlist_id: int):
 def get_playlist_tracks(playlist_id: int):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT t.*, a.title AS album, pt.added_at
+    cursor.execute(f"""
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, pt.added_at
         FROM tracks t
         JOIN playlist_tracks pt ON t.id = pt.track_id
         LEFT JOIN albums a ON a.id = t.album_id

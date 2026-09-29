@@ -239,7 +239,7 @@
 }
 
 .heartBtnActive {
-  color: var(--accent-color, #ff7a00) !important;
+  color: var(--accent-color) !important;
 }
 
 .trackIndex {

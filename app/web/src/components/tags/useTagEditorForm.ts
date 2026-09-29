@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Track,
   TrackEditPayloadDTO,
   MetadataSearchResultDTO,
   LyricsSearchResultDTO,
 } from '../../types/track';
-import { getCoverUrl, updateTrackMetadata, searchMetadata, searchOnlineLyrics, resyncTrack } from '../../api/tracks';
+import { getCoverUrl, updateTrackMetadata, searchMetadata, searchOnlineLyrics, resyncTrack, deleteTrack, fetchTrack } from '../../api/tracks';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { toast } from 'sonner';
 
 export type EditorTab = 'tags' | 'cover' | 'lyrics' | 'specs';
 
@@ -18,6 +19,7 @@ export type EditorTab = 'tags' | 'cover' | 'lyrics' | 'specs';
 export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
   const queryClient = useQueryClient();
   const updateTrackInStore = usePlayerStore((state) => state.updateTrackInStore);
+  const purgeTrackFromQueue = usePlayerStore((state) => state.purgeTrackFromQueue);
 
   const [currentTrackData, setCurrentTrackData] = useState<Track>(initialTrack);
   const [activeTab, setActiveTab] = useState<EditorTab>('tags');
@@ -57,9 +59,26 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
   // Mutation & Processing State
   const [isSaving, setIsSaving] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // While the delete confirmation is up, Escape must close only the dialog.
+  // Capture-phase listener fires before ConfirmDeleteModal (document) and the
+  // editor shell (window), so stopPropagation keeps the editor itself open.
+  useEffect(() => {
+    if (!isDeleteConfirmOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setIsDeleteConfirmOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isDeleteConfirmOpen]);
 
   // File Upload Helper
   const processImageFile = (file: File) => {
@@ -184,27 +203,47 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     setLyricsResults([]);
   };
 
+  // Единая гидрация формы из полных деталей трека (используется resync'ом
+  // и догрузкой при открытии).
+  const applyTrack = React.useCallback((fresh: Track) => {
+    setCurrentTrackData(fresh);
+    setTitle(fresh.title || '');
+    setArtist(fresh.artist || '');
+    setAlbum(fresh.album || '');
+    setAlbumArtist(fresh.album_artist || '');
+    setYear(fresh.year ? String(fresh.year) : '');
+    setGenre(fresh.genre || '');
+    setTrackNumber(fresh.track_number || '');
+    setDiscNumber(fresh.disc_number || '');
+    setComment(fresh.comment || '');
+    setLyrics(fresh.lyrics || '');
+    setCoverAction('keep');
+    setCoverPreviewUrl(getCoverUrl(fresh));
+    setCoverBase64(null);
+    setCoverMime(null);
+  }, []);
+
+  // Списковые DTO поставляются без lyrics: догружаем детали один раз
+  // при открытии редактора (как iOS TrackEditScreen).
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchTrack(initialTrack.id)
+      .then((fresh) => {
+        if (!cancelled && fresh) applyTrack(fresh);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [initialTrack.id, applyTrack]);
+
   // Resync from Disk
   const handleResync = async () => {
     setIsResyncing(true);
     setErrorMessage(null);
     try {
       const refreshed = await resyncTrack(currentTrackData.id);
-      setCurrentTrackData(refreshed);
-      setTitle(refreshed.title || '');
-      setArtist(refreshed.artist || '');
-      setAlbum(refreshed.album || '');
-      setAlbumArtist(refreshed.album_artist || '');
-      setYear(refreshed.year ? String(refreshed.year) : '');
-      setGenre(refreshed.genre || '');
-      setTrackNumber(refreshed.track_number || '');
-      setDiscNumber(refreshed.disc_number || '');
-      setComment(refreshed.comment || '');
-      setLyrics(refreshed.lyrics || '');
-      setCoverAction('keep');
-      setCoverPreviewUrl(getCoverUrl(refreshed));
-      setCoverBase64(null);
-      setCoverMime(null);
+      applyTrack(refreshed);
 
       updateTrackInStore(currentTrackData.id, refreshed);
       queryClient.setQueryData(['track', currentTrackData.id], refreshed);
@@ -259,6 +298,35 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     }
   };
 
+  // Delete Track from Library (irreversible: removes Qdrant vector, audio file, DB row)
+  const handleDelete = async () => {
+    setIsDeleting(true);
+    setErrorMessage(null);
+    try {
+      const result = await deleteTrack(currentTrackData.id);
+      purgeTrackFromQueue(currentTrackData.id);
+      queryClient.removeQueries({ queryKey: ['track', currentTrackData.id] });
+      queryClient.invalidateQueries({ queryKey: ['tracks'] });
+      queryClient.invalidateQueries({ queryKey: ['albums'] });
+      queryClient.invalidateQueries({ queryKey: ['album'] });
+      queryClient.invalidateQueries({ queryKey: ['album-tracks'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['history'] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      queryClient.invalidateQueries({ queryKey: ['playlist'] });
+      queryClient.invalidateQueries({ queryKey: ['search'] });
+      queryClient.invalidateQueries({ queryKey: ['recommendations'] });
+      toast.success(result.file_deleted ? 'Трек и файл удалены из библиотеки' : 'Трек удалён из библиотеки (файл на диске не найден)');
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Не удалось удалить трек';
+      setErrorMessage(msg);
+      setIsDeleteConfirmOpen(false);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return {
     // data
     currentTrackData,
@@ -296,12 +364,16 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     lyricsResults,
     handleSearchLyrics,
     applyLyricsResult,
-    // save / resync
+    // save / resync / delete
     isSaving,
     isResyncing,
     errorMessage,
     handleResync,
     handleSave,
+    isDeleting,
+    isDeleteConfirmOpen,
+    setIsDeleteConfirmOpen,
+    handleDelete,
   };
 }
 
