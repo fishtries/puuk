@@ -63,19 +63,32 @@ jobs:
             exit 1
           fi
           xcodebuild -list -workspace "$WORKSPACE"
+          APP_SCHEME="$(node -e "console.log(require('./app.json').expo.name.replace(/[^A-Za-z0-9_-]/g, ''))")"
+          if ! xcodebuild -list -workspace "$WORKSPACE" \
+            | awk '/Schemes:/,/^$/' \
+            | sed '1d; s/^[[:space:]]*//' \
+            | grep -Fxq "$APP_SCHEME"; then
+            echo "ERROR: application scheme '$APP_SCHEME' was not found" >&2
+            exit 1
+          fi
+          echo "Application scheme: $APP_SCHEME"
 
       - name: Build unsigned archive
         run: |
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | sort | head -n 1)"
-          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | sed -n '/Schemes:/,$p' | sed -n '2p' | xargs)"
-          echo "Building workspace: $WORKSPACE, scheme: $SCHEME"
-          if [ -z "$SCHEME" ]; then
-            echo "ERROR: no scheme discovered" >&2
+          APP_SCHEME="$(node -e "console.log(require('./app.json').expo.name.replace(/[^A-Za-z0-9_-]/g, ''))")"
+          echo "Building workspace: $WORKSPACE, application scheme: $APP_SCHEME"
+          if ! xcodebuild -list -workspace "$WORKSPACE" \
+            | awk '/Schemes:/,/^$/' \
+            | sed '1d; s/^[[:space:]]*//' \
+            | grep -Fxq "$APP_SCHEME"; then
+            echo "ERROR: application scheme '$APP_SCHEME' was not found" >&2
+            xcodebuild -list -workspace "$WORKSPACE"
             exit 1
           fi
           xcodebuild \
             -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
+            -scheme "$APP_SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
