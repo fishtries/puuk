@@ -28,7 +28,20 @@ for (const filePath of walk(jsiRoot)) {
     )
     .replace(/\bweak\s+let\b/g, 'weak var')
     // Xcode 26 rejects the ownership annotation on these C++ constructors.
-    .replace(/\bSWIFT_RETURNS_RETAINED\s+/g, '');
+    .replace(/\bSWIFT_RETURNS_RETAINED\s+/g, '')
+    // Swift 6.2/Xcode 26 diagnoses the call-scoped pointers as task-isolated
+    // when they are implicitly captured by the JavaScriptActor closure. The
+    // pointers are valid only for this synchronous callback, as documented in
+    // JavaScriptRuntime.swift; explicit capture lists preserve that lifetime
+    // while avoiding the false-positive sending diagnostic.
+    .replace(
+      'resultPtr.pointee = JavaScriptActor.assumeIsolated {\n        return forwardingSwiftErrorsToJS(runtime: runtime) {',
+      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in\n        return forwardingSwiftErrorsToJS(runtime: runtime) {',
+    )
+    .replace(
+      'resultPtr.pointee = JavaScriptActor.assumeIsolated {\n        return forwardingSwiftErrorsToJS(runtime: runtime) {\n          let arguments = JavaScriptValuesBuffer(runtime, start: argumentsPtr, count: argumentsCount)\n          let thisValue = JavaScriptUnownedValue(runtime.pointee, thisPtr)',
+      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in\n        return forwardingSwiftErrorsToJS(runtime: runtime) {\n          let arguments = JavaScriptValuesBuffer(runtime, start: argumentsPtr, count: argumentsCount)\n          let thisValue = JavaScriptUnownedValue(runtime.pointee, thisPtr)',
+    );
 
   if (filePath.endsWith(`${path.sep}apple${path.sep}Package.swift`)) {
     // Expo JSI crosses Swift concurrency domains through synchronous C++ callbacks.

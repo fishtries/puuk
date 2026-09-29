@@ -107,6 +107,8 @@ jobs:
             xcodebuild -list -workspace "$WORKSPACE"
             exit 1
           fi
+          ARCHIVE_LOG="$GITHUB_WORKSPACE/app/ios/puuk-ios/build/xcodebuild-archive.log"
+          mkdir -p "$(dirname "$ARCHIVE_LOG")"
           set +e
           xcodebuild \
             -workspace "$WORKSPACE" \
@@ -123,11 +125,11 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            2>&1 | tee build/xcodebuild-archive.log
+            2>&1 | tee "$ARCHIVE_LOG"
           STATUS=${PIPESTATUS[0]}
           if [ "$STATUS" -ne 0 ]; then
             echo "--- ExpoModulesJSI diagnostics ---" >&2
-            grep -n -E 'ExpoModulesJSI|(^|[[:space:]])error:|fatal error:' build/xcodebuild-archive.log | tail -n 200 >&2 || true
+            grep -n -E 'ExpoModulesJSI|(^|[[:space:]])error:|fatal error:' "$ARCHIVE_LOG" | tail -n 200 >&2 || true
             exit "$STATUS"
           fi
 
