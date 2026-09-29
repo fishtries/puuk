@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build:
     name: Build unsigned IPA
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 90
     defaults:
       run:
@@ -32,9 +32,30 @@ jobs:
 
       - name: Select newest Xcode
         run: |
-          ls -d /Applications/Xcode*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          XCODE_APP="/Applications/Xcode_26.2.app"
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "ERROR: expected $XCODE_APP on macos-26 runner" >&2
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
+          swiftc --version
+
+      - name: Verify Swift tools version
+        run: |
+          PACKAGE_SWIFT="node_modules/expo-modules-jsi/apple/Package.swift"
+          REQUIRED_TOOLS="$(sed -n 's|^// swift-tools-version: *||p' "$PACKAGE_SWIFT" | head -n 1)"
+          SWIFTC_VERSION="$(swiftc --version | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+          echo "ExpoModulesJSI Swift tools version: $REQUIRED_TOOLS"
+          echo "Installed Swift compiler version: $SWIFTC_VERSION"
+          case "$SWIFTC_VERSION" in
+            6.2*) ;;
+            *)
+              echo "ERROR: ExpoModulesJSI requires Swift 6.2, but the selected Xcode provides Swift $SWIFTC_VERSION" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Ensure CocoaPods
         run: |
