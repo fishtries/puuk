@@ -67,9 +67,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify expo-modules-jsi patch
+      - name: Verify and force-touch patched expo-modules-jsi
         run: |
-          echo "--- Checking if patch was applied ---"
+          echo "--- Verifying patch application ---"
           RUNTIME_SWIFT="node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/JavaScriptRuntime.swift"
           if ! grep -q "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT"; then
             echo "ERROR: expo-modules-jsi patch did not apply!" >&2
@@ -79,15 +79,12 @@ jobs:
             sed -n '813p' "$RUNTIME_SWIFT" >&2
             exit 1
           fi
-          echo "✓ Patch applied successfully"
+          echo "✓ Patch verified"
           grep -n "assumeIsolated { \[thisPtr, argumentsPtr\] in" "$RUNTIME_SWIFT" | head -3
-
-      - name: Invalidate SPM cache for patched ExpoModulesJSI
-        run: |
-          echo "--- Clearing SPM build cache to force rebuild with patched sources ---"
-          JSI_ROOT="node_modules/expo-modules-jsi/apple"
-          rm -rf "$JSI_ROOT/.DerivedData" "$JSI_ROOT/.build" "$JSI_ROOT/.xcframework-slices"
-          echo "✓ SPM cache cleared"
+          
+          echo "--- Force-touching patched Swift sources to invalidate SPM cache ---"
+          find node_modules/expo-modules-jsi/apple/Sources -name "*.swift" -exec touch {} +
+          echo "✓ Timestamps updated"
 
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
