@@ -5,11 +5,12 @@ title/album_artist/year записываются в ID3-теги всех тре
 после чего обновляется запись альбома. Смена обложки применяется ко всем трекам.
 """
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 
 import db
+from repositories.albums import UNCHANGED
 from serializers import serialize_track
 from services.track_metadata_service import (
     check_track_edit_permissions,
@@ -130,14 +131,14 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
         if merge_mode:
             db.rebind_tracks_to_album([t["id"] for t in track_rows], canonical_id)
             db.merge_album_into(album_id, canonical_id)
-            db.update_album_fields(canonical_id, year=new_year if "year" in fs else None)
+            db.update_album_fields(canonical_id, year=new_year if "year" in fs else UNCHANGED)
             db.delete_empty_albums()
         else:
             db.update_album_fields(
                 album_id,
                 title=new_title if "title" in fs else None,
                 album_artist=new_artist if "album_artist" in fs else None,
-                year=new_year if "year" in fs else None,
+                year=new_year if "year" in fs else UNCHANGED,
             )
         detail = get_album_detail(canonical_id if merge_mode else album_id, current_user, base_url)
         return {"status": "success", "changed": True, "merged": merge_mode, "failed_tracks": [], **detail}
@@ -177,27 +178,43 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
             detail=f"Не удалось обновить ни один трек альбома: {failed[0]['error']}",
         )
 
-    if merge_mode:
-        # Идентичность совпадает с целевой записью — её title/album_artist не трогаем.
-        db.update_album_fields(canonical_id, year=new_year if "year" in fs else None)
+    # Инвариант: album_id каждого трека должен соответствовать его фактическим
+    # тегам на диске. При частичном сбое успешные и упавшие треки расходятся по
+    # идентичности, поэтому их нельзя оставлять в одной записи альбома.
+    result_album_id = album_id
+    if not failed:
+        # Полный успех.
+        if merge_mode:
+            # Идентичность совпадает с целевой записью — её title/album_artist не трогаем.
+            db.update_album_fields(canonical_id, year=new_year if "year" in fs else UNCHANGED)
+            db.merge_album_into(album_id, canonical_id)
+            result_album_id = canonical_id
+        else:
+            db.update_album_fields(
+                album_id,
+                title=new_title if "title" in fs else None,
+                album_artist=new_artist if "album_artist" in fs else None,
+                year=new_year if "year" in fs else UNCHANGED,
+            )
+    elif merge_mode:
+        # Частичный успех при merge: упавшие треки остались в исходной записи со
+        # старыми тегами, успешные уже перепривязаны к canonical_id. merge отложен.
+        db.update_album_fields(canonical_id, year=new_year if "year" in fs else UNCHANGED)
+        result_album_id = canonical_id
     else:
-        db.update_album_fields(
-            canonical_id,
-            title=new_title if "title" in fs else None,
-            album_artist=new_artist if "album_artist" in fs else None,
-            year=new_year if "year" in fs else None,
-        )
-
-    if merge_mode and not failed:
-        # Полный успех: треки уже перепривязаны через target_album_id —
-        # сливаем записи и удаляем старый альбом.
-        db.merge_album_into(album_id, canonical_id)
-    # Частичный успех при merge: упавшие треки остаются в старой записи со
-    # старыми тегами — merge отложен до повторной попытки пользователем.
+        # Частичный успех без merge: успешные треки сейчас в исходной записи
+        # (старая идентичность), упавшие — там же. Разводим их по идентичности:
+        # успешные -> новый альбом с новой идентичностью, упавшие остаются в
+        # исходном (старая идентичность, старые теги).
+        new_album_id = db.resolve_album(new_title, album_artist=new_artist, year=new_year)
+        if new_album_id != album_id:
+            db.rebind_tracks_to_album(succeeded, new_album_id)
+        db.update_album_fields(new_album_id, year=new_year if "year" in fs else UNCHANGED)
+        result_album_id = new_album_id
 
     db.delete_empty_albums()
 
-    detail = get_album_detail(canonical_id, current_user, base_url)
+    detail = get_album_detail(result_album_id, current_user, base_url)
     return {
         "status": "partial" if failed else "success",
         "changed": True,

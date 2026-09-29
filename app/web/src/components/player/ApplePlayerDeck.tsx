@@ -18,6 +18,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
 import styles from './ApplePlayerDeck.module.css';
 
@@ -84,7 +85,7 @@ export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => voi
       <div className={styles.coverSection}>
         <div className={styles.coverWrapper}>
           {coverUrl && !coverHasError ? (
-            <img
+            <AuthorizedImage
               src={coverUrl}
               alt={currentTrack?.title || 'Обложка трека'}
               className={`${styles.coverImage} ${isPlaying ? styles.playingCover : ''}`}

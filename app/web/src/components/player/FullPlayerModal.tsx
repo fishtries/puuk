@@ -5,6 +5,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useLyrics } from '../../hooks/useLyrics';
 import { getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
 import styles from './FullPlayerModal.module.css';
 
@@ -78,7 +79,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ onAddToPlaylis
             <div className={styles.artworkCol}>
               <div className={styles.coverWrapper}>
                 {coverUrl ? (
-                  <img src={coverUrl} alt="" className={styles.coverImg} />
+                  <AuthorizedImage src={coverUrl} alt="" className={styles.coverImg} />
                 ) : (
                   <div className={styles.placeholderCover}>
                     <Disc3 size={84} />

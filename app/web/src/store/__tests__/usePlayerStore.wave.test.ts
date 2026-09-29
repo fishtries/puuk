@@ -133,6 +133,11 @@ globalThis.localStorage = {
   removeItem: () => {},
 } as unknown as Storage;
 
+// Медиа-хелпер создаёт blob: URL для аудио (закрытый режим: стрим только с JWT)
+let blobCounter = 0;
+(globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = () => `blob:mock-${++blobCounter}`;
+(globalThis.URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
+
 const { usePlayerStore } = await import('../usePlayerStore.ts');
 
 async function settleAsyncChains(times = 6): Promise<void> {
@@ -155,9 +160,11 @@ function firstFeedbackBody(): Record<string, unknown> | undefined {
 }
 
 function loadedStreamIds(): string[] {
-  return audioInstance.srcLog
-    .filter((url) => url.startsWith('/api/stream/'))
-    .map((url) => decodeURIComponent(url.replace('/api/stream/', '').split('?')[0]));
+  // Закрытый режим: аудио грузится авторизованным fetch в blob: URL,
+  // поэтому факт загрузки трека наблюдаем по сетевым запросам стрима.
+  return networkCalls
+    .filter((call) => call.method === 'GET' && call.url.includes('/api/stream/'))
+    .map((call) => decodeURIComponent(call.url.split('/api/stream/')[1].split('?')[0]));
 }
 
 function seedWave(currentTrackId: string, queueIds: string[], playedIds: string[]): void {

@@ -46,6 +46,27 @@
   color: #ffffff;
   margin: 0;
   line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity var(--duration-quick) var(--ease-out),
+              transform var(--duration-press) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .brandTitle:hover {
+    opacity: 0.85;
+  }
+}
+
+.brandTitle:active {
+  transform: scale(0.96);
+  opacity: 0.7;
+}
+
+.brandTitle:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .navGroup {

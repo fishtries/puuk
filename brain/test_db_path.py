@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 _TEST_DB_DIR = os.environ.setdefault("PUUK_TESTS_TMP", tempfile.mkdtemp(prefix="puuk_tests_"))
 os.environ.setdefault("PUUK_DB_PATH", os.path.join(_TEST_DB_DIR, "test_puuk.db"))
+# Детерминированный пароль админа в изолированной тестовой БД (тесты логинятся как admin/admin)
+os.environ.setdefault("PUUK_ADMIN_PASSWORD", "admin")
 
 if 'config' in sys.modules:
     print("!!! CONFIG ALREADY LOADED at test_db_path import:", file=sys.stderr)

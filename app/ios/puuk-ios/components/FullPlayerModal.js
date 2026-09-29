@@ -10,6 +10,7 @@ import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import CoverImage from './CoverImage';
+import { authFetch } from '../utils/api';
 
 import Animated, {
   useSharedValue,
@@ -147,8 +148,11 @@ const FullPlayerModal = ({
   useEffect(() => {
     if (currentTrack?.coverArt && currentTrack.coverArt.includes('/api/cover/')) {
       const colorUrl = currentTrack.coverArt.replace('/api/cover/', '/api/color/');
-      fetch(colorUrl)
-        .then(r => r.json())
+      authFetch(colorUrl)
+        .then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })
         .then(data => {
           if (data.color) {
             bgColor.value = withTiming(data.color, { duration: 800 });

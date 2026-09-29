@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { authFetch, SERVER_URL } from '../utils/api';
+import { authFetch, SERVER_URL, getAuthHeaders } from '../utils/api';
 
 /**
  * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
@@ -82,9 +82,11 @@ export default function usePlayerController({ setTracks }) {
     setPlayerExpandToken(prev => prev + 1);
   }, []);
 
-  const loadAndPlay = useCallback((track) => {
+  const loadAndPlay = useCallback(async (track) => {
     const streamUrl = track.stream_url || `${SERVER_URL}/api/stream/${track.id}`;
-    player.replace(streamUrl);
+    // Закрытый режим: JWT передаётся заголовком (expo-audio AudioSource.headers), не в URL
+    const headers = await getAuthHeaders();
+    player.replace({ uri: streamUrl, headers });
     player.play();
   }, [player]);
 

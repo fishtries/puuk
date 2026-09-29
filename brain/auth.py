@@ -1,5 +1,6 @@
 import os
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -18,7 +19,17 @@ except ImportError:
 logger = logging.getLogger("puuk.auth")
 
 # Настройки JWT
-JWT_SECRET = os.getenv("JWT_SECRET", "puuk-super-secret-jwt-key-2026-safe-production-default")
+# Секрет задается только через окружение. Без него используется случайный
+# временный секрет (никакого известного дефолта в коде): токены остаются
+# недействительными после перезапуска, поэтому в production JWT_SECRET обязателен.
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    JWT_SECRET = secrets.token_hex(32)
+    logger.warning(
+        "JWT_SECRET не задан — используется случайный временный секрет. "
+        "Выданные токены перестанут действовать после перезапуска. "
+        "Задайте JWT_SECRET в переменных окружения."
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_DAYS = int(os.getenv("JWT_EXPIRATION_DAYS", "30"))
 

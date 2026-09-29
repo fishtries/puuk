@@ -2,7 +2,7 @@
 from typing import Optional
 
 import db
-from auth import get_current_admin_user, get_optional_current_user
+from auth import get_current_admin_user, get_current_user
 from config import get_base_url
 from fastapi import APIRouter, Depends, HTTPException, Request
 from serializers import serialize_track
@@ -21,7 +21,7 @@ def scan_library(current_user: dict = Depends(get_current_admin_user)):
 
 
 @router.get("/tracks")
-def get_all_tracks(request: Request, limit: int = 50, current_user: Optional[dict] = Depends(get_optional_current_user)):
+def get_all_tracks(request: Request, limit: int = 50, current_user: Optional[dict] = Depends(get_current_user)):
     """Возвращает список треков из базы данных SQLite с персональными лайками."""
     try:
         records = db.get_all_tracks()

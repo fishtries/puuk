@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import styles from './PlayerBar.module.css';
 
 function formatTime(seconds: number): string {
@@ -73,7 +74,7 @@ export const PlayerBar: React.FC = () => {
           onKeyDown={(e) => e.key === 'Enter' && setIsFullscreen(true)}
         >
           {coverUrl ? (
-            <img
+            <AuthorizedImage
               src={coverUrl}
               alt=""
               className={`${styles.coverImg} ${isPlaying ? styles.coverPlaying : ''}`}

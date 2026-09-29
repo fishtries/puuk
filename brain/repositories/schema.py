@@ -1,5 +1,7 @@
 """Schema bootstrap: tables, indexes, migrations, default admin seeding."""
 import os
+import secrets
+import sys
 import re
 
 try:
@@ -391,15 +393,28 @@ def init_db():
         print(f"[DB Migration] Warning during album identity backfill: {e}")
 
     # 11. Миграция дефолтного администратора
-    cursor.execute("SELECT id FROM users WHERE id = 1 OR username = 'admin'")
+    admin_username = os.getenv("PUUK_ADMIN_USERNAME", "admin")
+    cursor.execute("SELECT id FROM users WHERE id = 1 OR username = ?", (admin_username,))
     admin_row = cursor.fetchone()
     if not admin_row:
-        # Создаем системного админа по умолчанию
-        default_pwd_hash = hash_password("admin")
+        # Пароль администратора задается только через окружение; без него
+        # генерируется случайный и выводится однократно. Никаких известных
+        # дефолтных паролей в коде не осталось.
+        admin_password = os.getenv("PUUK_ADMIN_PASSWORD")
+        if not admin_password:
+            admin_password = secrets.token_urlsafe(18)
+            print(
+                "[Security] PUUK_ADMIN_PASSWORD не задан — сгенерирован разовый пароль "
+                f"для '{admin_username}': {admin_password}\n"
+                "  Сохраните его и смените через: python manage_users.py set-password "
+                "--username <имя> --password <новый>",
+                file=sys.stderr,
+            )
+        default_pwd_hash = hash_password(admin_password)
         cursor.execute("""
             INSERT INTO users (id, username, password_hash, role)
-            VALUES (1, 'admin', ?, 'admin')
-        """, (default_pwd_hash,))
+            VALUES (1, ?, ?, 'admin')
+        """, (admin_username, default_pwd_hash))
         admin_id = 1
     else:
         admin_id = admin_row["id"]

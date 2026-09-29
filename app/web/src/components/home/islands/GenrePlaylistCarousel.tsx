@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Music2 } from 'lucide-react';
 import type { PersonalizedPlaylistSection } from '../../../types/recommendations';
 import { getCoverUrl } from '../../../api/tracks';
+import { AuthorizedImage } from '../../common/AuthorizedImage';
 import { pluralTracksCount, resolveSectionCover, toCarouselItems } from './genrePlaylistUtils';
 import styles from './GenrePlaylistCarousel.module.css';
 
@@ -39,7 +40,7 @@ const CoverArtwork: React.FC<{
 
   return (
     <>
-      <img
+      <AuthorizedImage
         src={coverUrl}
         alt={section.title}
         className={styles.coverImg}

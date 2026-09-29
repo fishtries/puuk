@@ -17,6 +17,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAlbumNavigationStore } from '../../store/useAlbumNavigationStore';
 import { fetchTracks, fetchFavorites, getCoverUrl, searchTracks } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import { useDebounce } from '../../hooks/useDebounce';
 import { Album, Artist, Track } from '../../types/track';
 import { PlaylistsView, PlaylistGridItem } from '../../views/PlaylistsView';
@@ -68,6 +69,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profilePillRef = useRef<HTMLButtonElement>(null);
+  const mainContentRef = useRef<HTMLElement | null>(null);
 
   const handleProfileClick = () => {
     if (!user) {
@@ -180,12 +182,27 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
     setSearchQuery(artist.name);
   };
 
-  const handleClearSearch = () => {
-    setSearchQuery('');
+  const handleGoHome = () => {
     setActiveTab('home');
+    setSelectedAlbum(null);
+    setSelectedPlaylist(null);
+    setSearchQuery('');
+    setIsCreateMenuOpen(false);
+    setIsProfileMenuOpen(false);
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleClearSearch = () => {
+    handleGoHome();
   };
 
   const handleNavChange = (tab: 'home' | 'library' | 'search') => {
+    if (tab === 'home') {
+      handleGoHome();
+      return;
+    }
     setActiveTab(tab);
     setSelectedAlbum(null);
     setSelectedPlaylist(null);
@@ -226,7 +243,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
       {/* 1. Left Capsule (Sidebar Island) */}
       <aside className={styles.sidebarIsland} aria-label="Navigation">
         <div className={styles.brandGroup}>
-          <h1 className={styles.brandTitle}>puuk</h1>
+          <h1
+            className={styles.brandTitle}
+            onClick={handleGoHome}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleGoHome();
+              }
+            }}
+            title="Перейти на главную"
+            aria-label="puuk — перейти на главную"
+          >
+            puuk
+          </h1>
         </div>
 
         <nav className={styles.navGroup}>
@@ -321,7 +353,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
       </aside>
 
       {/* 2. Main Content Stage */}
-        <main className={styles.mainContent}>
+      <main ref={mainContentRef} className={styles.mainContent}>
         {/* Top Header Bar: Search Capsule & fish User Pill */}
         <header className={styles.topHeaderBar}>
           <div className={styles.searchCapsule}>
@@ -474,7 +506,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
                           onKeyDown={(e) => e.key === 'Enter' && handleTrackItemClick(track)}
                         >
                           {getCoverUrl(track) ? (
-                            <img
+                            <AuthorizedImage
                               src={getCoverUrl(track)}
                               alt=""
                               className={styles.resultCover}
@@ -549,7 +581,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
                         >
                           <div className={styles.resultShelfCover}>
                             {getCoverUrl(album) ? (
-                              <img src={getCoverUrl(album)} alt="" className={styles.resultShelfImg} loading="lazy" />
+                              <AuthorizedImage src={getCoverUrl(album)} alt="" className={styles.resultShelfImg} loading="lazy" />
                             ) : (
                               <div className={styles.resultShelfFallback}>
                                 <Disc3 size={22} />
@@ -586,7 +618,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
                         >
                           <div className={`${styles.resultShelfCover} ${styles.resultArtistCover}`}>
                             {getCoverUrl(artist.coverArt || '') ? (
-                              <img
+                              <AuthorizedImage
                                 src={getCoverUrl(artist.coverArt || '')}
                                 alt=""
                                 className={styles.resultShelfImg}

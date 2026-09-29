@@ -127,26 +127,26 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
         bad_login = self.client.post("/api/auth/login", json={"username": "charlie_p6", "password": "wrong"})
         self.assertEqual(bad_login.status_code, 401)
 
-    def test_05_guest_public_read_access(self):
-        # Гость читает каталог без токена
-        resp = self.client.get("/api/tracks")
+    def test_05_catalog_requires_auth(self):
+        # Каталог закрыт: без токена -> 401 на все читающие маршруты
+        for ep in ("/api/tracks", "/api/albums", "/api/library/tracks"):
+            r = self.client.get(ep)
+            self.assertEqual(r.status_code, 401, f"{ep} должен требовать JWT")
+
+        # Валидный пользователь читает каталог
+        resp = self.client.get("/api/tracks", headers=self.headers_c)
         self.assertEqual(resp.status_code, 200)
-        tracks = resp.json()
-        self.assertTrue(len(tracks) > 0)
-        self.assertTrue(all(t["is_liked"] is False for t in tracks),
-                        "Гостю все треки должны приходить с is_liked=false")
+        self.assertTrue(len(resp.json()) > 0)
+        # Валидному пользователю треки приходят с его лайками (здесь - без лайков)
+        self.assertTrue(all(t["is_liked"] is False for t in resp.json()))
 
-        # Альбомы доступны гостю
-        resp_albums = self.client.get("/api/albums")
-        self.assertEqual(resp_albums.status_code, 200)
-
-        # Поиск доступен гостю, лайки не подмешиваются
+        # Поиск доступен только с токеном
         resp_search = self.client.get("/api/search", params={"q": "Phase"})
+        self.assertEqual(resp_search.status_code, 401)
+        resp_search = self.client.get("/api/search", params={"q": "Phase"}, headers=self.headers_c)
         self.assertEqual(resp_search.status_code, 200)
-        for t in resp_search.json().get("tracks", []):
-            self.assertFalse(t["is_liked"])
 
-        # Битый токен отклоняется даже публичным эндпоинтом
+        # Битый токен отклоняется
         bad = self.client.get("/api/tracks", headers={"Authorization": "Bearer invalid.token.payload"})
         self.assertEqual(bad.status_code, 401)
 
@@ -184,10 +184,10 @@ class TestPhase6StrictModeAndIsolation(unittest.TestCase):
         target = next(t for t in resp.json() if t["id"] == self.track_id)
         self.assertTrue(target["is_liked"])
 
-        # Гость видит тот же трек без лайка
-        guest = self.client.get("/api/tracks", params={"limit": 1000})
-        target_guest = next(t for t in guest.json() if t["id"] == self.track_id)
-        self.assertFalse(target_guest["is_liked"])
+        # Другой пользователь видит тот же трек без лайка
+        other = self.client.get("/api/tracks", params={"limit": 1000}, headers=self.headers_d)
+        target_other = next(t for t in other.json() if t["id"] == self.track_id)
+        self.assertFalse(target_other["is_liked"])
 
     @classmethod
     def tearDownClass(cls):

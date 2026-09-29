@@ -4,6 +4,8 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 
+import { ActivityIndicator } from 'react-native';
+
 import FullPlayerModal from './components/FullPlayerModal';
 import AddToPlaylistModal from './components/AddToPlaylistModal';
 import TrackContextMenuModal from './components/TrackContextMenuModal';
@@ -18,6 +20,7 @@ export default function App() {
   const [trackToAdd, setTrackToAdd] = useState(null);
   const [trackToManage, setTrackToManage] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isAuthModalVisible, setIsAuthModalVisible] = useState(false);
 
   const navigationRef = useNavigationContainerRef();
@@ -50,9 +53,10 @@ export default function App() {
     });
   }, []);
 
-  // Инициализация авторизации
+  // Инициализация авторизации (закрытый режим: checking -> authenticated | unauthenticated)
   useEffect(() => {
     checkAuth().then(user => {
+      setIsAuthChecking(false);
       if (user) setCurrentUser(user);
     });
     const unsubscribe = addAuthListener(user => {
@@ -63,6 +67,11 @@ export default function App() {
 
   // Загрузка треков с сервера
   useEffect(() => {
+    // Гость не получает каталог: сначала обязательный вход
+    if (!currentUser) {
+      setTracks([]);
+      return;
+    }
     const controller = new AbortController();
     const fetchInitialTracks = async () => {
       try {
@@ -88,6 +97,35 @@ export default function App() {
     fetchInitialTracks();
     return () => controller.abort();
   }, [currentUser]);
+
+  if (isAuthChecking) {
+    return (
+      <SafeAreaProvider>
+        <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
+          <StatusBar style="light" />
+          <ActivityIndicator size="large" color="#FA243C" />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Закрытый режим: без сессии — только неотключаемое окно входа
+  if (!currentUser) {
+    return (
+      <SafeAreaProvider>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          <StatusBar style="light" />
+          <LoginModal
+            visible
+            mandatory
+            onClose={() => {}}
+            currentUser={currentUser}
+            onLoginSuccess={(u) => setCurrentUser(u)}
+          />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>

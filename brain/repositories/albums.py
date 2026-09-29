@@ -14,6 +14,9 @@ from repositories.base import get_connection
 UNKNOWN_ALBUM_TITLE = "Unknown Album"
 VARIOUS_ARTISTS = "Various Artists"
 
+# Sentinel, отличающий «не менять поле» от «очистить поле (None)».
+UNCHANGED = object()
+
 # Детерминированный порядок треков альбома: диск → номер → название → id.
 # TEXT-значения вида "7/16" CAST до целого разбирает по ведущим цифрам.
 TRACKS_ORDER_SQL = """
@@ -186,25 +189,39 @@ def get_albums_catalog_rows(album_id=None):
     return rows
 
 
-def update_album_fields(album_id, title=None, album_artist=None, year=None) -> Optional[Dict[str, Any]]:
-    """Обновляет поля альбома (None = не менять) и пересчитывает нормализованную идентичность."""
+def update_album_fields(album_id, title=None, album_artist=None, year=UNCHANGED) -> Optional[Dict[str, Any]]:
+    """Обновляет поля альбома (None = не менять; year=UNCHANGED = не менять год,
+    year=None = очистить год) и пересчитывает нормализованную идентичность."""
     current = get_album(album_id)
     if not current:
         return None
     new_title = str(title).strip() if title is not None else current["title"]
     new_artist = str(album_artist).strip() if album_artist is not None else (current["album_artist"] or None)
+
+    set_clauses = [
+        "title = ?",
+        "album_artist = ?",
+        "title_normalized = ?",
+        "album_artist_normalized = ?",
+        "updated_at = CURRENT_TIMESTAMP",
+    ]
+    params: List[Any] = [
+        new_title,
+        new_artist,
+        normalize_text(new_title),
+        normalize_text(new_artist),
+    ]
+    if year is not UNCHANGED:
+        set_clauses.append("year = ?")
+        params.append(year)
+    params.append(album_id)
+
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE albums
-        SET title = ?,
-            album_artist = ?,
-            year = COALESCE(?, year),
-            title_normalized = ?,
-            album_artist_normalized = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (new_title, new_artist, year, normalize_text(new_title), normalize_text(new_artist), album_id))
+    cursor.execute(
+        f"UPDATE albums SET {', '.join(set_clauses)} WHERE id = ?",
+        tuple(params),
+    )
     conn.commit()
     updated = get_album(album_id)
     conn.close()

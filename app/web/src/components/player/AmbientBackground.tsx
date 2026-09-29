@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { getCoverUrl } from '../../api/tracks';
+import { fetchAuthorizedBlobUrl } from '../../api/media';
 import styles from './AmbientBackground.module.css';
 
 interface WaveNode {
@@ -215,16 +216,11 @@ export const AmbientBackground: React.FC = () => {
     }
 
     let isCancelled = false;
-    let objectUrlToRevoke: string | null = null;
 
     async function loadCover() {
       try {
-        const res = await fetch(coverUrl);
-        if (!res.ok) throw new Error('Cover fetch failed');
-        const blob = await res.blob();
+        const objectUrl = await fetchAuthorizedBlobUrl(coverUrl);
         if (isCancelled) return;
-        const objectUrl = URL.createObjectURL(blob);
-        objectUrlToRevoke = objectUrl;
 
         const img = new Image();
         img.src = objectUrl;
@@ -241,21 +237,7 @@ export const AmbientBackground: React.FC = () => {
           coverImgRef.current = null;
         };
       } catch {
-        // Fallback to direct image source
-        const img = new Image();
-        img.src = coverUrl;
-        img.onload = () => {
-          if (isCancelled) return;
-          coverImgRef.current = img;
-          const theme = extractArtTheme(img);
-          if (theme) {
-            extractedThemeRef.current = theme;
-          }
-        };
-        img.onerror = () => {
-          if (isCancelled) return;
-          coverImgRef.current = null;
-        };
+        coverImgRef.current = null;
       }
     }
 
@@ -263,9 +245,6 @@ export const AmbientBackground: React.FC = () => {
 
     return () => {
       isCancelled = true;
-      if (objectUrlToRevoke) {
-        URL.revokeObjectURL(objectUrlToRevoke);
-      }
     };
   }, [coverUrl]);
 

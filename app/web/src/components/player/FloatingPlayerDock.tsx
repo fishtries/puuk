@@ -15,6 +15,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { getCoverUrl, fetchPlaylists, addTrackToPlaylist } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
 import { LyricsQuickPeek } from './LyricsQuickPeek';
 import { DockActionsMenu } from './DockActionsMenu';
@@ -231,7 +232,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           title="Открыть полный плеер и текст"
         >
           {coverUrl ? (
-            <img
+            <AuthorizedImage
               src={coverUrl}
               alt={currentTrack?.title || 'Cover'}
               className={styles.coverImg}

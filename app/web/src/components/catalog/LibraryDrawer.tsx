@@ -18,6 +18,7 @@ import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAlbumNavigationStore } from '../../store/useAlbumNavigationStore';
 import { fetchTracks, fetchAlbums, getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track, Album } from '../../types/track';
 import styles from './LibraryDrawer.module.css';
 
@@ -216,7 +217,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                       >
                         <div className={styles.albumCoverWrap}>
                           {cover ? (
-                            <img src={cover} alt={album.title} className={styles.albumImg} />
+                            <AuthorizedImage src={cover} alt={album.title} className={styles.albumImg} />
                           ) : (
                             <div className={styles.albumPlaceholder}>
                               <FolderOpen size={28} />
@@ -248,7 +249,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                       >
                         <div className={styles.rowCoverWrap}>
                           {cover ? (
-                            <img src={cover} alt="" className={styles.rowCover} />
+                            <AuthorizedImage src={cover} alt="" className={styles.rowCover} />
                           ) : (
                             <div className={styles.placeholderIcon}>
                               <Music2 size={16} />

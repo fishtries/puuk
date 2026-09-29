@@ -74,3 +74,30 @@
   box-shadow: none;
   outline: none;
 }
+
+
+/* Closed-access auth gate: сессии нет — приложение не монтируется */
+.authGate {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-color, #0b0b0f);
+  z-index: 1000;
+}
+
+.authGateSpinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: rgba(255, 255, 255, 0.75);
+  animation: authGateSpin 0.9s linear infinite;
+}
+
+@keyframes authGateSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

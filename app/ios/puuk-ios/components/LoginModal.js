@@ -31,7 +31,7 @@ const ACCENT_COLORS = [
   { id: 'blue', hex: '#007AFF', name: 'Blue' },
 ];
 
-export default function LoginModal({ visible, onClose, currentUser, onLoginSuccess }) {
+export default function LoginModal({ visible, onClose, currentUser, onLoginSuccess, mandatory = false }) {
   const insets = useSafeAreaInsets();
   const [settings, setSettings] = useState(getSettings());
   const [showLoginForm, setShowLoginForm] = useState(false);
@@ -62,6 +62,8 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
   };
 
   const handleClose = () => {
+    // Обязательное окно входа (закрытый режим) нельзя закрыть
+    if (mandatory) return;
     resetForm();
     onClose();
   };
@@ -192,9 +194,11 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>{t('profileTitle', lang)}</Text>
-            <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
-              <Ionicons name="close" size={20} color="#8E8E93" />
-            </TouchableOpacity>
+            {!mandatory && (
+              <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
+                <Ionicons name="close" size={20} color="#8E8E93" />
+              </TouchableOpacity>
+            )}
           </View>
 
           <ScrollView

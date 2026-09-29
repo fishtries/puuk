@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { User, LoginCredentials } from '../types/user';
 import { loginWithCredentials, loginWithCode, fetchCurrentUser } from '../api/auth';
+import { resetUnauthorizedLatch } from '../api/client';
 import { queryClient } from '../api/queryClient';
 import { usePlayerStore } from './usePlayerStore';
 
@@ -9,6 +10,7 @@ interface AuthStoreState {
   token: string | null;
   isLoading: boolean;
   error: string | null;
+  isAuthChecked: boolean;
   login: (credentials: LoginCredentials) => Promise<void>;
   loginWithTelegramCode: (code: string) => Promise<void>;
   logout: () => void;
@@ -35,6 +37,7 @@ export const useAuthStore = create<AuthStoreState>((set) => ({
   token: localStorage.getItem('puuk_token'),
   isLoading: false,
   error: null,
+  isAuthChecked: false,
 
   login: async (credentials: LoginCredentials) => {
     set({ isLoading: true, error: null });
@@ -44,6 +47,7 @@ export const useAuthStore = create<AuthStoreState>((set) => ({
       localStorage.setItem('puuk_token', response.access_token);
       const user = response.user || await fetchCurrentUser();
       set({ token: response.access_token, user, isLoading: false });
+      resetUnauthorizedLatch();
       void queryClient.invalidateQueries();
     } catch (err: unknown) {
       set({ error: (err as Error).message || 'Authentication failed', isLoading: false });
@@ -59,6 +63,7 @@ export const useAuthStore = create<AuthStoreState>((set) => ({
       localStorage.setItem('puuk_token', response.access_token);
       const user = response.user || await fetchCurrentUser();
       set({ token: response.access_token, user, isLoading: false });
+      resetUnauthorizedLatch();
       void queryClient.invalidateQueries();
     } catch (err: unknown) {
       set({ error: (err as Error).message || 'Invalid Telegram code', isLoading: false });
@@ -74,17 +79,17 @@ export const useAuthStore = create<AuthStoreState>((set) => ({
   checkAuth: async () => {
     const token = localStorage.getItem('puuk_token');
     if (!token) {
-      set({ isLoading: false });
+      set({ isAuthChecked: true, isLoading: false });
       return;
     }
     set({ isLoading: true });
     try {
       const user = await fetchCurrentUser();
-      set({ user, isLoading: false });
+      set({ user, isAuthChecked: true, isLoading: false });
       queryClient.invalidateQueries();
     } catch {
       clearUserSession();
-      set({ token: null, user: null, isLoading: false });
+      set({ token: null, user: null, isAuthChecked: true, isLoading: false });
     }
   },
 }));

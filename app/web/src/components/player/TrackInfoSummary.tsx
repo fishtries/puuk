@@ -2,6 +2,7 @@ import React from 'react';
 import { Heart, Music2 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import styles from './TrackInfoSummary.module.css';
 
 interface TrackInfoSummaryProps {
@@ -17,7 +18,7 @@ export const TrackInfoSummary: React.FC<TrackInfoSummaryProps> = ({ compact = fa
     <div className={`${styles.summary} ${compact ? styles.compact : ''}`}>
       <div className={styles.cover}>
         {coverUrl ? (
-          <img src={coverUrl} alt={currentTrack?.title || 'Обложка трека'} />
+          <AuthorizedImage src={coverUrl} alt={currentTrack?.title || 'Обложка трека'} />
         ) : (
           <Music2 size={compact ? 24 : 36} />
         )}

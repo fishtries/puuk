@@ -6,6 +6,7 @@ import { fetchFavorites, getCoverUrl } from '../api/tracks';
 import { Track } from '../types/track';
 import styles from './LibraryView.module.css';
 import { useAuthStore } from '../store/useAuthStore';
+import { AuthorizedImage } from '../components/common/AuthorizedImage';
 
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds)) return '0:00';
@@ -108,7 +109,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onAddToPlaylist }) => 
 
                 <div className={styles.colTitle}>
                   {cover ? (
-                    <img src={cover} alt="" className={styles.rowCover} loading="lazy" />
+                    <AuthorizedImage src={cover} alt="" className={styles.rowCover} loading="lazy" />
                   ) : (
                     <div className={styles.rowCoverPlaceholder}>
                       <Music2 size={14} />

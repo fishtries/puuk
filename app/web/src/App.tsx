@@ -24,6 +24,7 @@ import { Track } from './types/track';
 
 import styles from './App.module.css';
 import { queryClient } from './api/queryClient';
+import { setUnauthorizedHandler } from './api/client';
 
 function AppContent() {
   const [viewMode, setViewMode] = useState<'home' | 'lyrics'>('home');
@@ -32,6 +33,8 @@ function AppContent() {
 
   const checkAuth = useAuthStore((state) => state.checkAuth);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
+  const user = useAuthStore((state) => state.user);
+  const isAuthChecked = useAuthStore((state) => state.isAuthChecked);
 
   useHotkeys(undefined, () => setIsLibraryOpen(true));
   useMediaSession();
@@ -39,6 +42,27 @@ function AppContent() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => useAuthStore.getState().logout());
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  if (!isAuthChecked) {
+    return (
+      <div className={styles.authGate}>
+        <div className={styles.authGateSpinner} aria-label="Проверка сессии" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={styles.authGate}>
+        <LoginModal mandatory />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.appShell}>

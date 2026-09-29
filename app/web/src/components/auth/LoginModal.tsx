@@ -5,7 +5,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import styles from './LoginModal.module.css';
 
-export const LoginModal: React.FC = () => {
+export const LoginModal: React.FC<{ mandatory?: boolean }> = ({ mandatory = false }) => {
   const isLoginOpen = usePlayerStore((state) => state.isLoginOpen);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
 
@@ -48,8 +48,8 @@ export const LoginModal: React.FC = () => {
 
   return (
     <AnimatePresence>
-      {isLoginOpen && (
-        <div className={styles.backdrop} onClick={handleClose}>
+      {(isLoginOpen || mandatory) && (
+        <div className={styles.backdrop} onClick={mandatory ? undefined : handleClose}>
           <motion.div
             className={styles.modal}
             onClick={(e) => e.stopPropagation()}
@@ -63,14 +63,16 @@ export const LoginModal: React.FC = () => {
           >
             <header className={styles.header}>
               <h2 className={styles.title}>Авторизация в Puuk</h2>
-              <button
-                type="button"
-                className={styles.closeBtn}
-                onClick={handleClose}
-                aria-label="Закрыть окно"
-              >
-                <X size={18} />
-              </button>
+              {!mandatory && (
+                <button
+                  type="button"
+                  className={styles.closeBtn}
+                  onClick={handleClose}
+                  aria-label="Закрыть окно"
+                >
+                  <X size={18} />
+                </button>
+              )}
             </header>
 
             <div className={styles.modeTabs}>

@@ -154,7 +154,7 @@ class TestPhase3MultiUserLibrary(unittest.TestCase):
 
     def test_04_color_caching(self):
         # Цвет был задан как #336699
-        color_resp = self.client.get(f"/api/color/{self.track_id}")
+        color_resp = self.client.get(f"/api/color/{self.track_id}", headers=self.headers_alice)
         self.assertEqual(color_resp.status_code, 200)
         self.assertEqual(color_resp.json()["color"], "#336699")
 

@@ -131,7 +131,7 @@ class AlbumApiTest(unittest.TestCase):
 
     def tearDown(self):
         for name in ("alb_edit_1.mp3", "alb_edit_2.mp3", "alb_merge_1.mp3", "alb_merge_2.mp3",
-                     "alb_move_1.mp3", "alb_move_2.mp3"):
+                     "alb_move_1.mp3", "alb_move_2.mp3", "alb_clear_1.mp3", "alb_partial_1.mp3"):
             path = os.path.join(AUDIO_DIR, name)
             if os.path.exists(path):
                 try:
@@ -143,7 +143,7 @@ class AlbumApiTest(unittest.TestCase):
         aid = db.resolve_album("Catalog DTO Album", album_artist="Catalog Artist", year="2001")
         self._make_track("cat_dto_1", aid, "alb_edit_1.mp3")
 
-        resp = self.client.get("/api/albums")
+        resp = self.client.get("/api/albums", headers=self.user_headers)
         self.assertEqual(resp.status_code, 200)
         album = next(a for a in resp.json() if a["id"] == aid)
         self.assertEqual(album["title"], "Catalog DTO Album")
@@ -159,14 +159,14 @@ class AlbumApiTest(unittest.TestCase):
         self._make_track("det_1", aid, "alb_edit_2.mp3")
         self._make_track("det_2", aid, "alb_merge_1.mp3")
 
-        resp = self.client.get(f"/api/albums/{aid}")
+        resp = self.client.get(f"/api/albums/{aid}", headers=self.user_headers)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["album"]["id"], aid)
         self.assertEqual(body["album"]["track_count"], 2)
         self.assertEqual(len(body["tracks"]), 2)
 
-        missing = self.client.get("/api/albums/999999")
+        missing = self.client.get("/api/albums/999999", headers=self.user_headers)
         self.assertEqual(missing.status_code, 404)
 
     def test_patch_album_writes_all_track_files(self):
@@ -223,6 +223,53 @@ class AlbumApiTest(unittest.TestCase):
             headers=self.user_headers,
         )
         self.assertEqual(resp.status_code, 403)
+
+    def test_patch_album_clears_year(self):
+        aid = db.resolve_album("Album Clear Year", album_artist="Clear Artist", year="1999")
+        _, f1 = self._make_track("clear_1", aid, "alb_clear_1.mp3")
+
+        resp = self.client.patch(
+            f"/api/albums/{aid}",
+            json={"year": None},
+            headers=self.admin_headers,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["status"], "success")
+
+        self.assertIsNone(db.get_album(aid)["year"])
+        self.assertIsNone(read_audio_metadata(f1).year)
+
+    def test_patch_album_partial_failure_splits_tracks_by_identity(self):
+        aid = db.resolve_album("Album Partial", album_artist="Partial Artist")
+        self._make_track("part_ok", aid, "alb_partial_1.mp3")
+        # Трек с несуществующим файлом: его запись тегов упадёт с 404.
+        db.add_or_update_track(
+            track_id="part_broken",
+            file_path="does_not_exist_partial.mp3",
+            title="Broken File",
+            album_id=aid,
+            artist="Partial Artist",
+            added_by_user_id=self.admin_id,
+        )
+
+        resp = self.client.patch(
+            f"/api/albums/{aid}",
+            json={"title": "Album Partial Renamed"},
+            headers=self.admin_headers,
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["status"], "partial")
+        self.assertEqual([f["track_id"] for f in body["failed_tracks"]], ["part_broken"])
+
+        # Успешный трек — в новом альбоме с новым названием.
+        new_album_id = db.get_track("part_ok")["album_id"]
+        self.assertNotEqual(new_album_id, aid)
+        self.assertEqual(db.get_album(new_album_id)["title"], "Album Partial Renamed")
+
+        # Упавший трек остался в исходном альбоме со старым названием.
+        self.assertEqual(db.get_track("part_broken")["album_id"], aid)
+        self.assertEqual(db.get_album(aid)["title"], "Album Partial")
 
     def test_track_move_leaves_other_tracks_untouched(self):
         aid = db.resolve_album("Album Move Origin", album_artist="Move Artist")

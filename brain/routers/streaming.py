@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 import db
-from auth import get_optional_current_user
+from auth import get_current_user
 from config import MUSIC_DIR, DEFAULT_COVER_PATH, DEFAULT_COVER_COLOR
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -53,7 +53,7 @@ def _resolve_stream_file_path(track_id: str, raise_on_qdrant_error: bool = False
 
 
 @router.get("/api/stream/{track_id}")
-def stream_track(track_id: str, current_user: Optional[dict] = Depends(get_optional_current_user)):
+def stream_track(track_id: str, current_user: Optional[dict] = Depends(get_current_user)):
     """Стриминг аудиофайла по track_id (сначала быстрый поиск в SQLite)."""
     try:
         uuid.UUID(track_id)
@@ -74,7 +74,7 @@ def stream_track(track_id: str, current_user: Optional[dict] = Depends(get_optio
 
 
 @router.get("/api/cover/{track_id}")
-def get_cover_art(track_id: str, current_user: Optional[dict] = Depends(get_optional_current_user)):
+def get_cover_art(track_id: str, current_user: Optional[dict] = Depends(get_current_user)):
     """Возвращает обложку трека из ID3-тегов файла или дефолтную обложку."""
     try:
         uuid.UUID(track_id)
@@ -99,7 +99,7 @@ def get_cover_art(track_id: str, current_user: Optional[dict] = Depends(get_opti
 
 
 @router.get("/api/color/{track_id}")
-def get_track_color(track_id: str, current_user: Optional[dict] = Depends(get_optional_current_user)):
+def get_track_color(track_id: str, current_user: Optional[dict] = Depends(get_current_user)):
     """Возвращает доминирующий цвет обложки в HEX-формате с кешированием в SQLite."""
     try:
         uuid.UUID(track_id)

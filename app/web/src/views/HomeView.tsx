@@ -6,6 +6,7 @@ import { fetchTracks, fetchAlbums, getCoverUrl } from '../api/tracks';
 import { Track, Album } from '../types/track';
 import { audioEngine } from '../engine/AudioEngine';
 import styles from './HomeView.module.css';
+import { AuthorizedImage } from '../components/common/AuthorizedImage';
 
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds)) return '0:00';
@@ -193,7 +194,7 @@ export const HomeView: React.FC = () => {
 
                 <div className={styles.colTitle}>
                   {cover ? (
-                    <img src={cover} alt="" className={styles.rowCover} loading="lazy" />
+                    <AuthorizedImage src={cover} alt="" className={styles.rowCover} loading="lazy" />
                   ) : (
                     <div className={styles.rowCoverPlaceholder}>
                       <Music2 size={14} />
@@ -258,7 +259,7 @@ export const HomeView: React.FC = () => {
                 <div key={album.id} className={styles.albumCard}>
                   <div className={styles.albumCoverWrap}>
                     {cover ? (
-                      <img src={cover} alt={album.title} className={styles.albumImg} />
+                      <AuthorizedImage src={cover} alt={album.title} className={styles.albumImg} />
                     ) : (
                       <div className={styles.albumPlaceholder}>
                         <FolderOpen size={32} />

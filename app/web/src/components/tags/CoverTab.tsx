@@ -1,6 +1,7 @@
 import React from 'react';
 import { Upload, Trash2, RotateCcw, Music2 } from 'lucide-react';
 import { getCoverUrl } from '../../api/tracks';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 import type { TagEditorFormApi } from './useTagEditorForm';
 import styles from './TagEditorModal.module.css';
 
@@ -11,7 +12,7 @@ export const CoverTab: React.FC<{ form: TagEditorFormApi }> = ({ form }) => (
         {form.coverAction === 'remove' ? (
           <div className={styles.coverRemovedBadge}>Будет удалена</div>
         ) : form.coverPreviewUrl ? (
-          <img src={form.coverPreviewUrl} alt="Cover Preview" className={styles.coverImagePreview} />
+          <AuthorizedImage src={form.coverPreviewUrl} alt="Cover Preview" className={styles.coverImagePreview} />
         ) : (
           <div className={styles.coverPlaceholder}>
             <Music2 size={40} />

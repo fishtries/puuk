@@ -84,6 +84,15 @@ export const setSavedUser = async (user) => {
   notifyAuthChange(user);
 };
 
+const AUTH_EXEMPT_PATHS = ['/api/auth/login', '/api/auth/verify-code', '/api/auth/me'];
+let isHandlingUnauthorized = false;
+
+// Заголовки для медиа-запросов (обложки/аудио) — без токена в URL.
+export const getAuthHeaders = async () => {
+  const token = await getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 export const authFetch = async (endpoint, options = {}) => {
   const url = endpoint.startsWith('http') ? endpoint : `${SERVER_URL}${endpoint}`;
   const token = await getAuthToken();
@@ -108,10 +117,18 @@ export const authFetch = async (endpoint, options = {}) => {
   });
 
   if (response.status === 401) {
-    // Токен устарел или недействителен
-    if (token) {
-      console.warn('[Auth] Токен не прошел проверку, сбрасываем авторизацию.');
-      await logout();
+    // Закрытый режим: сессия невалидна — сбрасываем авторизацию всегда.
+    // Исключение — сами auth-эндпоинты (401 там означает неверные креды).
+    const path = url.replace(/^https?:\/\/[^/]+/, '');
+    const isAuthPath = AUTH_EXEMPT_PATHS.some((p) => path.startsWith(p));
+    if (!isAuthPath && !isHandlingUnauthorized) {
+      isHandlingUnauthorized = true;
+      console.warn('[Auth] 401 — сбрасываем авторизацию.');
+      try {
+        await logout();
+      } finally {
+        isHandlingUnauthorized = false;
+      }
     }
   }
 
@@ -162,10 +179,13 @@ export const checkAuth = async () => {
       await setSavedUser(user);
       return user;
     }
+    // Закрытый режим: без подтверждения от /me сохранённый пользователь невалиден
+    await logout();
+    return null;
   } catch (e) {
     console.warn('[checkAuth network error]', e);
+    return null;
   }
-  return await getSavedUser();
 };
 
 export const logout = async () => {

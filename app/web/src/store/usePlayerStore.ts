@@ -2,11 +2,13 @@ import { create } from 'zustand';
 import { PlayerStoreState, RepeatMode, ActiveView, RightPanelTab, PlaybackStatus } from '../types/player';
 import { Track } from '../types/track';
 import { audioEngine } from '../engine/AudioEngine';
+import { fetchAuthorizedAudioUrl } from '../api/media';
 import { parseLRC } from '../engine/lrcParser';
 import { parseLyricsPayload, isDemoTrack } from './playerStoreHelpers';
 import {
   fetchLyrics as apiFetchLyrics,
   fetchHistory,
+  fetchTracks,
   getStreamUrl,
   recordTrackHistory,
   toggleLikeTrack,
@@ -336,13 +338,18 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       get().fetchLyrics(track.id);
       get().recordHistory(track);
 
-      const streamUrl = getStreamUrl(track.id);
-      const isLoudnessEnabled = get().isLoudnessNormalizationEnabled;
-      const trackGainDb = computeTrackNormalizationGainDb(track, isLoudnessEnabled);
-      await audioEngine.load(streamUrl, {
-        autoplay: true,
-        normalizationGainDb: trackGainDb,
-      });
+      try {
+        const streamUrl = await fetchAuthorizedAudioUrl(getStreamUrl(track.id));
+        const isLoudnessEnabled = get().isLoudnessNormalizationEnabled;
+        const trackGainDb = computeTrackNormalizationGainDb(track, isLoudnessEnabled);
+        await audioEngine.load(streamUrl, {
+          autoplay: true,
+          normalizationGainDb: trackGainDb,
+        });
+      } catch (err) {
+        console.warn('playTrack: failed to load track audio:', err);
+        set({ status: 'error' });
+      }
     },
 
     togglePlay: () => {
@@ -350,6 +357,19 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       if (!currentTrack) {
         if (queue.length > 0) {
           get().playTrack(queue[0]);
+        } else {
+          // Ничего не выбрано (например, сразу после входа): играем начало каталога.
+          void (async () => {
+            try {
+              const tracks = await fetchTracks({ limit: 50 });
+              if (tracks.length > 0) {
+                await get().playTrack(tracks[0], tracks);
+              }
+            } catch (err) {
+              console.warn('togglePlay: failed to start catalog playback:', err);
+              set({ status: 'error' });
+            }
+          })();
         }
         return;
       }
@@ -357,7 +377,11 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       if (status === 'playing') {
         audioEngine.pause();
       } else {
-        audioEngine.play();
+        audioEngine.play().catch((err) => {
+          if ((err as Error)?.name === 'AbortError') return;
+          console.warn('Playback failed:', err);
+          set({ status: 'error' });
+        });
       }
     },
 

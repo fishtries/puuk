@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Play, Pause, Music2, ListPlus } from 'lucide-react';
 import { Track } from '../../../types/track';
 import { getCoverUrl } from '../../../api/tracks';
+import { AuthorizedImage } from '../../common/AuthorizedImage';
 import { useAuthStore } from '../../../store/useAuthStore';
 import styles from '../HomeScreen.module.css';
 
@@ -42,7 +43,7 @@ export const RecommendationShelf: React.FC<RecommendationShelfProps> = ({
             >
               <div className={styles.shelfCoverWrapper}>
                 {cover ? (
-                  <img src={cover} alt={track.title} className={styles.shelfCoverImg} />
+                  <AuthorizedImage src={cover} alt={track.title} className={styles.shelfCoverImg} />
                 ) : (
                   <div className={styles.shelfFallbackCover}>
                     <Music2 size={24} />

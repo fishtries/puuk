@@ -5,6 +5,7 @@ import { useTagEditorStore } from '../../store/useTagEditorStore';
 import { Track } from '../../types/track';
 import { SortableTracklist } from '../playlists/SortableTracklist';
 import styles from './CollectionDetail.module.css';
+import { AuthorizedImage } from '../common/AuthorizedImage';
 
 function formatDuration(seconds?: number): string {
   if (!seconds || isNaN(seconds)) return '--:--';
@@ -128,7 +129,7 @@ const Cover: React.FC<CoverProps> = ({ coverUrl }) => {
   return (
     <div className={`${styles.coverBase} ${styles.coverHero}`}>
       {coverUrl ? (
-        <img src={coverUrl} alt="" className={styles.coverImg} />
+        <AuthorizedImage src={coverUrl} alt="" className={styles.coverImg} />
       ) : (
         <div className={styles.coverFallback}>
           <Music2 size={44} />

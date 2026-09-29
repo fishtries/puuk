@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,11 +30,7 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
     }
   }, [albumId]);
 
-  useEffect(() => {
-    fetchAlbum();
-  }, [fetchAlbum]);
-
-  // Refresh when returning from the album editor.
+  // Загрузка при открытии и обновление при возврате из редактора альбома.
   useFocusEffect(
     useCallback(() => {
       fetchAlbum();

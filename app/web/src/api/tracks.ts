@@ -177,8 +177,7 @@ export async function searchTracks(query: string, limit = 30): Promise<SearchRes
 
 export function getStreamUrl(trackId: string): string {
   const baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL) || '';
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('puuk_token') : null;
-  return `${baseUrl}/api/stream/${trackId}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return `${baseUrl}/api/stream/${trackId}`;
 }
 
 export function getCoverUrl(

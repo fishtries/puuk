@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
 import { getCoverUrl } from '../api/tracks';
+import { fetchAuthorizedBlobUrl } from '../api/media';
 
 export function useMediaSession() {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
@@ -14,17 +15,25 @@ export function useMediaSession() {
     if (!('mediaSession' in navigator) || !currentTrack) return;
 
     const coverUrl = getCoverUrl(currentTrack.cover_id);
+    let artworkCancelled = false;
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: currentTrack.title,
-      artist: currentTrack.artist,
-      album: currentTrack.album || 'puuk',
-      artwork: coverUrl
-        ? [
-            { src: coverUrl, sizes: '512x512', type: 'image/jpeg' },
-          ]
-        : [],
-    });
+    const setArtwork = (artwork: MediaImage[]) => {
+      if (artworkCancelled) return;
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        album: currentTrack.album || 'puuk',
+        artwork,
+      });
+    };
+
+    if (coverUrl) {
+      fetchAuthorizedBlobUrl(coverUrl)
+        .then((blobUrl) => setArtwork([{ src: blobUrl, sizes: '512x512', type: 'image/jpeg' }]))
+        .catch(() => setArtwork([]));
+    } else {
+      setArtwork([]);
+    }
 
     navigator.mediaSession.playbackState = status === 'playing' ? 'playing' : 'paused';
 
@@ -39,6 +48,7 @@ export function useMediaSession() {
     });
 
     return () => {
+      artworkCancelled = true;
       if ('mediaSession' in navigator) {
         navigator.mediaSession.setActionHandler('play', null);
         navigator.mediaSession.setActionHandler('pause', null);
