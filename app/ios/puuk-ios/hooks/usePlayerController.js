@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Alert } from 'react-native';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { authFetch, SERVER_URL, getAuthHeaders } from '../utils/api';
 
 /**
@@ -77,6 +77,17 @@ export default function usePlayerController({ setTracks }) {
   const currentTime = status.currentTime || 0;
   const duration = status.duration || 0;
 
+  // Конфигурация фонового воспроизведения и системной аудиосессии iOS
+  useEffect(() => {
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: 'doNotMix',
+    }).catch(err => {
+      console.warn('Failed to configure audio mode:', err);
+    });
+  }, []);
+
   const requestExpandPlayer = useCallback(() => {
     setIsPlayerVisible(true);
     setPlayerExpandToken(prev => prev + 1);
@@ -88,6 +99,19 @@ export default function usePlayerController({ setTracks }) {
     const headers = await getAuthHeaders();
     player.replace({ uri: streamUrl, headers });
     player.play();
+
+    // Экран блокировки, Пункт управления и Dynamic Island iOS
+    try {
+      if (typeof player.setActiveForLockScreen === 'function') {
+        player.setActiveForLockScreen(true, {
+          title: track.title || 'Unknown Track',
+          artist: track.artist || 'Unknown Artist',
+          artworkUrl: track.coverArt,
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to set lock screen controls:', err);
+    }
   }, [player]);
 
   const fetchQueue = useCallback(async (trackId, signal, exclusions) => {
