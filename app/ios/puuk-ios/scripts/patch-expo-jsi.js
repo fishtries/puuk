@@ -46,11 +46,10 @@ for (const filePath of walk(jsiRoot)) {
   if (filePath.endsWith(`${path.sep}apple${path.sep}Package.swift`)) {
     // Expo JSI crosses Swift concurrency domains through synchronous C++ callbacks.
     // Complete checking treats those call-scoped raw pointers as escaping sends.
+    // Remove strict-concurrency from unsafeFlags to avoid Swift 6.2 Sendable errors
     patched = patched.replace(/\n\s*"-strict-concurrency=targeted",/g, '');
-    patched = patched.replace(
-      '"-no-verify-emitted-module-interface",',
-      '"-no-verify-emitted-module-interface",\n          "-strict-concurrency=targeted",',
-    );
+    // Also remove from standalone line (exact match for line 99)
+    patched = patched.replace(/^\s*"-strict-concurrency=targeted",\n/gm, '');
   }
 
   if (patched !== original) {
