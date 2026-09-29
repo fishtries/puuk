@@ -46,23 +46,44 @@ export default function App() {
     startWave,
   } = usePlayerController({ setTracks });
 
-  // Инициализация настроек
+  // Последовательная инициализация настроек и авторизации при старте приложения
   useEffect(() => {
-    loadSettings().then(s => {
-      if (s.serverUrl) setServerUrl(s.serverUrl);
-    });
-  }, []);
+    let isMounted = true;
 
-  // Инициализация авторизации (закрытый режим: checking -> authenticated | unauthenticated)
-  useEffect(() => {
-    checkAuth().then(user => {
-      setIsAuthChecking(false);
-      if (user) setCurrentUser(user);
+    async function initApp() {
+      try {
+        // 1. Сначала загружаем настройки и применяем сохранённый serverUrl
+        const s = await loadSettings();
+        if (s?.serverUrl) {
+          setServerUrl(s.serverUrl);
+        }
+
+        // 2. Проверяем сохранённую сессию и валидируем с сервером
+        const user = await checkAuth();
+        if (isMounted) {
+          if (user) setCurrentUser(user);
+          setIsAuthChecking(false);
+        }
+      } catch (e) {
+        console.warn('[App init error]', e);
+        if (isMounted) {
+          setIsAuthChecking(false);
+        }
+      }
+    }
+
+    initApp();
+
+    const unsubscribe = addAuthListener((user) => {
+      if (isMounted) {
+        setCurrentUser(user);
+      }
     });
-    const unsubscribe = addAuthListener(user => {
-      setCurrentUser(user);
-    });
-    return unsubscribe;
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   // Загрузка треков с сервера

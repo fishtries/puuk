@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-export const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.117:8000';
+export const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_API_URL || 'https://web.puuk.fun';
 export let SERVER_URL = DEFAULT_SERVER_URL;
 
 export const setServerUrl = (url) => {
@@ -10,6 +10,10 @@ export const setServerUrl = (url) => {
 };
 const TOKEN_KEY = 'puuk_auth_token';
 const USER_KEY = 'puuk_auth_user';
+
+const SECURE_STORE_OPTIONS = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+};
 
 let cachedToken = null;
 let cachedUser = null;
@@ -34,22 +38,24 @@ export const addAuthListener = (callback) => {
 export const getAuthToken = async () => {
   if (cachedToken) return cachedToken;
   try {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY);
-    cachedToken = token;
-    return token;
+    const token = await SecureStore.getItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS);
+    if (token) {
+      cachedToken = token;
+      return token;
+    }
   } catch (e) {
     console.warn('[SecureStore read error]', e);
-    return null;
   }
+  return null;
 };
 
 export const setAuthToken = async (token) => {
   cachedToken = token;
   try {
     if (token) {
-      await SecureStore.setItemAsync(TOKEN_KEY, token);
+      await SecureStore.setItemAsync(TOKEN_KEY, token, SECURE_STORE_OPTIONS);
     } else {
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await SecureStore.deleteItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS);
     }
   } catch (e) {
     console.warn('[SecureStore write error]', e);
@@ -59,7 +65,7 @@ export const setAuthToken = async (token) => {
 export const getSavedUser = async () => {
   if (cachedUser) return cachedUser;
   try {
-    const raw = await SecureStore.getItemAsync(USER_KEY);
+    const raw = await SecureStore.getItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
     if (raw) {
       cachedUser = JSON.parse(raw);
       return cachedUser;
@@ -74,9 +80,9 @@ export const setSavedUser = async (user) => {
   cachedUser = user;
   try {
     if (user) {
-      await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+      await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user), SECURE_STORE_OPTIONS);
     } else {
-      await SecureStore.deleteItemAsync(USER_KEY);
+      await SecureStore.deleteItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
     }
   } catch (e) {
     console.warn('[SecureStore user write error]', e);
@@ -173,18 +179,35 @@ export const loginWithCode = async (code) => {
 
 export const checkAuth = async () => {
   try {
+    const token = await getAuthToken();
+    if (!token) {
+      return null;
+    }
+
+    const savedUser = await getSavedUser();
+    if (savedUser) {
+      notifyAuthChange(savedUser);
+    }
+
     const res = await authFetch('/api/auth/me');
     if (res.ok) {
-      const user = await res.json();
-      await setSavedUser(user);
-      return user;
+      const freshUser = await res.json();
+      await setSavedUser(freshUser);
+      return freshUser;
     }
-    // Закрытый режим: без подтверждения от /me сохранённый пользователь невалиден
-    await logout();
-    return null;
+
+    if (res.status === 401) {
+      console.warn('[checkAuth] Сессия отклонена сервером (401), сбрасываем авторизацию.');
+      await logout();
+      return null;
+    }
+
+    console.warn(`[checkAuth] Сервер ответил статусом ${res.status}, сохраняем существующую сессию.`);
+    return savedUser || null;
   } catch (e) {
-    console.warn('[checkAuth network error]', e);
-    return null;
+    console.warn('[checkAuth network error, preserving session]', e);
+    const savedUser = await getSavedUser();
+    return savedUser || null;
   }
 };
 

@@ -112,11 +112,15 @@ export const t = (key, lang = cachedSettings.language) => {
   return dict[key] || TRANSLATIONS.en[key] || key;
 };
 
+const SECURE_STORE_OPTIONS = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+};
+
 export const getSettings = () => ({ ...cachedSettings });
 
 export const loadSettings = async () => {
   try {
-    const raw = await SecureStore.getItemAsync(SETTINGS_KEY);
+    const raw = await SecureStore.getItemAsync(SETTINGS_KEY, SECURE_STORE_OPTIONS);
     if (raw) {
       const parsed = JSON.parse(raw);
       cachedSettings = { ...DEFAULT_SETTINGS, ...parsed };
@@ -130,7 +134,7 @@ export const loadSettings = async () => {
 export const updateSetting = async (key, value) => {
   cachedSettings[key] = value;
   try {
-    await SecureStore.setItemAsync(SETTINGS_KEY, JSON.stringify(cachedSettings));
+    await SecureStore.setItemAsync(SETTINGS_KEY, JSON.stringify(cachedSettings), SECURE_STORE_OPTIONS);
   } catch (e) {
     console.warn('[Settings save error]', e);
   }
