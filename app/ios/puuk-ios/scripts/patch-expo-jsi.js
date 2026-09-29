@@ -35,11 +35,11 @@ for (const filePath of walk(jsiRoot)) {
     // JavaScriptRuntime.swift; explicit capture lists preserve that lifetime
     // while avoiding the false-positive sending diagnostic.
     //
-    // Pattern: resultPtr.pointee = JavaScriptActor.assumeIsolated {
-    // Replace with capture list: { [thisPtr, argumentsPtr] in
+    // Only patch assumeIsolated closures where thisPtr and argumentsPtr are
+    // declared as nonisolated(unsafe) in the surrounding scope (host function callbacks).
     .replace(
-      /resultPtr\.pointee = JavaScriptActor\.assumeIsolated \{(?!\s*\[)/g,
-      'resultPtr.pointee = JavaScriptActor.assumeIsolated { [thisPtr, argumentsPtr] in',
+      /(nonisolated\(unsafe\) let thisPtr = thisPtr\s+nonisolated\(unsafe\) let argumentsPtr = argumentsPtr\s+nonisolated\(unsafe\) let resultPtr = resultPtr\s+[\s\S]*?resultPtr\.pointee = JavaScriptActor\.assumeIsolated \{)(?!\s*\[)/g,
+      '$1 [thisPtr, argumentsPtr] in',
     );
 
   if (filePath.endsWith(`${path.sep}apple${path.sep}Package.swift`)) {
