@@ -34,12 +34,16 @@ usePlayerStore.ts — helpers вынесены (accent, lyrics parsing, demo-gua
 ✅ iOS аудит-фиксы: mergeUniqueQueue сохраняет голову буфера (slice(0,max) — первый будущий трек не теряется), queueEpochRef — устаревшие ответы fetchQueue инвалидируются при смене режима (race playTrack→playTrackList), fetchNextTrack передаёт exclude из истории/queued из буфера (семантика этапа 2), package-lock registry нормализован к npmjs (233 URL было npmmirror)
 Верификация: expo export bundle 3.8MB ✓, eslint ✓, jest 7/7 ✓, CI unsigned IPA Release build 11MB ✓ (Run #15 SHA256 `422837c042...`); ручной прогон на устройстве — за пользователем
 ✅ iOS wave parity (Orca-разведка + фикс): fetchQueue передаёт exclude_track_ids/queued_track_ids (паритет с backend-контрактом), merge-with-dedup вместо замены очереди (cap 20), мёртвый /api/wave/listen → /api/wave/feedback (finish/skip по прогрессу), isWaveSessionRef-gate: prefetch не загрязняет ручные плейлисты, in-flight guard fetchNextTrack (двойной Next), история сессии cap 50
+✅ Закрытый доступ и аутентификация обложек (Backend + iOS):
+- Backend: эндпоинты `/api/cover/{track_id}` и `/api/color/{track_id}` поддерживают аутентификацию через `?token=` (параллельно с `Bearer` и `?mt=`) для системных загрузчиков (iOS Lock Screen artwork); закрыт анонимный доступ к трекам/библиотеке/альбомам/поиску (`current_user: dict = Depends(get_current_user)`); Swagger/OpenAPI закрыты по умолчанию (`ENABLE_DOCS=false`).
+- iOS: `CoverImage` синхронно читает кэшированный токен (`getCachedAuthToken`, `getCachedAuthHeaders`) без вспышек 401 и пустых неавторизованных запросов; `resolveCoverUri` нормализует относительные/абсолютные пути под актуальный `SERVER_URL` и передаёт `?token=` для нативного кеша; `usePlayerController` передаёт нормализованный URL обложки в `setActiveForLockScreen`; юнит-тесты `coverImageUtils.test.js` (8/8 тестов).
+- Верификация: brain 236/236 тестов ✓, web 70/70 тестов ✓, iOS jest 15/15 тестов ✓.
 📋 Отложенные задачи (backlog)
 1. ✅ Nested buttons в кликабельных карточках — ЗАКРЫТО (HomeIslands.tsx ×4, HomeScreen.tsx, RecommendationShelf.tsx: inner buttons получили свой onClick + e.stopPropagation(); контракт: интерактивные элементы не вкладываются)
 2. ✅ Изоляция тестовой БД — ЗАКРЫТО (PUUK_DB_PATH env + brain/test_db_path.py, резолв пути на вызов в repositories/base.py; прогоны тестов больше не пишут в puuk.db). Остаток: ~99 тестовых записей в puuk.db требуют ручной чистки (решение по данным — за пользователем)
 3. Компонентные тесты веба — TagEditor, lyrics hook (rendering-тесты отсутствуют)
 4. Общий LRC-парсер — дублирование в 3 местах (brain, web, iOS)
-5. git init + первичный коммит — до сих пор не сделан, риск для Фазы 3
+5. ✅ git репозиторий и origin синхронизированы
 6. Декомпозиция HomeScreen глубже (useHomeCatalogData, HomeSearchResults) — 495 строк всё ещё много
 
 💿 Альбомы как доменная сущность (ЗАВЕРШЕНО):

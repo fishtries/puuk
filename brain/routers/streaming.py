@@ -7,6 +7,7 @@ import db
 from auth import (
     MEDIA_TICKET_TTL_SECONDS,
     create_media_ticket,
+    get_cover_user,
     get_current_user,
     get_stream_user,
 )
@@ -140,7 +141,7 @@ def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
 def get_cover_art(
     track_id: str,
     request: Request,
-    current_user: Optional[dict] = Depends(get_current_user),
+    current_user: dict = Depends(get_cover_user),
 ):
     """
     Возвращает обложку трека из ID3-тегов файла или дефолтную обложку.
@@ -179,7 +180,11 @@ def get_cover_art(
 
 
 @router.get("/api/color/{track_id}")
-def get_track_color(track_id: str, current_user: Optional[dict] = Depends(get_current_user)):
+def get_track_color(
+    track_id: str,
+    request: Request,
+    current_user: dict = Depends(get_cover_user),
+):
     """Возвращает доминирующий цвет обложки в HEX-формате с кешированием в SQLite."""
     try:
         uuid.UUID(track_id)

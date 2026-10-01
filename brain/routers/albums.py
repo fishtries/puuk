@@ -4,7 +4,7 @@ from typing import Literal, Optional, Union
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from auth import get_current_user, get_current_user
+from auth import get_current_user
 from config import get_base_url
 from services import album_service
 
@@ -36,14 +36,14 @@ class AlbumEditPayload(BaseModel):
 
 
 @router.get("")
-def get_all_albums(request: Request, current_user: Optional[dict] = Depends(get_current_user)):
+def get_all_albums(request: Request, current_user: dict = Depends(get_current_user)):
     """Каталог альбомов: полный DTO одним запросом (artist, year, track_count, cover)."""
     base_url = get_base_url(request)
     return album_service.get_albums_catalog(base_url)
 
 
 @router.get("/{album_id}")
-def get_album_detail(album_id: int, request: Request, current_user: Optional[dict] = Depends(get_current_user)):
+def get_album_detail(album_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Detail-конверт {"album": AlbumDTO, "tracks": TrackDTO[]}; 404 для несуществующего альбома."""
     base_url = get_base_url(request)
     return album_service.get_album_detail(album_id, current_user, base_url)

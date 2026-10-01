@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Alert } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
-import { authFetch, SERVER_URL, getAuthHeaders } from '../utils/api';
+import { authFetch, SERVER_URL, getAuthHeaders, getCachedAuthToken } from '../utils/api';
+import { resolveCoverUri } from '../components/CoverImage';
 
 /**
  * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
@@ -94,7 +95,9 @@ export default function usePlayerController({ setTracks }) {
   }, []);
 
   const loadAndPlay = useCallback(async (track) => {
-    const streamUrl = track.stream_url || `${SERVER_URL}/api/stream/${track.id}`;
+    const rawStream = track.stream_url || `${SERVER_URL}/api/stream/${track.id}`;
+    const streamPathIndex = rawStream.indexOf('/api/stream/');
+    const streamUrl = streamPathIndex !== -1 ? `${SERVER_URL}${rawStream.slice(streamPathIndex)}` : rawStream;
     // Закрытый режим: JWT передаётся заголовком (expo-audio AudioSource.headers), не в URL
     const headers = await getAuthHeaders();
     player.replace({ uri: streamUrl, headers });
@@ -103,13 +106,15 @@ export default function usePlayerController({ setTracks }) {
     // Экран блокировки, Пункт управления и Dynamic Island iOS
     try {
       if (typeof player.setActiveForLockScreen === 'function') {
+        const token = getCachedAuthToken();
+        const artworkUrl = track.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
         player.setActiveForLockScreen(
           true,
           {
             title: track.title || 'Unknown Track',
             artist: track.artist || 'Unknown Artist',
             albumTitle: track.album || 'Puuk',
-            artworkUrl: track.coverArt,
+            artworkUrl,
           },
           {
             isLiveStream: false,

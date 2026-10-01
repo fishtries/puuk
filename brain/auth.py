@@ -198,6 +198,44 @@ def get_stream_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
+def get_cover_user(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
+) -> dict:
+    """
+    Аутентификация для обложек и цвета: заголовок Authorization: Bearer,
+    либо query-параметр ?token= (для системных медиа-загрузчиков вроде iOS Lock Screen),
+    либо media-тикет (?mt=).
+    """
+    if token:
+        return get_current_user(token)
+
+    query_token = request.query_params.get("token")
+    if query_token:
+        return get_current_user(query_token)
+
+    media_ticket = request.query_params.get("mt")
+    if media_ticket:
+        payload = decode_access_token(media_ticket)
+        if payload and payload.get("scope") == MEDIA_TICKET_SCOPE and "sub" in payload:
+            try:
+                user_id = int(payload["sub"])
+                user = db.get_user_by_id(user_id)
+                if user:
+                    user_dict = dict(user)
+                    user_dict["is_authenticated"] = True
+                    return user_dict
+            except (ValueError, TypeError):
+                pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Требуется авторизация",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[dict]:
     """
     Опциональная аутентификация: для публичных эндпоинтов, которым известен

@@ -1,42 +1,108 @@
 import React, { useState, useEffect } from 'react';
 import { Image } from 'react-native';
-import { getAuthHeaders, SERVER_URL } from '../utils/api';
+import {
+  getAuthHeaders,
+  getCachedAuthHeaders,
+  getCachedAuthToken,
+  SERVER_URL,
+} from '../utils/api';
 
 const DEFAULT_COVER = require('../assets/default_cover.jpg');
 
-// Закрытый режим: обложки отдаются только с Bearer JWT.
-// Заголовок добавляем только для нашего сервера — внешние URL (iTunes/Deezer) не трогаем.
-const isServerUri = (uri) =>
-  typeof uri === 'string' && (uri.startsWith('/') || uri.startsWith(SERVER_URL));
+/**
+ * Проверяет, является ли URI обложкой нашего сервера:
+ * - Содержит путь эндпоинта /api/cover/
+ * - Начинается с относительного пути /
+ * - Начинается с текущего SERVER_URL
+ */
+export const isServerCoverUri = (uri) => {
+  if (typeof uri !== 'string') return false;
+  return (
+    uri.includes('/api/cover/') ||
+    uri.startsWith('/') ||
+    (Boolean(SERVER_URL) && uri.startsWith(SERVER_URL))
+  );
+};
 
-export default function CoverImage({ source, style, defaultSource = DEFAULT_COVER, onError, ...props }) {
+/**
+ * Нормализует URL обложки:
+ * - Перенаправляет путь /api/cover/ на актуальный SERVER_URL (независимо от того,
+ *   какой абсолютный BASE_URL вернул бэкенд в coverArt)
+ * - Добавляет query-параметр ?token= для нативной загрузки
+ */
+export const resolveCoverUri = (rawUri, token = null) => {
+  if (!rawUri || typeof rawUri !== 'string') return '';
+  const trimmed = rawUri.trim();
+  if (!trimmed) return '';
+
+  const apiIndex = trimmed.indexOf('/api/cover/');
+  let targetUri = trimmed;
+  if (apiIndex !== -1) {
+    const path = trimmed.slice(apiIndex);
+    targetUri = `${SERVER_URL}${path}`;
+  } else if (trimmed.startsWith('/')) {
+    targetUri = `${SERVER_URL}${trimmed}`;
+  }
+
+  if (isServerCoverUri(targetUri) && token && !targetUri.includes('token=')) {
+    const separator = targetUri.includes('?') ? '&' : '?';
+    return `${targetUri}${separator}token=${encodeURIComponent(token)}`;
+  }
+
+  return targetUri;
+};
+
+export default function CoverImage({
+  source,
+  style,
+  defaultSource = DEFAULT_COVER,
+  onError,
+  ...props
+}) {
   const [hasError, setHasError] = useState(false);
-  const [authHeaders, setAuthHeaders] = useState(null);
+  const [authHeaders, setAuthHeaders] = useState(() => getCachedAuthHeaders());
+  const [authToken, setAuthToken] = useState(() => getCachedAuthToken());
 
   useEffect(() => {
     let mounted = true;
     getAuthHeaders().then((headers) => {
-      if (mounted && headers.Authorization) setAuthHeaders(headers);
+      if (mounted && headers?.Authorization) {
+        setAuthHeaders(headers);
+        setAuthToken(getCachedAuthToken());
+      }
     });
     return () => {
       mounted = false;
     };
   }, []);
 
-  // Extract uri if provided as object { uri: ... } or string
-  const uri = typeof source === 'string' ? source : source?.uri;
+  // Извлекаем uri, если передан объектом { uri: ... } или строкой
+  const rawUri = typeof source === 'string' ? source : source?.uri;
 
-  // Reset error state when uri changes (e.g. switching tracks)
+  // Сбрасываем флаг ошибки при смене URI или получении свежих заголовков авторизации
   useEffect(() => {
     setHasError(false);
-  }, [uri]);
+  }, [rawUri, authHeaders]);
 
-  let imageSource = DEFAULT_COVER;
+  let imageSource = defaultSource;
   if (typeof source === 'number') {
-    // Local asset require(...)
+    // Локальный ресурс require(...)
     imageSource = source;
-  } else if (uri && !hasError) {
-    imageSource = isServerUri(uri) && authHeaders ? { uri, headers: authHeaders } : { uri };
+  } else if (rawUri && !hasError) {
+    const isServer = isServerCoverUri(rawUri);
+    if (isServer) {
+      if (authHeaders) {
+        const resolvedUri = resolveCoverUri(rawUri, authToken);
+        imageSource = { uri: resolvedUri, headers: authHeaders };
+      } else {
+        // Серверный ресурс требует JWT. Пока заголовки загружаются,
+        // отображаем дефолтную обложку без отправки неавторизованного запроса (чтобы не ловить 401).
+        imageSource = defaultSource;
+      }
+    } else {
+      // Внешний URL (iTunes, Deezer и т.д.) — не шлём наш Bearer наружу
+      imageSource = { uri: rawUri };
+    }
   }
 
   return (

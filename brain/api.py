@@ -3,6 +3,7 @@
 Assembles routers, wires services, and keeps backwards-compatible exports
 used by the test suite (apply_diversity_penalty, get_smart_recommendations, ...).
 """
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -38,7 +39,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Puuk Brain API", version="0.1.0", lifespan=lifespan)
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() in ("true", "1", "yes")
+
+app = FastAPI(
+    title="Puuk Brain API",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
