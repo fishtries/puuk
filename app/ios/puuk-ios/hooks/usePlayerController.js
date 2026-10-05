@@ -1,12 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Alert } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
-import { authFetch, SERVER_URL, getAuthHeaders, getCachedAuthToken } from '../utils/api';
-import { resolveCoverUri } from '../components/CoverImage';
+import { authFetch, SERVER_URL, getAuthHeaders } from '../utils/api';
+import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
 
 /**
  * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
- * здесь форма нормализуется. Заменяет три дублированных маппинга.
+ * здесь форма нормализуется.
  */
 function normalizeTrackDto(source) {
   const id = source?.id || source?.track_id;
@@ -32,7 +31,7 @@ function capIds(ids, limit = MAX_EXCLUDE_IDS) {
   return unique.length > limit ? unique.slice(unique.length - limit) : unique;
 }
 
-/** URL /api/wave/queue с повторяющимися query-параметрами исключений (контракт этапа 2). */
+/** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
 function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
   const params = new URLSearchParams();
   params.append('current_track_id', trackId);
@@ -41,8 +40,7 @@ function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
   return `/api/wave/queue?${params.toString()}`;
 }
 
-/** Слияние пачки рекомендаций с буфером без дублей: сначала буфер, потом новая пачка.
- * При переполнении хвост обрезается — первые будущие треки (ближайшие к текущему) сохраняются. */
+/** Слияние пачки рекомендаций с буфером без дублей. */
 function mergeUniqueQueue(existing, incoming, maxBuffer = MAX_QUEUE_BUFFER) {
   const seen = new Set(existing.map(t => t.id));
   const merged = [...existing];
@@ -62,13 +60,14 @@ export default function usePlayerController({ setTracks }) {
   const [upNextQueue, setUpNextQueue] = useState([]);
   const [history, setHistory] = useState([]);
 
-  // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии,
-  // ручные плейлисты (playTrackList) не загрязняются.
+  // Состояние сети и предзагрузки для Network UX
+  const [networkUX, setNetworkUX] = useState(defaultPlaybackCoordinator.getState());
+
+  // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии
   const isWaveSessionRef = useRef(false);
-  // Эпоха очереди: любое обновление очереди инвалидирует in-flight ответы fetchQueue,
-  // чтобы поздний wave-ответ не влился в ручной плейлист (race playTrack → playTrackList).
+  // Эпоха очереди: инвалидирует in-flight ответы fetchQueue
   const queueEpochRef = useRef(0);
-  // Защита от двойного перехода (кнопка + авто-advance).
+  // Защита от двойного перехода
   const isAdvancingRef = useRef(false);
 
   const player = useAudioPlayer();
@@ -89,42 +88,55 @@ export default function usePlayerController({ setTracks }) {
     });
   }, []);
 
+  // Подписка на состояние координатора (сеть, предзагрузка)
+  useEffect(() => {
+    const unsubscribe = defaultPlaybackCoordinator.subscribe(setNetworkUX);
+    return unsubscribe;
+  }, []);
+
+  // Отслеживание медленной буферизации
+  useEffect(() => {
+    defaultPlaybackCoordinator.handleBufferingStatus(Boolean(status?.isBuffering));
+  }, [status?.isBuffering]);
+
+  // Синхронизация очереди с координатором и планировщиком предзагрузки
+  useEffect(() => {
+    let isMounted = true;
+    getAuthHeaders()
+      .then(headers => {
+        if (isMounted) {
+          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, { headers });
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {});
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentTrack, upNextQueue]);
+
   const requestExpandPlayer = useCallback(() => {
     setIsPlayerVisible(true);
     setPlayerExpandToken(prev => prev + 1);
   }, []);
 
+  /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback(async (track) => {
-    const rawStream = track.stream_url || `${SERVER_URL}/api/stream/${track.id}`;
-    const streamPathIndex = rawStream.indexOf('/api/stream/');
-    const streamUrl = streamPathIndex !== -1 ? `${SERVER_URL}${rawStream.slice(streamPathIndex)}` : rawStream;
-    // Закрытый режим: JWT передаётся заголовком (expo-audio AudioSource.headers), не в URL
-    const headers = await getAuthHeaders();
-    player.replace({ uri: streamUrl, headers });
-    player.play();
-
-    // Экран блокировки, Пункт управления и Dynamic Island iOS
     try {
-      if (typeof player.setActiveForLockScreen === 'function') {
-        const token = getCachedAuthToken();
-        const artworkUrl = track.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
-        player.setActiveForLockScreen(
-          true,
-          {
-            title: track.title || 'Unknown Track',
-            artist: track.artist || 'Unknown Artist',
-            albumTitle: track.album || 'Puuk',
-            artworkUrl,
-          },
-          {
-            isLiveStream: false,
-            showSeekForward: false,
-            showSeekBackward: false,
-          }
-        );
-      }
-    } catch (err) {
-      console.warn('Failed to set lock screen controls:', err);
+      const headers = await getAuthHeaders();
+      await defaultPlaybackCoordinator.play(player, track, { headers });
+    } catch (e) {
+      console.error('[usePlayerController] loadAndPlay error:', {
+        message: e?.message,
+        name: e?.name,
+        stack: e?.stack,
+        trackId: track?.id,
+        trackTitle: track?.title,
+      });
     }
   }, [player]);
 
@@ -136,13 +148,12 @@ export default function usePlayerController({ setTracks }) {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      // Слияние вместо замены: остаток буфера сохраняется, дубли невозможны.
-      // Ответ инвалидируется, если очередь успела обновиться (сменился режим/трек).
       if (epoch !== queueEpochRef.current) return;
       setUpNextQueue(prev => mergeUniqueQueue(prev, data.map(normalizeTrackDto)));
     } catch (error) {
       if (error.name !== 'AbortError') {
-        Alert.alert("Error", "Failed to load queue.");
+        // Не спамим Alert, ошибка видна в UI-баннере
+        console.warn('Failed to load queue:', error.message);
       }
     }
   }, []);
@@ -188,13 +199,10 @@ export default function usePlayerController({ setTracks }) {
 
       if (nextTrack) {
         setCurrentTrack(nextTrack);
-        loadAndPlay(nextTrack);
+        await loadAndPlay(nextTrack);
         setIsLoading(false);
 
         if (isWaveSessionRef.current && newQueue.length < 3) {
-          // Подгружаем пачку по семантике этапа 2:
-          // exclude — недавно проигранное (история + текущий),
-          // queued — то, что уже стоит в буфере.
           fetchQueue(nextTrack.id, undefined, {
             excludeIds: [...history.map(t => t.id), currentTrack.id],
             queuedIds: newQueue.map(t => t.id),
@@ -215,16 +223,16 @@ export default function usePlayerController({ setTracks }) {
           }
         }).catch(e => console.error("Failed to send wave feedback", e));
 
-        // Записываем прослушивание в историю пользователя
+        // Записываем прослушивание в историю
         authFetch(`/api/tracks/${nextTrack.id}/history`, { method: 'POST' }).catch(() => {});
       } else {
-        // Если очередь пуста, просто останавливаем
         player.pause();
       }
     } finally {
+      setIsLoading(false);
       isAdvancingRef.current = false;
     }
-  }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue, currentTime, duration]);
+  }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue, currentTime, duration, history]);
 
   const fetchNextTrackRef = useRef(fetchNextTrack);
   const playPreviousTrackRef = useRef(playPreviousTrack);
@@ -237,7 +245,7 @@ export default function usePlayerController({ setTracks }) {
     playPreviousTrackRef.current = playPreviousTrack;
   }, [playPreviousTrack]);
 
-  // Слушатель команд экрана блокировки, Control Center, Dynamic Island и AirPods (Next / Previous Track)
+  // Слушатель команд экрана блокировки, Control Center и гарнитур
   useEffect(() => {
     if (!player || typeof player.addListener !== 'function') return;
 
@@ -283,7 +291,6 @@ export default function usePlayerController({ setTracks }) {
     requestExpandPlayer();
     queueEpochRef.current += 1;
     setUpNextQueue([]);
-    // Очередь волны от выбранного трека; играли — исключаем, чтобы не сыпалось назад.
     fetchQueue(track.id, undefined, {
       excludeIds: [...history.map(t => t.id), currentTrack?.id],
       queuedIds: [],
@@ -308,13 +315,11 @@ export default function usePlayerController({ setTracks }) {
     authFetch(`/api/tracks/${track.id}/history`, { method: 'POST' }).catch(() => {});
   }, [currentTrack, requestExpandPlayer, loadAndPlay]);
 
-  // Переключение лайка / избранного
   const handleToggleLike = useCallback(async (track) => {
     if (!track) return;
     const currentLiked = !!track.is_liked;
     const newLiked = !currentLiked;
 
-    // Оптимистичное обновление состояния
     setCurrentTrack(prev => prev && prev.id === track.id ? { ...prev, is_liked: newLiked } : prev);
     setTracks(prev => prev.map(t => t.id === track.id ? { ...t, is_liked: newLiked } : t));
 
@@ -322,18 +327,14 @@ export default function usePlayerController({ setTracks }) {
       const response = await authFetch(`/api/tracks/${track.id}/like`, {
         method: newLiked ? 'POST' : 'DELETE'
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
       console.warn("Failed to toggle like:", err);
-      // Откат при ошибке
       setCurrentTrack(prev => prev && prev.id === track.id ? { ...prev, is_liked: currentLiked } : prev);
       setTracks(prev => prev.map(t => t.id === track.id ? { ...t, is_liked: currentLiked } : t));
     }
   }, [setTracks]);
 
-  // Запуск "Моей волны" — берём случайный трек и запускаем цепочку рекомендаций
   const startWave = useCallback(async () => {
     try {
       const response = await authFetch('/api/wave/next?current_track_id=random');
@@ -345,7 +346,6 @@ export default function usePlayerController({ setTracks }) {
       requestExpandPlayer();
       queueEpochRef.current += 1;
       setUpNextQueue([]);
-      // Новая сессия волны: играли до этого — исключаем.
       fetchQueue(waveTrack.id, undefined, {
         excludeIds: [...history.map(t => t.id), currentTrack?.id],
         queuedIds: [],
@@ -353,7 +353,7 @@ export default function usePlayerController({ setTracks }) {
       loadAndPlay(waveTrack);
     } catch (error) {
       if (error.name !== 'AbortError') {
-        Alert.alert("Error", "Failed to start wave.");
+        console.warn("Failed to start wave:", error.message);
       }
     }
   }, [history, currentTrack, requestExpandPlayer, fetchQueue, loadAndPlay]);
@@ -379,5 +379,16 @@ export default function usePlayerController({ setTracks }) {
     playTrackList,
     handleToggleLike,
     startWave,
+    // Network UX & Cache state (Agent 5 & 6)
+    networkStatus: networkUX.networkStatus,
+    nextTrackStatus: networkUX.nextTrackStatus,
+    networkError: networkUX.networkError,
+    isBufferingSlow: networkUX.isBufferingSlow,
+    retryPreload: () => {
+      getAuthHeaders().then(headers => {
+        defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, { headers });
+      });
+    },
+    skipToNext: fetchNextTrack,
   };
 }

@@ -28,6 +28,7 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
+import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
 import styles from './fullplayer/playerStyles';
 
 const { width, height } = Dimensions.get('window');
@@ -55,6 +56,11 @@ const FullPlayerModal = ({
   bottomBarHeight,
   topPeekHeight,
   insets: propInsets,
+  networkStatus = 'good',
+  nextTrackStatus = 'idle',
+  networkError = null,
+  isBufferingSlow = false,
+  onRetryPreload,
 }) => {
   const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
   const insets = propInsets || initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
@@ -824,6 +830,14 @@ const FullPlayerModal = ({
 
             {/* Bottom controls container */}
             <Animated.View style={[{ width: '100%' }, playerControlsAnimatedStyle]}>
+              <PlayerNetworkBanner
+                networkStatus={networkStatus}
+                nextTrackStatus={nextTrackStatus}
+                networkError={networkError}
+                isBufferingSlow={isBufferingSlow}
+                onRetry={onRetryPreload}
+                onSkip={fetchNextTrack}
+              />
               <PlayerControls
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}

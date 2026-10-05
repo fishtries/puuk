@@ -33,6 +33,10 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   onOpenAuthModal,
   expandProgress,
   isPlayerVisible,
+  onLoadMoreTracks,
+  hasMoreTracks,
+  isLoadingMoreTracks,
+  onRefreshTracks,
 }) {
   const [activeTab, setActiveTab] = useState('Home');
   const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
@@ -68,9 +72,26 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         onPressEllipsis={setTrackToManage}
         currentUser={currentUser}
         onOpenAuthModal={onOpenAuthModal}
+        onLoadMoreTracks={onLoadMoreTracks}
+        hasMoreTracks={hasMoreTracks}
+        isLoadingMoreTracks={isLoadingMoreTracks}
+        onRefreshTracks={onRefreshTracks}
       />
     ),
-    [tracks, isPlaying, currentTrack, playTrack, startWave, setTrackToManage, currentUser, onOpenAuthModal]
+    [
+      tracks,
+      isPlaying,
+      currentTrack,
+      playTrack,
+      startWave,
+      setTrackToManage,
+      currentUser,
+      onOpenAuthModal,
+      onLoadMoreTracks,
+      hasMoreTracks,
+      isLoadingMoreTracks,
+      onRefreshTracks,
+    ]
   );
 
   const renderSearch = useCallback(

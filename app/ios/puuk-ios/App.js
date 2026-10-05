@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   View,
@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Platform,
   ActivityIndicator,
+  DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
@@ -33,6 +34,7 @@ import TrackContextMenuModal from './components/TrackContextMenuModal';
 import LoginModal from './components/LoginModal';
 import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
+import useTracksPagination from './hooks/useTracksPagination';
 import { authFetch, checkAuth, addAuthListener, SERVER_URL, setServerUrl } from './utils/api';
 import { loadSettings, getSavedLastTrack, setSavedLastTrack, getSettings, addSettingsListener } from './utils/settings';
 
@@ -40,7 +42,6 @@ const { height } = Dimensions.get('window');
 
 function AppContent() {
   const insets = useSafeAreaInsets();
-  const [tracks, setTracks] = useState([]);
   const [trackToAdd, setTrackToAdd] = useState(null);
   const [trackToManage, setTrackToManage] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -56,6 +57,11 @@ function AppContent() {
   }, []);
 
   const navigationRef = useNavigationContainerRef();
+
+  const setTracksRef = useRef();
+  const setTracksWrapper = useCallback((updater) => {
+    if (setTracksRef.current) setTracksRef.current(updater);
+  }, []);
 
   const {
     player,
@@ -76,7 +82,46 @@ function AppContent() {
     playTrackList,
     handleToggleLike,
     startWave,
-  } = usePlayerController({ setTracks });
+    networkStatus,
+    nextTrackStatus,
+    networkError,
+    isBufferingSlow,
+    retryPreload,
+  } = usePlayerController({ setTracks: setTracksWrapper });
+
+  const {
+    tracks,
+    setTracks,
+    hasMoreTracks,
+    isLoadingMoreTracks,
+    loadMoreTracks,
+    refreshTracks,
+  } = useTracksPagination({
+    currentUser,
+    currentTrack,
+    setCurrentTrack,
+    serverUrl: SERVER_URL,
+  });
+
+  setTracksRef.current = setTracks;
+
+  useEffect(() => {
+    const subUpdated = DeviceEventEmitter.addListener('PUUK_TRACK_UPDATED', (updated) => {
+      setTracks((prev) =>
+        prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+      );
+      if (currentTrack && currentTrack.id === updated.id) {
+        setCurrentTrack((prev) => (prev ? { ...prev, ...updated } : prev));
+      }
+    });
+    const subDeleted = DeviceEventEmitter.addListener('PUUK_TRACK_DELETED', ({ id }) => {
+      setTracks((prev) => prev.filter((t) => t.id !== id));
+    });
+    return () => {
+      subUpdated.remove();
+      subDeleted.remove();
+    };
+  }, [currentTrack, setCurrentTrack, setTracks]);
 
   const fallbackTrack = useMemo(() => ({
     id: null,
@@ -277,38 +322,6 @@ function AppContent() {
     }
   }, [currentTrack]);
 
-  // Загрузка треков с сервера
-  useEffect(() => {
-    if (!currentUser) {
-      setTracks([]);
-      return;
-    }
-    const controller = new AbortController();
-    const fetchInitialTracks = async () => {
-      try {
-        const response = await authFetch('/api/tracks', {
-          signal: controller.signal
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        const tracksWithCovers = data.map(t => ({
-          ...t,
-          coverArt: t.coverArt || `${SERVER_URL}/api/cover/${t.id}`
-        }));
-        setTracks(tracksWithCovers);
-        if (tracksWithCovers.length > 0 && !currentTrack) {
-          setCurrentTrack(tracksWithCovers[0]);
-        }
-      } catch (e) {
-        if (e.name !== 'AbortError') {
-          console.warn("Fetch tracks error:", e);
-        }
-      }
-    };
-    fetchInitialTracks();
-    return () => controller.abort();
-  }, [currentUser]);
-
   if (isAuthChecking) {
     return (
       <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
@@ -361,6 +374,11 @@ function AppContent() {
         topPeekHeight={topPeekHeight}
         bottomBarHeight={bottomBarHeight}
         insets={insets}
+        networkStatus={networkStatus}
+        nextTrackStatus={nextTrackStatus}
+        networkError={networkError}
+        isBufferingSlow={isBufferingSlow}
+        onRetryPreload={retryPreload}
       />
 
       {/* СЛОЙ 1 (ПЕРЕДНИЙ ПЛАН): Карточка приложения, поднимающаяся вверх при открытии плеера */}
@@ -388,6 +406,10 @@ function AppContent() {
             onOpenAuthModal={() => setIsAuthModalVisible(true)}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
+            onLoadMoreTracks={loadMoreTracks}
+            hasMoreTracks={hasMoreTracks}
+            isLoadingMoreTracks={isLoadingMoreTracks}
+            onRefreshTracks={refreshTracks}
           />
         </NavigationContainer>
 

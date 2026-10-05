@@ -19,10 +19,27 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import CoverImage from './CoverImage';
-import { authFetch } from '../utils/api';
+import { authFetch, SERVER_URL } from '../utils/api';
+import { fetchCatalogWithCache, setCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
 import { getSettings, addSettingsListener } from '../utils/settings';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+// Normalize track items: ensures coverArt URI fallback is present
+const normalizeTracks = (data) => {
+  const items = Array.isArray(data) ? data : [];
+  return items
+    .filter((track) => track != null && typeof track === 'object')
+    .map((track) => ({
+      ...track,
+      coverArt: track.coverArt || (track.id ? `${SERVER_URL}/api/cover/${track.id}` : null),
+    }));
+};
+
+// Normalize playlists list
+const normalizePlaylists = (data) => {
+  return Array.isArray(data) ? data.filter((pl) => pl != null && typeof pl === 'object') : [];
+};
 
 // Relative time formatting for history
 function formatRelativeTime(dateStr) {
@@ -59,6 +76,8 @@ export default function LibraryScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const scrollViewRef = useRef(null);
+  const libraryAbortRef = useRef(null);
+  const userGenerationRef = useRef(0);
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -74,44 +93,116 @@ export default function LibraryScreen({
     return () => sub.remove();
   }, []);
 
-  // Загрузка данных библиотеки (избранное, плейлисты, история)
-  const fetchLibraryData = useCallback(async () => {
-    try {
-      const [favsRes, plsRes, histRes] = await Promise.all([
-        authFetch('/api/favorites'),
-        authFetch('/api/playlists'),
-        authFetch('/api/history')
-      ]);
-
-      if (favsRes.ok) {
-        const favsData = await favsRes.json();
-        setFavorites(favsData);
-      }
-      if (plsRes.ok) {
-        const plsData = await plsRes.json();
-        setPlaylists(plsData);
-      }
-      if (histRes.ok) {
-        const histData = await histRes.json();
-        setHistory(histData);
-      }
-    } catch (err) {
-      console.warn('Failed to load user library data:', err);
-    } finally {
+  // Загрузка данных библиотеки (избранное, плейлисты, история) со Stale-While-Revalidate кэшированием
+  const fetchLibraryData = useCallback(async (forceRefresh = false) => {
+    if (!currentUser) {
+      setFavorites([]);
+      setPlaylists([]);
+      setHistory([]);
       setIsLoading(false);
       setIsRefreshing(false);
+      if (libraryAbortRef.current) {
+        libraryAbortRef.current.abort();
+        libraryAbortRef.current = null;
+      }
+      return;
     }
-  }, []);
+
+    userGenerationRef.current += 1;
+    const currentGeneration = userGenerationRef.current;
+
+    if (libraryAbortRef.current) {
+      libraryAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    libraryAbortRef.current = controller;
+
+    try {
+      await Promise.allSettled([
+        fetchCatalogWithCache('/api/favorites', {
+          key: 'favorites',
+          userId: currentUser.id,
+          serverUrl: SERVER_URL,
+          ttlMs: DEFAULT_TTL_MS.favorites,
+          forceRefresh,
+          signal: controller.signal,
+          transform: normalizeTracks,
+          onData: (data) => {
+            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
+              setFavorites(Array.isArray(data) ? data : []);
+              setIsLoading(false);
+            }
+          },
+        }),
+        fetchCatalogWithCache('/api/playlists', {
+          key: 'playlists',
+          userId: currentUser.id,
+          serverUrl: SERVER_URL,
+          ttlMs: DEFAULT_TTL_MS.playlists,
+          forceRefresh,
+          signal: controller.signal,
+          transform: normalizePlaylists,
+          onData: (data) => {
+            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
+              setPlaylists(Array.isArray(data) ? data : []);
+              setIsLoading(false);
+            }
+          },
+        }),
+        fetchCatalogWithCache('/api/history', {
+          key: 'history',
+          userId: currentUser.id,
+          serverUrl: SERVER_URL,
+          ttlMs: DEFAULT_TTL_MS.history,
+          forceRefresh,
+          signal: controller.signal,
+          transform: normalizeTracks,
+          onData: (data) => {
+            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
+              setHistory(Array.isArray(data) ? data : []);
+              setIsLoading(false);
+            }
+          },
+        }),
+      ]);
+    } catch (err) {
+      if (err?.name !== 'AbortError' && !err?.message?.includes('AbortError')) {
+        console.warn('[LibraryScreen] Failed to load user library data:', err?.message || err);
+      }
+    } finally {
+      if (userGenerationRef.current === currentGeneration) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    }
+  }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser) {
+      setFavorites([]);
+      setPlaylists([]);
+      setHistory([]);
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+    // Очищаем списки предыдущего пользователя при смене учетной записи
+    setFavorites([]);
+    setPlaylists([]);
+    setHistory([]);
     setIsLoading(true);
-    fetchLibraryData();
-  }, [fetchLibraryData, currentUser]);
+    fetchLibraryData(false);
+    return () => {
+      if (libraryAbortRef.current) {
+        libraryAbortRef.current.abort();
+      }
+    };
+  }, [fetchLibraryData, currentUser?.id]);
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     setIsRefreshing(true);
-    fetchLibraryData();
-  };
+    fetchLibraryData(true);
+  }, [fetchLibraryData]);
 
   // Create new playlist
   const handleCreatePlaylist = useCallback(() => {
@@ -131,7 +222,7 @@ export default function LibraryScreen({
                 body: { name: trimmed }
               });
               if (res.ok) {
-                fetchLibraryData();
+                fetchLibraryData(true);
               } else {
                 Alert.alert('Error', 'Failed to create playlist');
               }
@@ -150,14 +241,39 @@ export default function LibraryScreen({
     return () => sub.remove();
   }, [handleCreatePlaylist]);
 
-  // Track deleted from library (TrackEditScreen): drop it from local lists
+  // Track deleted from library (TrackEditScreen): drop it from local lists and cache
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('PUUK_TRACK_DELETED', ({ id }) => {
-      setFavorites((prev) => prev.filter((t) => t.id !== id));
-      setHistory((prev) => prev.filter((t) => t.id !== id));
+      setFavorites((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        setCachedCatalog('favorites', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        return next;
+      });
+      setHistory((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        setCachedCatalog('history', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        return next;
+      });
     });
     return () => sub.remove();
-  }, []);
+  }, [currentUser?.id]);
+
+  // Track updated in library (TrackEditScreen): update in local lists and cache
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('PUUK_TRACK_UPDATED', (updated) => {
+      setFavorites((prev) => {
+        const next = prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t));
+        setCachedCatalog('favorites', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        return next;
+      });
+      setHistory((prev) => {
+        const next = prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t));
+        setCachedCatalog('history', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        return next;
+      });
+    });
+    return () => sub.remove();
+  }, [currentUser?.id]);
 
   // Playlist management menu (rename, delete)
   const handlePlaylistLongPress = (playlist) => {
@@ -185,7 +301,7 @@ export default function LibraryScreen({
                       method: 'PATCH',
                       body: { name: trimmed }
                     });
-                    if (res.ok) fetchLibraryData();
+                    if (res.ok) fetchLibraryData(true);
                   } catch (e) {
                     Alert.alert('Error', 'Failed to update playlist');
                   }
@@ -209,7 +325,7 @@ export default function LibraryScreen({
                     const res = await authFetch(`/api/playlists/${playlist.id}`, {
                       method: 'DELETE'
                     });
-                    if (res.ok) fetchLibraryData();
+                    if (res.ok) fetchLibraryData(true);
                   } catch (e) {
                     Alert.alert('Error', 'Failed to delete playlist');
                   }
@@ -226,20 +342,24 @@ export default function LibraryScreen({
   const handleToggleFavorite = async (track) => {
     const isCurrentlyLiked = favorites.some((t) => t.id === track.id);
     if (isCurrentlyLiked) {
-      setFavorites((prev) => prev.filter((t) => t.id !== track.id));
+      const updated = favorites.filter((t) => t.id !== track.id);
+      setFavorites(updated);
+      setCachedCatalog('favorites', updated, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
       try {
         await authFetch(`/api/tracks/${track.id}/like`, { method: 'DELETE' });
       } catch (e) {
         console.warn('Failed to remove favorite:', e);
-        fetchLibraryData();
+        fetchLibraryData(true);
       }
     } else {
-      setFavorites((prev) => [track, ...prev]);
+      const updated = [track, ...favorites];
+      setFavorites(updated);
+      setCachedCatalog('favorites', updated, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
       try {
         await authFetch(`/api/tracks/${track.id}/like`, { method: 'POST' });
       } catch (e) {
         console.warn('Failed to add favorite:', e);
-        fetchLibraryData();
+        fetchLibraryData(true);
       }
     }
   };

@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import CoverImage from './CoverImage';
-import { authFetch, SERVER_URL } from '../utils/api';
+import { authFetch, SERVER_URL, parseApiErrorMessage } from '../utils/api';
 import { getSettings, addSettingsListener } from '../utils/settings';
 import styles from './trackEditScreenStyles';
 
@@ -34,6 +34,7 @@ export default function TrackEditScreen({ route, navigation }) {
   const [coverPreview, setCoverPreview] = useState(originalCover);
   const [coverUrl, setCoverUrl] = useState(null);
   const [coverBase64, setCoverBase64] = useState(null);
+  const [coverAction, setCoverAction] = useState('keep');
 
   // Internet metadata search states
   const [metadataQuery, setMetadataQuery] = useState(`${track.artist || ''} ${track.title || ''}`.trim());
@@ -100,6 +101,7 @@ export default function TrackEditScreen({ route, navigation }) {
         setCoverPreview(asset.uri);
         setCoverBase64(asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : null);
         setCoverUrl(null);
+        setCoverAction('replace');
       }
     } catch (e) {
       console.warn('Image picker error:', e);
@@ -112,6 +114,15 @@ export default function TrackEditScreen({ route, navigation }) {
     setCoverPreview(originalCover);
     setCoverUrl(null);
     setCoverBase64(null);
+    setCoverAction('keep');
+  };
+
+  // Remove cover
+  const handleRemoveCover = () => {
+    setCoverBase64(null);
+    setCoverUrl(null);
+    setCoverPreview(null);
+    setCoverAction(coverAction === 'remove' ? 'keep' : 'remove');
   };
 
   // Search metadata from internet (iTunes / Deezer)
@@ -131,7 +142,8 @@ export default function TrackEditScreen({ route, navigation }) {
           Alert.alert('Not Found', 'No metadata matches found for this query');
         }
       } else {
-        Alert.alert('Error', 'Failed to search metadata from internet');
+        const errData = await res.json().catch(() => ({}));
+        Alert.alert('Error', parseApiErrorMessage(errData, 'Failed to search metadata from internet'));
       }
     } catch (e) {
       Alert.alert('Error', 'Network error while searching metadata');
@@ -149,6 +161,7 @@ export default function TrackEditScreen({ route, navigation }) {
       setCoverPreview(result.cover_url);
       setCoverUrl(result.cover_url);
       setCoverBase64(null);
+      setCoverAction('replace');
     }
     const combined = `${result.artist || ''} ${result.title || ''}`.trim();
     if (combined) {
@@ -167,6 +180,9 @@ export default function TrackEditScreen({ route, navigation }) {
       if (res.ok) {
         const data = await res.json();
         setLyricsResults(data || []);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        Alert.alert('Error', parseApiErrorMessage(errData, 'Failed to search lyrics'));
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to search lyrics');
@@ -196,8 +212,9 @@ export default function TrackEditScreen({ route, navigation }) {
         artist: artist.trim(),
         album: album.trim() || 'Unknown Album',
         lyrics: lyrics || '',
-        cover_url: coverUrl,
-        cover_base64: coverBase64,
+        cover_action: coverAction,
+        cover_url: coverAction === 'replace' ? coverUrl : null,
+        cover_base64: coverAction === 'replace' ? coverBase64 : null,
       };
 
       const res = await authFetch(`/api/tracks/${track.id}`, {
@@ -207,7 +224,7 @@ export default function TrackEditScreen({ route, navigation }) {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to update track');
+        throw new Error(parseApiErrorMessage(errData, 'Failed to update track'));
       }
 
       // Notify rest of the app about update
@@ -216,20 +233,21 @@ export default function TrackEditScreen({ route, navigation }) {
         title: title.trim(),
         artist: artist.trim(),
         album: album.trim() || 'Unknown Album',
-        coverArt: coverPreview,
+        coverArt: coverAction === 'remove' ? null : (coverPreview || track.coverArt),
       });
 
       Alert.alert('Success', 'Track metadata and cover updated successfully', [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
     } catch (e) {
-      Alert.alert('Error', e.message);
+      const msg = e?.message || (typeof e === 'string' ? e : parseApiErrorMessage(e, 'Failed to update track'));
+      Alert.alert('Error', msg);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const hasCustomCover = !!(coverUrl || coverBase64);
+  const hasCustomCover = coverAction !== 'keep';
 
   // Delete track from library (irreversible: Qdrant vector, audio file, DB row)
   const handleDelete = () => {
@@ -247,12 +265,13 @@ export default function TrackEditScreen({ route, navigation }) {
               const res = await authFetch(`/api/tracks/${track.id}`, { method: 'DELETE' });
               if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
-                throw new Error(errData.detail || 'Failed to delete track');
+                throw new Error(parseApiErrorMessage(errData, 'Failed to delete track'));
               }
               DeviceEventEmitter.emit('PUUK_TRACK_DELETED', { id: track.id });
               navigation.goBack();
             } catch (e) {
-              Alert.alert('Error', e.message);
+              const msg = e?.message || (typeof e === 'string' ? e : parseApiErrorMessage(e, 'Failed to delete track'));
+              Alert.alert('Error', msg);
             } finally {
               setIsDeleting(false);
             }
@@ -297,7 +316,13 @@ export default function TrackEditScreen({ route, navigation }) {
             activeOpacity={0.85} 
             onPress={handlePickImage}
           >
-            <CoverImage source={coverPreview} style={styles.coverImage} />
+            {coverPreview ? (
+              <CoverImage source={coverPreview} style={styles.coverImage} />
+            ) : (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                <Ionicons name="image-outline" size={40} color="#555" />
+              </View>
+            )}
             <View style={styles.coverOverlayBadge}>
               <Ionicons name="camera" size={18} color="#fff" />
             </View>
@@ -313,6 +338,17 @@ export default function TrackEditScreen({ route, navigation }) {
               <Text style={[styles.coverActionText, { color: accentColor }]}>Choose Photo</Text>
             </TouchableOpacity>
 
+            {coverPreview && (
+              <TouchableOpacity
+                style={styles.coverRevertButton}
+                onPress={handleRemoveCover}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="trash-outline" size={16} color="#ff6b6b" style={{ marginRight: 4 }} />
+                <Text style={[styles.coverRevertText, { color: '#ff6b6b' }]}>Remove</Text>
+              </TouchableOpacity>
+            )}
+
             {hasCustomCover && (
               <TouchableOpacity 
                 style={styles.coverRevertButton}
@@ -325,9 +361,14 @@ export default function TrackEditScreen({ route, navigation }) {
             )}
           </View>
 
-          {hasCustomCover && (
+          {coverAction === 'replace' && (
             <Text style={[styles.coverStatusText, { color: accentColor }]}>
               • New cover ready to save
+            </Text>
+          )}
+          {coverAction === 'remove' && (
+            <Text style={[styles.coverStatusText, { color: '#ff6b6b' }]}>
+              • Cover will be removed
             </Text>
           )}
         </View>

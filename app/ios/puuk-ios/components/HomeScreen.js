@@ -10,6 +10,7 @@ import {
   Alert,
   ActionSheetIOS,
   DeviceEventEmitter,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -30,6 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { authFetch, SERVER_URL } from '../utils/api';
+import { fetchCatalogWithCache, removeCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -181,18 +183,23 @@ const LibraryTrackRow = ({ track, onPress, index, onPressEllipsis }) => (
 );
 
 // ─── Main HomeScreen ───────────────────────────────────────────────
-export default function HomeScreen({ 
-  tracks, 
+export default function HomeScreen({
+  tracks = [],
   isPlaying, 
   currentTrack, 
   onPlayTrack, 
   onStartWave, 
   navigation, 
   onAddToPlaylist,
+  onPressEllipsis,
   currentUser,
-  onOpenAuthModal 
+  onOpenAuthModal,
+  onLoadMoreTracks,
+  hasMoreTracks,
+  isLoadingMoreTracks,
 }) {
   const scrollViewRef = useRef(null);
+  const scrollLockRef = useRef(false);
   const [albums, setAlbums] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [wavePhrase] = useState(() => {
@@ -202,22 +209,82 @@ export default function HomeScreen({
 
   const isWaveActive = isPlaying && currentTrack != null;
 
-  const fetchLibrary = async () => {
-    try {
-      const [albsRes, plistsRes] = await Promise.all([
-        authFetch('/api/albums'),
-        authFetch('/api/playlists')
-      ]);
-      if (albsRes.ok) setAlbums(await albsRes.json());
-      if (plistsRes.ok) setPlaylists(await plistsRes.json());
-    } catch (e) {
-      console.warn("Failed to fetch library", e);
+  const handleScroll = useCallback(
+    (event) => {
+      const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+      const isNearBottom =
+        layoutMeasurement.height + contentOffset.y >= contentSize.height - 250;
+
+      if (isNearBottom && hasMoreTracks && !isLoadingMoreTracks && typeof onLoadMoreTracks === 'function') {
+        if (!scrollLockRef.current) {
+          scrollLockRef.current = true;
+          onLoadMoreTracks();
+          setTimeout(() => {
+            scrollLockRef.current = false;
+          }, 500);
+        }
+      }
+    },
+    [hasMoreTracks, isLoadingMoreTracks, onLoadMoreTracks]
+  );
+
+  const libraryAbortRef = useRef(null);
+
+  const fetchLibrary = useCallback(async (forceRefresh = false) => {
+    if (!currentUser) {
+      setAlbums([]);
+      setPlaylists([]);
+      return;
     }
-  };
+
+    if (libraryAbortRef.current) {
+      libraryAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    libraryAbortRef.current = controller;
+
+    try {
+      await Promise.allSettled([
+        fetchCatalogWithCache('/api/albums', {
+          key: 'albums',
+          userId: currentUser.id,
+          serverUrl: SERVER_URL,
+          ttlMs: DEFAULT_TTL_MS.albums,
+          forceRefresh,
+          signal: controller.signal,
+          onData: (data) => {
+            if (!controller.signal.aborted) {
+              setAlbums(Array.isArray(data) ? data : []);
+            }
+          },
+        }),
+        fetchCatalogWithCache('/api/playlists', {
+          key: 'playlists',
+          userId: currentUser.id,
+          serverUrl: SERVER_URL,
+          ttlMs: DEFAULT_TTL_MS.playlists,
+          forceRefresh,
+          signal: controller.signal,
+          onData: (data) => {
+            if (!controller.signal.aborted) {
+              setPlaylists(Array.isArray(data) ? data : []);
+            }
+          },
+        }),
+      ]);
+    } catch (e) {
+      console.warn('[HomeScreen] Failed to fetch library:', e);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     fetchLibrary();
-  }, [currentUser]);
+    return () => {
+      if (libraryAbortRef.current) {
+        libraryAbortRef.current.abort();
+      }
+    };
+  }, [fetchLibrary]);
 
   const handleCreatePlaylist = () => {
     Alert.prompt(
@@ -232,7 +299,10 @@ export default function HomeScreen({
                 method: 'POST',
                 body: { name }
               });
-              if (res.ok) fetchLibrary();
+              if (res.ok) {
+                await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                fetchLibrary(true);
+              }
             } catch (e) {
               Alert.alert("Error", "Failed to create playlist");
             }
@@ -264,7 +334,10 @@ export default function HomeScreen({
                       method: 'PATCH',
                       body: { name }
                     });
-                    if (res.ok) fetchLibrary();
+                    if (res.ok) {
+                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      fetchLibrary(true);
+                    }
                   } catch (e) {
                     Alert.alert("Error", "Failed to update playlist");
                   }
@@ -285,7 +358,10 @@ export default function HomeScreen({
                     const res = await authFetch(`/api/playlists/${playlist.id}`, {
                       method: 'DELETE'
                     });
-                    if (res.ok) fetchLibrary();
+                    if (res.ok) {
+                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      fetchLibrary(true);
+                    }
                   } catch (e) {
                     Alert.alert("Error", "Failed to delete playlist");
                   }
@@ -317,6 +393,8 @@ export default function HomeScreen({
           { paddingBottom: currentTrack ? 100 : 70 }
         ]}
         showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={32}
       >
         {/* Wave Card */}
         <Animated.View entering={FadeInDown.duration(600).springify()}>
@@ -382,10 +460,15 @@ export default function HomeScreen({
                   track={track} 
                   onPress={onPlayTrack} 
                   index={index} 
-                  onPressEllipsis={onAddToPlaylist}
+                  onPressEllipsis={onAddToPlaylist || onPressEllipsis}
                 />
               ))}
             </View>
+            {isLoadingMoreTracks && (
+              <View style={styles.loadingMoreContainer}>
+                <ActivityIndicator size="small" color="#FFDAB9" />
+              </View>
+            )}
           </Animated.View>
         )}
 
@@ -440,5 +523,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginLeft: 6,
+  },
+  loadingMoreContainer: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

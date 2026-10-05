@@ -1,6 +1,6 @@
 """Track catalog endpoints: listing, details, metadata editing, resync."""
 import uuid
-from typing import Optional, Literal, Union
+from typing import Optional, Literal, Union, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -32,6 +32,15 @@ class TrackEditPayload(BaseModel):
     cover_base64: Optional[str] = None
     cover_url: Optional[str] = None
     cover_mime: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def auto_infer_cover_action(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            has_cover = bool(data.get("cover_base64") or data.get("cover_url"))
+            if has_cover and data.get("cover_action") in (None, "keep"):
+                data["cover_action"] = "replace"
+        return data
 
     @model_validator(mode="after")
     def validate_cover_semantics(self):

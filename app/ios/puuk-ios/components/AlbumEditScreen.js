@@ -15,7 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import CoverImage from './CoverImage';
-import { authFetch } from '../utils/api';
+import { authFetch, parseApiErrorMessage } from '../utils/api';
 
 export default function AlbumEditScreen({ route, navigation }) {
   const { albumId, album: initialAlbum } = route.params;
@@ -96,7 +96,7 @@ export default function AlbumEditScreen({ route, navigation }) {
       const res = await authFetch(`/api/albums/${albumId}`, { method: 'PATCH', body: payload });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to update album');
+        throw new Error(parseApiErrorMessage(errData, 'Failed to update album'));
       }
 
       const result = await res.json();
@@ -117,7 +117,8 @@ export default function AlbumEditScreen({ route, navigation }) {
         ]);
       }
     } catch (e) {
-      Alert.alert('Error', e.message);
+      const msg = e?.message || (typeof e === 'string' ? e : parseApiErrorMessage(e, 'Failed to update album'));
+      Alert.alert('Error', msg);
     } finally {
       setIsSaving(false);
     }

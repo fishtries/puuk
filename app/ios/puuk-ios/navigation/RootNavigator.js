@@ -21,6 +21,10 @@ export default function RootNavigator({
   onOpenAuthModal,
   expandProgress,
   isPlayerVisible,
+  onLoadMoreTracks,
+  hasMoreTracks,
+  isLoadingMoreTracks,
+  onRefreshTracks,
 }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -39,6 +43,10 @@ export default function RootNavigator({
             onOpenAuthModal={onOpenAuthModal}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
+            onLoadMoreTracks={onLoadMoreTracks}
+            hasMoreTracks={hasMoreTracks}
+            isLoadingMoreTracks={isLoadingMoreTracks}
+            onRefreshTracks={onRefreshTracks}
           />
         )}
       </Stack.Screen>
