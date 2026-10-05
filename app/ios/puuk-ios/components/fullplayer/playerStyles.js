@@ -4,7 +4,8 @@ const { width, height } = Dimensions.get('window');
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#333',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
   },
   safeArea: {
     alignItems: 'center',
@@ -183,28 +184,37 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 0,
-    height: 63,
+    bottom: 0,
+    height: 64,
+    backgroundColor: '#000000',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    zIndex: 10,
+    paddingHorizontal: 16,
+    zIndex: 30,
   },
+
   miniPlayerImage: {
     width: 44,
     height: 44,
     borderRadius: 8,
-    backgroundColor: '#ccc',
+    backgroundColor: '#222222',
   },
   miniPlayerInfo: {
     flex: 1,
     paddingHorizontal: 12,
+    justifyContent: 'center',
   },
   miniPlayerTitle: {
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 15,
+    fontWeight: '600',
     color: '#ffffff',
   },
+  miniPlayerArtist: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 2,
+  },
+
   miniPlayerButton: {
     padding: 8,
   },

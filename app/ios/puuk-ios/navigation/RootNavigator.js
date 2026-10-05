@@ -19,6 +19,8 @@ export default function RootNavigator({
   setTrackToManage,
   currentUser,
   onOpenAuthModal,
+  expandProgress,
+  isPlayerVisible,
 }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -35,6 +37,8 @@ export default function RootNavigator({
             setTrackToManage={setTrackToManage}
             currentUser={currentUser}
             onOpenAuthModal={onOpenAuthModal}
+            expandProgress={expandProgress}
+            isPlayerVisible={isPlayerVisible}
           />
         )}
       </Stack.Screen>

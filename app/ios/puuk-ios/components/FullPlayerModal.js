@@ -26,7 +26,6 @@ import Animated, {
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
-import MiniPlayerBar from './fullplayer/MiniPlayerBar';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
 import styles from './fullplayer/playerStyles';
@@ -51,10 +50,16 @@ const FullPlayerModal = ({
   playTrack,
   onAddToPlaylist,
   onToggleLike,
-  isLiked
+  isLiked,
+  expandProgress: externalExpandProgress,
+  bottomBarHeight,
+  topPeekHeight,
+  insets: propInsets,
 }) => {
   const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
-  const insets = initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
+  const insets = propInsets || initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
+  const effectiveBottomBarHeight = bottomBarHeight || (64 + (insets.bottom || 34));
+  const effectiveTopPeekHeight = topPeekHeight || ((insets.top || 47) + 46);
   const bgColor = useSharedValue('#4c2e4f');
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSliding, setIsSliding] = useState(false);
@@ -80,8 +85,8 @@ const FullPlayerModal = ({
   }, []);
 
   // === REANIMATED СОСТОЯНИЯ (работают в нативном потоке) ===
-  const expandProgress = useSharedValue(0);
-  const contentOpacity = useSharedValue(0);
+  const internalExpandProgress = useSharedValue(0);
+  const expandProgress = externalExpandProgress || internalExpandProgress;
   const isSlidingShared = useSharedValue(false);
   const sliderWidthShared = useSharedValue(1);
   const slideProgressShared = useSharedValue(0);
@@ -94,11 +99,12 @@ const FullPlayerModal = ({
   // Анимация появления/скрытия плеера
   useEffect(() => {
     if (isPlayerVisible) {
-      expandProgress.value = withTiming(1, {
-        duration: 320,
-        easing: Easing.bezier(0.2, 0.9, 0.3, 1),
-      });
-      contentOpacity.value = withTiming(1, { duration: 250 });
+      if (!externalExpandProgress) {
+        expandProgress.value = withTiming(1, {
+          duration: 320,
+          easing: Easing.bezier(0.2, 0.9, 0.3, 1),
+        });
+      }
       setIsQueueVisible(false);
       cancelAnimation(queueTransition);
       queueTransition.value = 0;
@@ -109,11 +115,12 @@ const FullPlayerModal = ({
       lyricsTransition.value = 0;
       lyricsRotation.value = 0;
     } else {
-      contentOpacity.value = withTiming(0, { duration: 180 });
-      expandProgress.value = withTiming(0, {
-        duration: 250,
-        easing: Easing.bezier(0.25, 1, 0.5, 1),
-      });
+      if (!externalExpandProgress) {
+        expandProgress.value = withTiming(0, {
+          duration: 250,
+          easing: Easing.bezier(0.25, 1, 0.5, 1),
+        });
+      }
       setIsLyricsView(false);
       setIsLyricsMounted(false);
       setIsQueueVisible(false);
@@ -124,15 +131,16 @@ const FullPlayerModal = ({
       lyricsTransition.value = 0;
       lyricsRotation.value = 0;
     }
-  }, [isPlayerVisible]);
+  }, [isPlayerVisible, externalExpandProgress]);
 
   useEffect(() => {
     if (playerExpandToken && playerExpandToken > 0) {
-      expandProgress.value = withTiming(1, {
-        duration: 320,
-        easing: Easing.bezier(0.2, 0.9, 0.3, 1),
-      });
-      contentOpacity.value = withTiming(1, { duration: 250 });
+      if (!externalExpandProgress) {
+        expandProgress.value = withTiming(1, {
+          duration: 320,
+          easing: Easing.bezier(0.2, 0.9, 0.3, 1),
+        });
+      }
       setIsQueueVisible(false);
       cancelAnimation(queueTransition);
       queueTransition.value = 0;
@@ -143,7 +151,7 @@ const FullPlayerModal = ({
       lyricsTransition.value = 0;
       lyricsRotation.value = 0;
     }
-  }, [playerExpandToken]);
+  }, [playerExpandToken, externalExpandProgress]);
 
   useEffect(() => {
     if (currentTrack?.coverArt && currentTrack.coverArt.includes('/api/cover/')) {
@@ -176,11 +184,12 @@ const FullPlayerModal = ({
   onExpandRef.current = onExpand;
 
   const handleClose = useCallback(() => {
-    contentOpacity.value = withTiming(0, { duration: 180 });
-    expandProgress.value = withTiming(0, {
-      duration: 250,
-      easing: Easing.bezier(0.25, 1, 0.5, 1),
-    });
+    if (!externalExpandProgress) {
+      expandProgress.value = withTiming(0, {
+        duration: 250,
+        easing: Easing.bezier(0.25, 1, 0.5, 1),
+      });
+    }
     setIsLyricsView(false);
     setIsLyricsMounted(false);
     setIsQueueVisible(false);
@@ -193,14 +202,15 @@ const FullPlayerModal = ({
     if (onCloseRef.current) {
       onCloseRef.current();
     }
-  }, []);
+  }, [externalExpandProgress]);
 
   const handleExpand = useCallback(() => {
-    expandProgress.value = withTiming(1, {
-      duration: 320,
-      easing: Easing.bezier(0.2, 0.9, 0.3, 1),
-    });
-    contentOpacity.value = withTiming(1, { duration: 250 });
+    if (!externalExpandProgress) {
+      expandProgress.value = withTiming(1, {
+        duration: 320,
+        easing: Easing.bezier(0.2, 0.9, 0.3, 1),
+      });
+    }
     setIsQueueVisible(false);
     cancelAnimation(queueTransition);
     queueTransition.value = 0;
@@ -213,7 +223,7 @@ const FullPlayerModal = ({
     if (onExpandRef.current) {
       onExpandRef.current();
     }
-  }, []);
+  }, [externalExpandProgress]);
 
   const createSwipeDownGesture = () => {
     return Gesture.Pan()
@@ -233,7 +243,6 @@ const FullPlayerModal = ({
             duration: 250,
             easing: Easing.bezier(0.25, 1, 0.5, 1),
           });
-          contentOpacity.value = withTiming(0, { duration: 180 });
           runOnJS(handleClose)();
         } else {
           expandProgress.value = withSpring(1, {
@@ -241,7 +250,6 @@ const FullPlayerModal = ({
             stiffness: 220,
             mass: 0.8,
           });
-          contentOpacity.value = withTiming(1, { duration: 200 });
         }
       })
       .onFinalize((event, success) => {
@@ -252,7 +260,6 @@ const FullPlayerModal = ({
             stiffness: 220,
             mass: 0.8,
           });
-          contentOpacity.value = withTiming(1, { duration: 200 });
         }
       });
   };
@@ -263,41 +270,36 @@ const FullPlayerModal = ({
   const lyricsHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const queueHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
 
-  const animatedContainerStyle = useAnimatedStyle(() => {
-    return {
-      top: interpolate(expandProgress.value, [0, 1], [height - 157, 0], Extrapolation.CLAMP),
-      bottom: interpolate(expandProgress.value, [0, 1], [94, 0], Extrapolation.CLAMP),
-      left: interpolate(expandProgress.value, [0, 1], [10, 0], Extrapolation.CLAMP),
-      right: interpolate(expandProgress.value, [0, 1], [10, 0], Extrapolation.CLAMP),
-      borderRadius: interpolate(expandProgress.value, [0, 1], [14, 0], Extrapolation.CLAMP),
-      position: 'absolute',
-      overflow: 'hidden',
-    };
-  });
-
-  const miniPlayerAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(expandProgress.value, [0, 0.15], [1, 0], Extrapolation.CLAMP);
-    const translateY = interpolate(expandProgress.value, [0, 0.15], [0, -15], Extrapolation.CLAMP);
-    return {
-      opacity,
-      transform: [{ translateY }],
-      zIndex: expandProgress.value < 0.1 ? 50 : -1,
-    };
-  });
-
-  const contentAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(expandProgress.value, [0.06, 0.35], [0, 1], Extrapolation.CLAMP) * contentOpacity.value;
-    const translateY = interpolate(expandProgress.value, [0, 1], [30, 0], Extrapolation.CLAMP);
-    return {
-      opacity,
-      transform: [{ translateY }],
-    };
-  });
-
   const gradientOverlayAnimatedStyle = useAnimatedStyle(() => {
-    const gradOpacity = interpolate(expandProgress.value, [0.08, 0.35], [0, 1], Extrapolation.CLAMP);
+    const gradOpacity = interpolate(expandProgress.value, [0.08, 0.4], [0, 1], Extrapolation.CLAMP);
     return {
-      opacity: gradOpacity * contentOpacity.value,
+      opacity: gradOpacity,
+    };
+  });
+
+  const playerControlsAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(
+      expandProgress.value,
+      [0.2, 0.75],
+      [0, 1],
+      Extrapolation.CLAMP
+    );
+    const translateY = interpolate(
+      expandProgress.value,
+      [0.2, 1],
+      [50, 0],
+      Extrapolation.CLAMP
+    );
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
+
+  const lyricsModalContentAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(expandProgress.value, [0.85, 1], [0, 1], Extrapolation.CLAMP);
+    return {
+      opacity,
     };
   });
 
@@ -354,45 +356,95 @@ const FullPlayerModal = ({
   const TARGET_DELTA_X = 52 - (width / 2);
   const TARGET_DELTA_Y = -40 - (BIG_ART_SIZE / 2);
 
+  // Morphing calculations: mini-player to full-player
+  const miniScale = MINI_ART_SIZE / BIG_ART_SIZE;
+  const miniCenterX = 16 + MINI_ART_SIZE / 2; // 38
+  const fullCenterX = width / 2;
+  const expandDeltaX = miniCenterX - fullCenterX;
+
+  const fullArtTopY = effectiveTopPeekHeight + 70; // safeArea paddingTop + header 40 + marginTop 20
+  const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
+  const miniArtTopY = height - effectiveBottomBarHeight + 10;
+  const miniArtCenterY = miniArtTopY + MINI_ART_SIZE / 2; // height - effectiveBottomBarHeight + 32
+  const expandDeltaY = miniArtCenterY - fullArtCenterY;
+
+  const fullTextTopY = fullArtTopY + BIG_ART_SIZE + 20;
+  const fullTextCenterY = fullTextTopY + 23;
+  const miniTextCenterY = height - effectiveBottomBarHeight + 32;
+  const expandDeltaTextX = 72 - 30; // 42
+  const expandDeltaTextY = miniTextCenterY - fullTextCenterY;
+
   const albumArtFlipStyle = useAnimatedStyle(() => {
     const rotateY = lyricsRotation.value;
 
-    const scale = interpolate(
+    const expandScale = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [miniScale, 1],
+      Extrapolation.CLAMP
+    );
+    const expandTranslateX = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [expandDeltaX, 0],
+      Extrapolation.CLAMP
+    );
+    const expandTranslateY = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [expandDeltaY, 0],
+      Extrapolation.CLAMP
+    );
+
+    const lyricsScale = interpolate(
       lyricsTransition.value,
       [0, 1],
       [1, TARGET_SCALE],
       Extrapolation.CLAMP
     );
-
-    const translateX = interpolate(
+    const lyricsTranslateX = interpolate(
       lyricsTransition.value,
       [0, 1],
       [0, TARGET_DELTA_X],
       Extrapolation.CLAMP
     );
-    const translateY = interpolate(
+    const lyricsTranslateY = interpolate(
       lyricsTransition.value,
       [0, 1],
       [0, TARGET_DELTA_Y],
       Extrapolation.CLAMP
     );
 
+    const scale = expandScale * lyricsScale;
+    const translateX = expandTranslateX + lyricsTranslateX;
+    const translateY = expandTranslateY + lyricsTranslateY;
+
     const shadowOpacity = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [0, 0.5],
+      Extrapolation.CLAMP
+    ) * interpolate(
       lyricsTransition.value,
       [0, 1],
-      [0.5, 0.15],
+      [1, 0.3],
       Extrapolation.CLAMP
     );
     const shadowRadius = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [0, 15],
+      Extrapolation.CLAMP
+    ) * interpolate(
       lyricsTransition.value,
       [0, 1],
-      [15, 4],
+      [1, 4 / 15],
       Extrapolation.CLAMP
     );
     const elevation = interpolate(
-      lyricsTransition.value,
+      expandProgress.value,
       [0, 1],
-      [10, 2],
+      [0, 10],
       Extrapolation.CLAMP
     );
 
@@ -412,10 +464,16 @@ const FullPlayerModal = ({
   });
 
   const albumArtRadiusStyle = useAnimatedStyle(() => {
+    const baseRadius = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [8 / miniScale, 12],
+      Extrapolation.CLAMP
+    );
     const radius = interpolate(
       lyricsTransition.value,
       [0, 1],
-      [12, 6 / TARGET_SCALE],
+      [baseRadius, 6 / TARGET_SCALE],
       Extrapolation.CLAMP
     );
     return {
@@ -436,27 +494,52 @@ const FullPlayerModal = ({
   });
 
   const trackInfoAnimatedStyle = useAnimatedStyle(() => {
-    const translateY = interpolate(
+    const expandTranslateX = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [expandDeltaTextX, 0],
+      Extrapolation.CLAMP
+    );
+    const expandTranslateY = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [expandDeltaTextY, 0],
+      Extrapolation.CLAMP
+    );
+    const expandScale = interpolate(
+      expandProgress.value,
+      [0, 1],
+      [0.65, 1],
+      Extrapolation.CLAMP
+    );
+
+    const lyricsTranslateY = interpolate(
       lyricsTransition.value,
       [0, 0.55],
       [0, -45],
       Extrapolation.CLAMP
     );
-    const opacity = interpolate(
+    const lyricsOpacity = interpolate(
       lyricsTransition.value,
       [0, 0.38],
       [1, 0],
       Extrapolation.CLAMP
     );
-    const scale = interpolate(
+    const lyricsScale = interpolate(
       lyricsTransition.value,
       [0, 0.45],
       [1, 0.94],
       Extrapolation.CLAMP
     );
+
     return {
-      opacity,
-      transform: [{ translateY }, { scale }],
+      opacity: lyricsOpacity,
+      transform: [
+        { translateX: expandTranslateX },
+        { translateY: expandTranslateY + lyricsTranslateY },
+        { scale: expandScale * lyricsScale },
+      ],
+      transformOrigin: 'left center',
     };
   });
 
@@ -474,29 +557,41 @@ const FullPlayerModal = ({
 
   const trackInfoHeartAnimatedStyle = useAnimatedStyle(() => {
     const scale = interpolate(
+      expandProgress.value,
+      [0.65, 1],
+      [0.1, 1],
+      Extrapolation.CLAMP
+    ) * interpolate(
       lyricsTransition.value,
       [0, 0.38],
       [1, 0.88],
       Extrapolation.CLAMP
     );
+    const opacity = interpolate(
+      expandProgress.value,
+      [0.65, 0.95],
+      [0, 1],
+      Extrapolation.CLAMP
+    );
     return {
+      opacity,
       transform: [{ scale }],
     };
   });
 
   const playerHeaderAnimatedStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
-      lyricsTransition.value,
-      [0, 0.3],
-      [1, 0],
+      expandProgress.value,
+      [0.6, 0.95],
+      [0, 1],
       Extrapolation.CLAMP
-    );
+    ) * (1 - interpolate(lyricsTransition.value, [0, 0.3], [0, 1], Extrapolation.CLAMP));
     const translateY = interpolate(
-      lyricsTransition.value,
-      [0, 0.3],
-      [0, -15],
+      expandProgress.value,
+      [0.6, 1],
+      [-20, 0],
       Extrapolation.CLAMP
-    );
+    ) + interpolate(lyricsTransition.value, [0, 0.4], [0, -30], Extrapolation.CLAMP);
     return {
       opacity,
       transform: [{ translateY }],
@@ -589,27 +684,34 @@ const FullPlayerModal = ({
     };
   });
 
-  if (!currentTrack) return null;
+  const fallbackTrack = useMemo(() => ({
+    id: 'placeholder',
+    title: 'Puuk Music',
+    artist: 'Select a track to start',
+    coverArt: null,
+  }), []);
+
+  const activeTrack = currentTrack || fallbackTrack;
 
   const getTrackDetails = (track) => {
     if (!track) return { displayTitle: '', displayArtist: '' };
     return {
-      displayTitle: track.title || '',
-      displayArtist: track.artist || ''
+      displayTitle: track.title || 'Puuk Music',
+      displayArtist: track.artist || 'Select a track to start'
     };
   };
 
-  const { displayTitle, displayArtist } = getTrackDetails(currentTrack);
+  const { displayTitle, displayArtist } = getTrackDetails(activeTrack);
 
   return (
     <Animated.View
-      style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
-      pointerEvents="box-none"
+      style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
+      pointerEvents={isPlayerVisible ? 'auto' : 'none'}
     >
       <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        <Animated.View style={[styles.container, animatedContainerStyle]} pointerEvents="auto">
-          {/* Base dark background for mini player */}
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(30, 30, 30, 0.95)' }} />
+        <View style={styles.container} pointerEvents="auto">
+          {/* Base pitch black background */}
+          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000000' }} />
 
           {/* Плавно меняющийся сплошной цветной фон */}
           <Animated.View style={[StyleSheet.absoluteFill, animatedBgStyle]} />
@@ -617,29 +719,15 @@ const FullPlayerModal = ({
           {/* Градиент затемнения (от полностью прозрачного до цвета подвала) */}
           <Animated.View style={[StyleSheet.absoluteFill, gradientOverlayAnimatedStyle]} pointerEvents="none">
             <LinearGradient
-              colors={['#120d1400', '#120d14']}
+              colors={['#00000000', '#000000']}
               style={StyleSheet.absoluteFill}
             />
           </Animated.View>
 
-
-          {/* Mini Player UI */}
-          <MiniPlayerBar
-            styles={styles}
-            currentTrack={currentTrack}
-            displayTitle={displayTitle}
-            isPlaying={isPlaying}
-            isPlayerVisible={isPlayerVisible}
-            handleExpand={handleExpand}
-            togglePlayPause={togglePlayPause}
-            fetchNextTrack={fetchNextTrack}
-            miniPlayerAnimatedStyle={miniPlayerAnimatedStyle}
-          />
-
           <AppleLyricsView
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
-            currentTrack={currentTrack}
+            currentTrack={activeTrack}
             currentTime={currentTime}
             isPlayerVisible={isPlayerVisible}
             isQueueVisible={isQueueVisible}
@@ -648,10 +736,10 @@ const FullPlayerModal = ({
             trackIsLiked={trackIsLiked}
             displayTitle={displayTitle}
             displayArtist={displayArtist}
-            insets={insets}
+            insets={{ ...insets, top: effectiveTopPeekHeight }}
             width={width}
             height={height}
-            contentAnimatedStyle={contentAnimatedStyle}
+            contentAnimatedStyle={lyricsModalContentAnimatedStyle}
             lyricsTransition={lyricsTransition}
             lyricsRotation={lyricsRotation}
             animatedBgStyle={animatedBgStyle}
@@ -678,13 +766,12 @@ const FullPlayerModal = ({
                 left: 0,
                 right: 0,
                 bottom: 0,
-                paddingTop: insets.top + 10,
-                paddingBottom: insets.bottom + 35,
+                paddingTop: effectiveTopPeekHeight + 10,
+                paddingBottom: insets.bottom + 25,
                 width: width,
                 height: height,
                 zIndex: 20,
               },
-              contentAnimatedStyle
             ]}
             pointerEvents={isPlayerVisible ? 'box-none' : 'none'}
           >
@@ -725,7 +812,7 @@ const FullPlayerModal = ({
                     <Animated.View style={[styles.artContainer, albumArtFlipStyle]}>
                       <Animated.View style={[{ width: '100%', height: '100%', overflow: 'hidden' }, albumArtRadiusStyle]}>
                         <CoverImage
-                          source={currentTrack.coverArt}
+                          source={activeTrack?.coverArt}
                           style={{ width: '100%', height: '100%' }}
                         />
                         <Animated.View
@@ -780,37 +867,39 @@ const FullPlayerModal = ({
             </View>
 
             {/* Bottom controls container */}
-            <PlayerControls
-              styles={styles}
-              isEffectivelyCompact={isEffectivelyCompact}
-              isPlaying={isPlaying}
-              isLoading={isLoading}
-              currentTime={currentTime}
-              duration={duration}
-              togglePlayPause={togglePlayPause}
-              fetchNextTrack={fetchNextTrack}
-              playPreviousTrack={playPreviousTrack}
-              seekTo={seekTo}
-              isLyricsView={isLyricsView}
-              isQueueVisible={isQueueVisible}
-              isSliding={isSliding}
-              setIsSliding={setIsSliding}
-              setSlideValue={setSlideValue}
-              isSlidingShared={isSlidingShared}
-              sliderWidthShared={sliderWidthShared}
-              slideProgressShared={slideProgressShared}
-              durationShared={durationShared}
-              slideValue={slideValue}
-              bottomSwipeGesture={bottomSwipeGesture}
-              exitCompactMode={triggerExitCompactMode}
-              triggerExitCompactMode={triggerExitCompactMode}
-              onAddToPlaylist={onAddToPlaylist}
-              onToggleQueue={toggleQueue}
-              onToggleLyrics={handleToggleLyrics}
-            />
+            <Animated.View style={[{ width: '100%' }, playerControlsAnimatedStyle]}>
+              <PlayerControls
+                styles={styles}
+                isEffectivelyCompact={isEffectivelyCompact}
+                isPlaying={isPlaying}
+                isLoading={isLoading}
+                currentTime={currentTime}
+                duration={duration}
+                togglePlayPause={togglePlayPause}
+                fetchNextTrack={fetchNextTrack}
+                playPreviousTrack={playPreviousTrack}
+                seekTo={seekTo}
+                isLyricsView={isLyricsView}
+                isQueueVisible={isQueueVisible}
+                isSliding={isSliding}
+                setIsSliding={setIsSliding}
+                setSlideValue={setSlideValue}
+                isSlidingShared={isSlidingShared}
+                sliderWidthShared={sliderWidthShared}
+                slideProgressShared={slideProgressShared}
+                durationShared={durationShared}
+                slideValue={slideValue}
+                bottomSwipeGesture={bottomSwipeGesture}
+                exitCompactMode={triggerExitCompactMode}
+                triggerExitCompactMode={triggerExitCompactMode}
+                onAddToPlaylist={onAddToPlaylist}
+                onToggleQueue={toggleQueue}
+                onToggleLyrics={handleToggleLyrics}
+              />
+            </Animated.View>
 
           </Animated.View>
-        </Animated.View>
+        </View>
       </GestureHandlerRootView>
     </Animated.View>
   );

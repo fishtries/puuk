@@ -10,7 +10,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { SymbolView } from 'expo-symbols';
 import * as Haptics from 'expo-haptics';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
+import Animated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
 import AppHeader from '../components/AppHeader';
 import HomeScreen from '../components/HomeScreen';
@@ -30,6 +31,8 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   setTrackToManage,
   currentUser,
   onOpenAuthModal,
+  expandProgress,
+  isPlayerVisible,
 }) {
   const [activeTab, setActiveTab] = useState('Home');
   const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
@@ -102,6 +105,16 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
     [isPlaying, currentTrack, playTrack, playTrackList, setTrackToManage, currentUser, onOpenAuthModal]
   );
 
+  const animatedTabBarStyle = useAnimatedStyle(() => {
+    if (!expandProgress) return {};
+    const opacity = interpolate(expandProgress.value, [0, 0.15], [1, 0], Extrapolation.CLAMP);
+    const translateY = interpolate(expandProgress.value, [0, 0.15], [0, 15], Extrapolation.CLAMP);
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: '#000' }}>
@@ -113,15 +126,28 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         />
       </SafeAreaView>
       <Tab.Navigator
+        tabBar={props => (
+          <Animated.View
+            style={[
+              animatedTabBarStyle,
+              {
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+              },
+            ]}
+            pointerEvents={isPlayerVisible ? 'none' : 'auto'}
+          >
+            <BottomTabBar {...props} />
+          </Animated.View>
+        )}
         screenOptions={{
           lazy: false,
           detachInactiveScreens: false,
           headerShown: false,
+          safeAreaInsets: { bottom: 6 },
           tabBarStyle: {
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
             borderTopColor: 'rgba(255, 255, 255, 0.15)',
             borderTopWidth: StyleSheet.hairlineWidth,
             backgroundColor: 'transparent',

@@ -314,7 +314,7 @@ export default function HomeScreen({
         ref={scrollViewRef}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: currentTrack ? 175 : 105 }
+          { paddingBottom: currentTrack ? 100 : 70 }
         ]}
         showsVerticalScrollIndicator={false}
       >

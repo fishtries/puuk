@@ -146,3 +146,30 @@ export const addSettingsListener = (callback) => {
   const sub = DeviceEventEmitter.addListener('PUUK_SETTINGS_CHANGED', callback);
   return () => sub.remove();
 };
+
+const LAST_TRACK_KEY = 'puuk_last_track_v1';
+let cachedLastTrack = null;
+
+export const getSavedLastTrack = async () => {
+  if (cachedLastTrack) return cachedLastTrack;
+  try {
+    const raw = await SecureStore.getItemAsync(LAST_TRACK_KEY, SECURE_STORE_OPTIONS);
+    if (raw) {
+      cachedLastTrack = JSON.parse(raw);
+      return cachedLastTrack;
+    }
+  } catch (e) {
+    console.warn('[Last track read error]', e);
+  }
+  return null;
+};
+
+export const setSavedLastTrack = async (track) => {
+  if (!track || !track.id) return;
+  cachedLastTrack = track;
+  try {
+    await SecureStore.setItemAsync(LAST_TRACK_KEY, JSON.stringify(track), SECURE_STORE_OPTIONS);
+  } catch (e) {
+    console.warn('[Last track save error]', e);
+  }
+};

@@ -285,7 +285,7 @@ export default function SearchScreen({
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: currentTrack ? 175 : 105 }
+          { paddingBottom: currentTrack ? 100 : 70 }
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
