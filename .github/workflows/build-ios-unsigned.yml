@@ -49,6 +49,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Patch expo-audio for lock screen next/prev controls
+        run: node scripts/patch-expo-audio.js
+
       - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 

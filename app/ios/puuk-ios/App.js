@@ -409,16 +409,10 @@ function AppContent() {
 
           <GestureDetector gesture={topPeekSwipeGesture}>
             <TouchableOpacity
-              activeOpacity={0.8}
+              activeOpacity={1}
               onPress={handleClose}
-              style={styles.topPeekTouchArea}
-            >
-              <View style={styles.topPeekHandle} />
-              <View style={styles.topPeekRow}>
-                <Ionicons name="chevron-down" size={14} color="rgba(255, 255, 255, 0.7)" />
-                <Text style={styles.topPeekText}>Swipe down to hide</Text>
-              </View>
-            </TouchableOpacity>
+              style={[StyleSheet.absoluteFill, styles.topPeekTouchArea]}
+            />
           </GestureDetector>
         </Animated.View>
 
@@ -526,28 +520,6 @@ const styles = StyleSheet.create({
     zIndex: 50,
   },
   topPeekTouchArea: {
-    width: '100%',
-    paddingTop: 6,
-    paddingBottom: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  topPeekHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.4)',
-    marginBottom: 6,
-  },
-  topPeekRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  topPeekText: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
-    fontWeight: '500',
-    letterSpacing: 0.2,
+    ...StyleSheet.absoluteFillObject,
   },
 });

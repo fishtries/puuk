@@ -118,8 +118,8 @@ export default function usePlayerController({ setTracks }) {
           },
           {
             isLiveStream: false,
-            showSeekForward: true,
-            showSeekBackward: true,
+            showSeekForward: false,
+            showSeekBackward: false,
           }
         );
       }
@@ -225,6 +225,42 @@ export default function usePlayerController({ setTracks }) {
       isAdvancingRef.current = false;
     }
   }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue, currentTime, duration]);
+
+  const fetchNextTrackRef = useRef(fetchNextTrack);
+  const playPreviousTrackRef = useRef(playPreviousTrack);
+
+  useEffect(() => {
+    fetchNextTrackRef.current = fetchNextTrack;
+  }, [fetchNextTrack]);
+
+  useEffect(() => {
+    playPreviousTrackRef.current = playPreviousTrack;
+  }, [playPreviousTrack]);
+
+  // Слушатель команд экрана блокировки, Control Center, Dynamic Island и AirPods (Next / Previous Track)
+  useEffect(() => {
+    if (!player || typeof player.addListener !== 'function') return;
+
+    const nextSub = player.addListener('nextTrack', () => {
+      fetchNextTrackRef.current?.();
+    });
+
+    const prevSub = player.addListener('previousTrack', () => {
+      playPreviousTrackRef.current?.();
+    });
+
+    return () => {
+      nextSub?.remove?.();
+      prevSub?.remove?.();
+    };
+  }, [player]);
+
+  // Автоматический переход к следующему треку по окончании воспроизведения
+  useEffect(() => {
+    if (status?.didJustFinish) {
+      fetchNextTrackRef.current?.();
+    }
+  }, [status?.didJustFinish]);
 
   const togglePlayPause = useCallback(() => {
     if (isPlaying) {

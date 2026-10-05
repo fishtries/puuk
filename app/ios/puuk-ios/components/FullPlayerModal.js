@@ -264,7 +264,6 @@ const FullPlayerModal = ({
       });
   };
 
-  const headerSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const mainSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const bottomSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const lyricsHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
@@ -354,7 +353,6 @@ const FullPlayerModal = ({
   const MINI_ART_SIZE = 44;
   const TARGET_SCALE = MINI_ART_SIZE / BIG_ART_SIZE;
   const TARGET_DELTA_X = 52 - (width / 2);
-  const TARGET_DELTA_Y = -40 - (BIG_ART_SIZE / 2);
 
   // Morphing calculations: mini-player to full-player
   const miniScale = MINI_ART_SIZE / BIG_ART_SIZE;
@@ -362,8 +360,10 @@ const FullPlayerModal = ({
   const fullCenterX = width / 2;
   const expandDeltaX = miniCenterX - fullCenterX;
 
-  const fullArtTopY = effectiveTopPeekHeight + 70; // safeArea paddingTop + header 40 + marginTop 20
+  const fullArtTopY = effectiveTopPeekHeight + 30; // safeArea paddingTop (effectiveTopPeekHeight + 10) + marginTop 20
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
+  const TARGET_DELTA_Y = (effectiveTopPeekHeight + 32) - fullArtCenterY;
+
   const miniArtTopY = height - effectiveBottomBarHeight + 10;
   const miniArtCenterY = miniArtTopY + MINI_ART_SIZE / 2; // height - effectiveBottomBarHeight + 32
   const expandDeltaY = miniArtCenterY - fullArtCenterY;
@@ -579,25 +579,6 @@ const FullPlayerModal = ({
     };
   });
 
-  const playerHeaderAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      expandProgress.value,
-      [0.6, 0.95],
-      [0, 1],
-      Extrapolation.CLAMP
-    ) * (1 - interpolate(lyricsTransition.value, [0, 0.3], [0, 1], Extrapolation.CLAMP));
-    const translateY = interpolate(
-      expandProgress.value,
-      [0.6, 1],
-      [-20, 0],
-      Extrapolation.CLAMP
-    ) + interpolate(lyricsTransition.value, [0, 0.4], [0, -30], Extrapolation.CLAMP);
-    return {
-      opacity,
-      transform: [{ translateY }],
-    };
-  });
-
   const lyricsViewAnimatedStyle = useAnimatedStyle(() => {
     return {
       opacity: lyricsTransition.value > 0.005 ? 1 : 0,
@@ -775,31 +756,6 @@ const FullPlayerModal = ({
             ]}
             pointerEvents={isPlayerVisible ? 'box-none' : 'none'}
           >
-
-            {/* In full player view, show drag indicator at top */}
-            <GestureDetector gesture={headerSwipeGesture}>
-              <Animated.View
-                style={[styles.playerHeader, playerHeaderAnimatedStyle]}
-                pointerEvents={isLyricsView ? 'none' : 'auto'}
-              >
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={handleClose}
-                  hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="chevron-down" size={26} color="rgba(255, 255, 255, 0.7)" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleClose}
-                  hitSlop={{ top: 15, bottom: 15, left: 20, right: 20 }}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.dragIndicator} />
-                </TouchableOpacity>
-                <View style={styles.closeButton} />
-              </Animated.View>
-            </GestureDetector>
 
             {/* Middle container: Cover art & info when NOT in lyrics view, or queue view */}
             <View style={{ flex: 1, width: '100%', justifyContent: 'flex-start' }} pointerEvents={isLyricsView ? 'box-none' : 'auto'}>
