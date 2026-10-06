@@ -650,7 +650,12 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
         options.signal?.aborted ||
         requestEpochs.get(cacheKey) !== currentEpoch
       ) {
-        await removeCachedCatalog(key, { serverUrl, userId });
+        // Не удаляем ключ целиком, если его уже занял более новый запрос.
+        // Иначе медленный forceRefresh может стереть свежий snapshot нового
+        // запроса после собственного дискового I/O.
+        if (requestEpochs.get(cacheKey) === currentEpoch) {
+          await removeCachedCatalog(key, { serverUrl, userId });
+        }
         return {
           data: freshData,
           fromCache: false,

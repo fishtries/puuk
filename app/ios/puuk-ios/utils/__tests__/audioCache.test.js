@@ -196,7 +196,7 @@ describe('AudioCache', () => {
     await cache.init();
     const uri = await cache.getOrFetch('101', 'https://puuk.app/api/stream/101');
 
-    expect(uri).toContain('101.mp3');
+    expect(uri).toMatch(/101_\d+\.mp3$/);
     expect(cache.isCached('101')).toBe(true);
     expect(cache.getCachedUri('101')).toBe(uri);
     expect(cache.manifest['101']).toBeDefined();
@@ -220,7 +220,7 @@ describe('AudioCache', () => {
     const countBefore = mockActiveDownloadTasks.length;
 
     const cachedUri = await cache.getOrFetch('303', 'https://puuk.app/api/stream/303');
-    expect(cachedUri).toContain('303.mp3');
+    expect(cachedUri).toMatch(/303_\d+\.mp3$/);
     expect(mockActiveDownloadTasks.length).toBe(countBefore);
   });
 
@@ -310,5 +310,260 @@ describe('AudioCache', () => {
     expect(cache.getCachedUri('legacy-track')).toBeNull();
     expect(cache.manifest['legacy-track']).toBeUndefined();
     expect(legacyFile.exists).toBe(false);
+  });
+
+  test('getDownloadState() correctly reflects idle, downloading, and cached states', async () => {
+    await cache.init();
+    expect(cache.getDownloadState('701')).toEqual({ status: 'idle' });
+    expect(cache.isDownloading('701')).toBe(false);
+
+    let resolveDownload;
+    const slowTaskPromise = new Promise(res => { resolveDownload = res; });
+    const origCreate = MockFile.createDownloadTask;
+    MockFile.createDownloadTask = (url, dest, opts) => {
+      const task = new MockDownloadTask(url, dest, opts);
+      task.downloadAsync = async () => {
+        mockFs.set(dest.uri, { content: 'partial', size: 100, isDir: false });
+        await slowTaskPromise;
+        return dest;
+      };
+      return task;
+    };
+
+    try {
+      const fetchPromise = cache.getOrFetch('701', 'https://puuk.app/api/stream/701');
+      expect(cache.isDownloading('701')).toBe(true);
+      const state = cache.getDownloadState('701');
+      expect(state.status).toBe('downloading');
+      expect(state.promise).toBe(fetchPromise);
+      expect(cache.getOngoingPromise('701')).toBe(fetchPromise);
+
+      resolveDownload();
+      const uri = await fetchPromise;
+
+      expect(cache.isDownloading('701')).toBe(false);
+      expect(cache.getOngoingPromise('701')).toBeNull();
+      expect(cache.getDownloadState('701')).toEqual({
+        status: 'cached',
+        uri,
+      });
+    } finally {
+      MockFile.createDownloadTask = origCreate;
+    }
+  });
+
+  test('getOrFetch() with signal rejects for aborted caller without cancelling shared in-flight download', async () => {
+    await cache.init();
+    let resolveDownload;
+    const slowTaskPromise = new Promise(res => { resolveDownload = res; });
+    const origCreate = MockFile.createDownloadTask;
+    MockFile.createDownloadTask = (url, dest, opts) => {
+      const task = new MockDownloadTask(url, dest, opts);
+      task.downloadAsync = async () => {
+        mockFs.set(dest.uri, { content: 'mp3-content', size: 5000, isDir: false });
+        await slowTaskPromise;
+        return dest;
+      };
+      return task;
+    };
+
+    try {
+      // First caller starts download
+      const p1 = cache.getOrFetch('801', 'https://puuk.app/api/stream/801');
+
+      // Second caller joins with an AbortController
+      const abortController = new AbortController();
+      const p2 = cache.getOrFetch('801', 'https://puuk.app/api/stream/801', {
+        signal: abortController.signal,
+      });
+
+      // Second caller aborts
+      abortController.abort();
+
+      await expect(p2).rejects.toThrow('Download cancelled');
+
+      // First caller's download completes successfully!
+      resolveDownload();
+      const uri = await p1;
+      expect(uri).toMatch(/801_\d+\.mp3$/);
+      expect(cache.isCached('801')).toBe(true);
+    } finally {
+      MockFile.createDownloadTask = origCreate;
+    }
+  });
+
+  test('cancel() followed by new getOrFetch() preserves new download record when old download finishes late', async () => {
+    await cache.init();
+
+    let resolveDownloadA, resolveDownloadB;
+    const taskAPromise = new Promise((res) => { resolveDownloadA = res; });
+    const taskBPromise = new Promise((res) => { resolveDownloadB = res; });
+
+    let callCount = 0;
+    const origCreate = MockFile.createDownloadTask;
+    MockFile.createDownloadTask = (url, dest, opts) => {
+      callCount += 1;
+      const currentCall = callCount;
+      const task = new MockDownloadTask(url, dest, opts);
+      task.downloadAsync = async () => {
+        mockFs.set(dest.uri, { content: `content-${currentCall}`, size: 5000, isDir: false });
+        if (currentCall === 1) {
+          await taskAPromise;
+        } else if (currentCall === 2) {
+          await taskBPromise;
+        }
+        return dest;
+      };
+      return task;
+    };
+
+    try {
+      // 1. Начинаем загрузку A (track-1)
+      const promiseA = cache.getOrFetch('track-1', 'https://puuk.app/api/stream/1');
+      expect(callCount).toBe(1);
+
+      // 2. Отменяем A
+      cache.cancel('track-1');
+
+      // 3. Начинаем загрузку B (track-1) ДО завершения A
+      const promiseB = cache.getOrFetch('track-1', 'https://puuk.app/api/stream/1');
+      expect(callCount).toBe(2);
+      expect(promiseB).not.toBe(promiseA);
+
+      // 4. Завершаем A
+      resolveDownloadA();
+      await expect(promiseA).rejects.toThrow('Download cancelled');
+
+      // 5. Убеждаемся, что getOngoingPromise(trackId) возвращает promise B, а не null (запись B не была удалена старым finally!)
+      expect(cache.getOngoingPromise('track-1')).toBe(promiseB);
+      expect(cache.isDownloading('track-1')).toBe(true);
+
+      // 6. Убеждаемся, что третий getOrFetch() присоединяется к B и не создаёт новую native download task
+      const promiseC = cache.getOrFetch('track-1', 'https://puuk.app/api/stream/1');
+      expect(promiseC).toBe(promiseB);
+      expect(callCount).toBe(2); // Никакой третьей задачи создано не было!
+
+      // 7. Завершаем B
+      resolveDownloadB();
+      const uriB = await promiseB;
+      const uriC = await promiseC;
+
+      expect(uriB).toMatch(/track-1_\d+\.mp3$/);
+      expect(uriC).toBe(uriB);
+      expect(cache.isCached('track-1')).toBe(true);
+      expect(cache.manifest['track-1']).toBeDefined();
+    } finally {
+      MockFile.createDownloadTask = origCreate;
+    }
+  });
+
+  test('cancelled task completing late cannot overwrite newly cached file or corrupt manifest', async () => {
+    await cache.init();
+
+    let resolveSlowA;
+    const taskAPromise = new Promise((res) => { resolveSlowA = res; });
+
+    let callCount = 0;
+    const origCreate = MockFile.createDownloadTask;
+    MockFile.createDownloadTask = (url, dest, opts) => {
+      callCount += 1;
+      const currentCall = callCount;
+      const task = new MockDownloadTask(url, dest, opts);
+      task.downloadAsync = async () => {
+        if (currentCall === 1) {
+          // Task A ignores cancel and takes long time
+          await taskAPromise;
+          mockFs.set(dest.uri, { content: 'STALE_A', size: 100, isDir: false });
+        } else {
+          // Task B completes quickly
+          mockFs.set(dest.uri, { content: 'FRESH_B', size: 200, isDir: false });
+        }
+        return dest;
+      };
+      return task;
+    };
+
+    try {
+      // Запускаем A
+      const promiseA = cache.getOrFetch('race-1', 'https://puuk.app/api/stream/race-1');
+
+      // Отменяем A
+      cache.cancel('race-1');
+
+      // Запускаем B, которое завершается сразу
+      const promiseB = cache.getOrFetch('race-1', 'https://puuk.app/api/stream/race-1');
+      const uriB = await promiseB;
+      expect(cache.manifest['race-1'].size).toBe(200);
+
+      // Теперь задача A завершается позже
+      resolveSlowA();
+      await expect(promiseA).rejects.toThrow('Download cancelled');
+
+      // Задача A не должна перезаписать manifest или файл задачи B!
+      expect(cache.manifest['race-1'].size).toBe(200);
+      const file = new MockFile(uriB);
+      const content = await file.text();
+      expect(content).toBe('FRESH_B');
+    } finally {
+      MockFile.createDownloadTask = origCreate;
+    }
+  });
+
+  test('late move of cancelled download cannot overwrite or delete a newer generation file', async () => {
+    await cache.init();
+
+    const originalCreate = MockFile.createDownloadTask;
+    const originalMove = MockFile.prototype.move;
+    let downloadCount = 0;
+    let moveCount = 0;
+    let releaseMoveA;
+    const moveGateA = new Promise((resolve) => { releaseMoveA = resolve; });
+
+    MockFile.createDownloadTask = (url, dest, opts) => {
+      downloadCount += 1;
+      const currentDownload = downloadCount;
+      const task = new MockDownloadTask(url, dest, opts);
+      task.downloadAsync = async () => {
+        const content = currentDownload === 1 ? 'STALE_A' : 'FRESH_B';
+        const size = currentDownload === 1 ? 100 : 200;
+        mockFs.set(dest.uri, { content, size, isDir: false });
+        return dest;
+      };
+      return task;
+    };
+
+    MockFile.prototype.move = async function (dest) {
+      moveCount += 1;
+      if (moveCount === 1) {
+        await moveGateA;
+      }
+      return originalMove.call(this, dest);
+    };
+
+    try {
+      // A has passed its pre-move generation check and is suspended inside move().
+      const promiseA = cache.getOrFetch('race-move', 'https://puuk.app/api/stream/race-move');
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(moveCount).toBe(1);
+
+      cache.cancel('race-move');
+      const promiseB = cache.getOrFetch('race-move', 'https://puuk.app/api/stream/race-move');
+      const uriB = await promiseB;
+
+      expect(cache.manifest['race-move']).toEqual(expect.objectContaining({ uri: uriB, size: 200 }));
+      expect(await new MockFile(uriB).text()).toBe('FRESH_B');
+
+      // A completes its delayed move after B is already published.
+      releaseMoveA();
+      await expect(promiseA).rejects.toThrow('Download cancelled');
+
+      expect(cache.manifest['race-move']).toEqual(expect.objectContaining({ uri: uriB, size: 200 }));
+      expect(await new MockFile(uriB).text()).toBe('FRESH_B');
+      expect(new MockFile(cache.cacheDir, 'race-move_1.mp3').exists).toBe(false);
+    } finally {
+      releaseMoveA();
+      MockFile.createDownloadTask = originalCreate;
+      MockFile.prototype.move = originalMove;
+    }
   });
 });

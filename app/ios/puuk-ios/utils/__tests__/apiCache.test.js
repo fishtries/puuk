@@ -718,6 +718,46 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(oldOnData).not.toHaveBeenCalledWith([{ id: 'old-stale-data' }], expect.anything());
     });
 
+    it('устаревший forceRefresh не удаляет snapshot, записанный более новым запросом', async () => {
+      let resolveOldReq;
+      const oldReqPromise = new Promise((resolve) => {
+        resolveOldReq = resolve;
+      });
+      authFetch.mockImplementationOnce(() => oldReqPromise);
+
+      const oldRequest = fetchCatalogWithCache('/api/tracks', {
+        key: 'tracks',
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 'newer-track' }],
+      });
+      await fetchCatalogWithCache('/api/tracks', {
+        key: 'tracks',
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+
+      resolveOldReq({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 'older-track' }],
+      });
+      await oldRequest;
+
+      const cached = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      expect(cached?.data).toEqual([{ id: 'newer-track' }]);
+    });
+
     it('deriveCacheKeyFromEndpoint формирует безопасные ключи с query-параметрами', () => {
       expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=0')).toBe('tracks_limit_30_offset_0');
       expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=30')).toBe('tracks_limit_30_offset_30');

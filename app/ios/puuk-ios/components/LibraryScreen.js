@@ -20,7 +20,7 @@ import Animated, {
 
 import CoverImage from './CoverImage';
 import { authFetch, SERVER_URL } from '../utils/api';
-import { fetchCatalogWithCache, setCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
+import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
 import { getSettings, addSettingsListener } from '../utils/settings';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
@@ -222,6 +222,7 @@ export default function LibraryScreen({
                 body: { name: trimmed }
               });
               if (res.ok) {
+                await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
                 fetchLibraryData(true);
               } else {
                 Alert.alert('Error', 'Failed to create playlist');
@@ -301,7 +302,10 @@ export default function LibraryScreen({
                       method: 'PATCH',
                       body: { name: trimmed }
                     });
-                    if (res.ok) fetchLibraryData(true);
+                    if (res.ok) {
+                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      fetchLibraryData(true);
+                    }
                   } catch (e) {
                     Alert.alert('Error', 'Failed to update playlist');
                   }
@@ -325,7 +329,10 @@ export default function LibraryScreen({
                     const res = await authFetch(`/api/playlists/${playlist.id}`, {
                       method: 'DELETE'
                     });
-                    if (res.ok) fetchLibraryData(true);
+                    if (res.ok) {
+                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      fetchLibraryData(true);
+                    }
                   } catch (e) {
                     Alert.alert('Error', 'Failed to delete playlist');
                   }

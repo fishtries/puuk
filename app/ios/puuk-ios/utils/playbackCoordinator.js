@@ -1,14 +1,15 @@
 /**
  * Playback Coordinator.
  * Coordinates AudioPlayer (expo-audio), AudioCache, and PreloadScheduler.
- * Implements gapless preload/replace mechanism (Approach A from spike),
- * remote URI fallback, lock screen metadata updates, and network UX status reporting.
+ * Implements gapless preload/replace mechanism, remote URI fallback,
+ * idempotent playback, generation/token race protection,
+ * fine-grained error classification, and debug-gated diagnostics.
  */
 
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
 import { resolveCoverUri } from '../components/CoverImage';
-import { SERVER_URL, getCachedAuthToken } from './api';
+import { SERVER_URL, getCachedAuthToken, getAuthToken } from './api';
 
 // Native expo-audio preload is disabled because it registers an AVQueuePlayer in the native registry,
 // which triggers an NSInvalidArgumentException / HostFunction crash in unpatched iOS binaries.
@@ -16,6 +17,100 @@ import { SERVER_URL, getCachedAuthToken } from './api';
 let expoPreloadNative = null;
 
 export const BYPASS_AUDIO_CACHE = false;
+
+/**
+ * Классифицированная ошибка воспроизведения.
+ */
+export class PlaybackError extends Error {
+  /**
+   * @param {string} message
+   * @param {Object} [options]
+   * @param {'local_cache_error' | 'remote_replace_error' | 'play_error' | 'network_timeout' | 'auth_error' | 'unknown'} [options.type]
+   * @param {Error} [options.cause]
+   * @param {string} [options.trackId]
+   */
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'PlaybackError';
+    this.type = options.type || 'unknown';
+    this.code = this.type;
+    this.cause = options.cause || null;
+    this.trackId = options.trackId ? String(options.trackId) : null;
+  }
+}
+
+/**
+ * Классифицирует произвольную ошибку воспроизведения.
+ * @param {Error|any} err
+ * @param {string|number} [trackId]
+ * @returns {PlaybackError}
+ */
+export function classifyPlaybackError(err, trackId) {
+  if (err instanceof PlaybackError) {
+    return err;
+  }
+
+  const msg = err?.message || String(err || '');
+  const status = err?.status;
+  let type = 'unknown';
+
+  if (
+    status === 401 ||
+    msg.includes('401') ||
+    msg.toLowerCase().includes('unauthorized') ||
+    msg.toLowerCase().includes('auth')
+  ) {
+    type = 'auth_error';
+  } else if (
+    status === 408 ||
+    err?.name === 'TimeoutError' ||
+    msg.toLowerCase().includes('timeout') ||
+    msg.toLowerCase().includes('timed out')
+  ) {
+    type = 'network_timeout';
+  } else if (
+    msg.toLowerCase().includes('play') ||
+    msg.toLowerCase().includes('playback')
+  ) {
+    type = 'play_error';
+  } else if (
+    msg.toLowerCase().includes('cache') ||
+    msg.toLowerCase().includes('local')
+  ) {
+    type = 'local_cache_error';
+  } else {
+    type = 'remote_replace_error';
+  }
+
+  return new PlaybackError(msg, { type, cause: err, trackId });
+}
+
+/**
+ * Сравнивает два объекта заголовков без учёта регистра ключей.
+ */
+export function areHeadersEqual(a, b) {
+  if (a === b) return true;
+  if (!a && !b) return true;
+  const normA = {};
+  if (a) {
+    for (const [k, v] of Object.entries(a)) {
+      if (typeof v === 'string') normA[k.toLowerCase()] = v.trim();
+    }
+  }
+  const normB = {};
+  if (b) {
+    for (const [k, v] of Object.entries(b)) {
+      if (typeof v === 'string') normB[k.toLowerCase()] = v.trim();
+    }
+  }
+  const keysA = Object.keys(normA);
+  const keysB = Object.keys(normB);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (normA[k] !== normB[k]) return false;
+  }
+  return true;
+}
 
 /**
  * Нормализует stream URL для воспроизведения:
@@ -30,9 +125,11 @@ export const BYPASS_AUDIO_CACHE = false;
  */
 export function normalizeStreamUrl(track, serverUrl = SERVER_URL) {
   if (!track) return '';
-  const trackId = track.id || track.track_id;
-  if (!trackId && trackId !== 0) return '';
-  const trackIdStr = String(trackId).trim().replace(/['"]/g, '');
+  const rawTrackId = (track.id !== undefined && track.id !== null)
+    ? track.id
+    : track.track_id;
+  if (!rawTrackId && rawTrackId !== 0) return '';
+  const trackIdStr = String(rawTrackId).trim().replace(/['"]/g, '');
 
   const cleanServerUrl = (serverUrl || 'https://web.puuk.fun')
     .trim()
@@ -56,7 +153,6 @@ export function normalizeStreamUrl(track, serverUrl = SERVER_URL) {
     normalized = `${cleanServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
   }
 
-  // Не нормализуем слеши глобально: URL уже собран из проверенных частей без дублирования слешей
   return normalized;
 }
 
@@ -67,14 +163,22 @@ export class PlaybackCoordinator {
     this.preloadNative = options.preloadNative || null;
     this.serverUrl = options.serverUrl || SERVER_URL;
     this.bypassCache = options.bypassCache !== undefined ? options.bypassCache : BYPASS_AUDIO_CACHE;
+    this.debug = Boolean(options.debug);
 
     this.currentTrack = null;
+    this.currentTrackId = null;
+    this.currentPlayUri = null;
+    this.currentIsLocal = false;
+    this._currentSourceHeaders = null;
+    this.playbackGeneration = 0;
     this.upNextQueue = [];
     this.listeners = new Set();
 
     this.networkStatus = 'good'; // 'good' | 'slow' | 'error'
     this.nextTrackStatus = TRACK_STATUS.IDLE;
     this.networkError = null;
+    this.lastErrorType = null;
+    this.lastCacheError = null;
     this.isBufferingSlow = false;
     this._bufferingTimeout = null;
 
@@ -85,6 +189,14 @@ export class PlaybackCoordinator {
   }
 
   destroy() {
+    this.playbackGeneration += 1;
+    this.currentTrack = null;
+    this.currentTrackId = null;
+    this.currentPlayUri = null;
+    this.currentIsLocal = false;
+    this.networkError = null;
+    this.networkStatus = 'good';
+    this.lastErrorType = null;
     if (this._unsubscribeScheduler) {
       this._unsubscribeScheduler();
     }
@@ -95,35 +207,75 @@ export class PlaybackCoordinator {
   }
 
   /**
-   * Воспроизводит трек с поэтапной пошаговой диагностикой:
-   * 1. Нормализация URL
-   * 2. Проверка локального кеша (или bypass)
-   * 3. Native replace (local или remote)
-   * 4. Native play
-   * 5. Обновление метаданных Lock Screen
+   * Выполняет player.replace с защитой от out-of-order завершения.
+   * Если устаревший replace завершается позже, чем уже начал играть более новый трек,
+   * повторно устанавливает актуальный источник, чтобы плеер не остался на старом треке.
+   *
+   * @private
+   */
+  async _performReplace(player, source, isCurrent, generation) {
+    if (!isCurrent()) {
+      return { superseded: true };
+    }
+
+    await player.replace(source);
+
+    if (!isCurrent()) {
+      if (this.currentPlayUri && this.currentPlayUri !== source.uri && this.playbackGeneration > generation) {
+        this._warn('[Coordinator] Stale replace completed after newer track was started, re-applying current source:', {
+          staleUri: source.uri,
+          currentUri: this.currentPlayUri,
+        });
+        const currentSource = this.currentIsLocal
+          ? { uri: this.currentPlayUri }
+          : (this._currentSourceHeaders
+              ? { uri: this.currentPlayUri, headers: this._currentSourceHeaders }
+              : { uri: this.currentPlayUri });
+        try {
+          await player.replace(currentSource);
+          await player.play();
+        } catch (err) {
+          this._warn('[Coordinator] Failed to re-apply current source after stale replace:', err?.message);
+        }
+      }
+      return { superseded: true };
+    }
+
+    return { superseded: false };
+  }
+
+  /**
+   * Воспроизводит трек:
+   * 1. Идемпотентность: если тот же трек уже загружен из того же источника, просто вызывает play()
+   * 2. Generation token: защищает от race condition при быстром переключении треков (A -> B)
+   * 3. Cache-first с плавным fallback на remote при локальной ошибке
+   * 4. Разделение ошибок (PlaybackError)
+   * 5. Диагностика скрыта под debug-флагом
    *
    * @param {Object} player - Экземпляр AudioPlayer
    * @param {Object} track - DTO трека
    * @param {Object} [options]
    * @param {Record<string, string>} [options.headers]
-   * @returns {Promise<{ isLocal: boolean, uri: string }>}
+   * @param {boolean} [options.force] - Принудительно перезагрузить источник
+   * @returns {Promise<{ isLocal: boolean, uri: string, reused?: boolean, superseded?: boolean }>}
    */
   async play(player, track, options = {}) {
-    if (!track?.id && track?.id !== 0) {
-      console.warn('[Coordinator] play() called without valid track:', track);
+    const rawTrackId = (track?.id !== undefined && track?.id !== null)
+      ? track.id
+      : track?.track_id;
+
+    if (rawTrackId === undefined || rawTrackId === null || (rawTrackId === '' && rawTrackId !== 0)) {
+      this._warn('[Coordinator] play() called without valid track:', track);
       return { isLocal: false, uri: null };
     }
 
-    this.currentTrack = track;
-    const trackIdStr = String(track.id || track.track_id).trim();
-    const headers = options.headers || {};
-    const headersKeys = Object.keys(headers);
+    const trackIdStr = String(rawTrackId).trim();
 
-    // СТАДИЯ 1: Нормализация и валидация URL
-    const rawStreamUrl = track.stream_url || `${this.serverUrl}/api/stream/${track.id}`;
+    // 1. Нормализация URL
+    const rawStreamUrl = track.stream_url || `${this.serverUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
     const normalizedStreamUrl = normalizeStreamUrl(track, this.serverUrl);
 
-    console.log('[Coordinator][Stage 1: normalize_url]', {
+    this._log('[Coordinator][Stage 1: normalize_url]', {
       trackId: trackIdStr,
       rawStreamUrl,
       normalizedStreamUrl,
@@ -131,146 +283,237 @@ export class PlaybackCoordinator {
     });
 
     if (!normalizedStreamUrl || (!normalizedStreamUrl.startsWith('http://') && !normalizedStreamUrl.startsWith('https://'))) {
-      const urlErr = new Error(`[Coordinator] Invalid stream URL: "${normalizedStreamUrl}" for track ${trackIdStr}`);
-      console.error('[Coordinator][Stage 1: normalize_url FAILED]', urlErr);
+      const urlErr = new PlaybackError(`[Coordinator] Invalid stream URL: "${normalizedStreamUrl}" for track ${trackIdStr}`, {
+        type: 'remote_replace_error',
+        trackId: trackIdStr,
+      });
+      this._error('[Coordinator][Stage 1: normalize_url FAILED]', urlErr);
       throw urlErr;
     }
 
-    // СТАДИЯ 2: Проверка локального кеша
+    // 2. Проверка локального кеша
     let localUri = null;
     if (this.bypassCache) {
-      console.log('[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag');
+      this._log('[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag');
     } else {
       try {
         localUri = this.cache.getCachedUri(trackIdStr);
-        console.log('[Coordinator][Stage 2: get_cached_uri]', {
+        this._log('[Coordinator][Stage 2: get_cached_uri]', {
           trackId: trackIdStr,
           hasLocalUri: Boolean(localUri),
           localUri,
         });
       } catch (cacheErr) {
-        console.error('[Coordinator][Stage 2: get_cached_uri FAILED]', {
+        this._warn('[Coordinator][Stage 2: get_cached_uri FAILED]', {
           trackId: trackIdStr,
           error: cacheErr?.message,
-          name: cacheErr?.name,
-          stack: cacheErr?.stack,
+        });
+        this.lastCacheError = new PlaybackError(cacheErr?.message || 'Cache lookup failed', {
+          type: 'local_cache_error',
+          cause: cacheErr,
+          trackId: trackIdStr,
         });
         localUri = null;
       }
     }
 
-    // СТАДИЯ 3: Замена источника в AudioPlayer (native replace)
+    const expectedUri = localUri || normalizedStreamUrl;
+    const expectedIsLocal = Boolean(localUri);
+
+    const headers = options.headers || {};
+    let cleanHeaders = {};
+    for (const [k, v] of Object.entries(headers)) {
+      if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
+    }
+    let hasHeaders = Object.keys(cleanHeaders).length > 0;
+    const sameHeaders = expectedIsLocal || areHeadersEqual(cleanHeaders, this._currentSourceHeaders);
+
+    // 3. Идемпотентность play: если уже играет тот же трек, источник и заголовки не изменились
+    if (!options.force && this.currentTrackId === trackIdStr && this.currentPlayUri === expectedUri && sameHeaders) {
+      this._log('[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback');
+      try {
+        await player.play();
+      } catch (playErr) {
+        const classified = new PlaybackError(playErr?.message || 'Player play failed', {
+          type: 'play_error',
+          cause: playErr,
+          trackId: trackIdStr,
+        });
+        this.networkError = classified.message;
+        this.networkStatus = 'error';
+        this.lastErrorType = classified.type;
+        this._notifyState();
+        throw classified;
+      }
+      return { isLocal: this.currentIsLocal, uri: this.currentPlayUri, reused: true };
+    }
+
+    // 4. Generation token защиты от race condition при быстрых переключениях
+    this.playbackGeneration += 1;
+    const currentGeneration = this.playbackGeneration;
+    const isCurrent = () => this.playbackGeneration === currentGeneration;
+
+    this.currentTrack = track;
+    this.currentTrackId = trackIdStr;
+
     let isLocal = false;
     let playUri = null;
 
+    // СТАДИЯ 3: Native replace
     if (localUri) {
       isLocal = true;
       playUri = localUri;
-      console.log('[Coordinator][Stage 3: local_replace]', {
+      this._log('[Coordinator][Stage 3: local_replace]', {
         trackId: trackIdStr,
         localUri,
       });
 
       try {
-        player.replace({ uri: localUri });
+        const replaceRes = await this._performReplace(player, { uri: localUri }, isCurrent, currentGeneration);
+        if (replaceRes.superseded) return { isLocal: false, uri: null, superseded: true };
       } catch (localErr) {
-        console.error('[Coordinator][Stage 3: local_replace FAILED]', {
+        if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
+        this._warn('[Coordinator][Stage 3: local_replace FAILED, falling back to remote]', localErr?.message);
+        this.lastCacheError = new PlaybackError(localErr?.message || 'Local replace failed', {
+          type: 'local_cache_error',
+          cause: localErr,
           trackId: trackIdStr,
-          localUri,
-          error: localErr?.message,
-          name: localErr?.name,
-          stack: localErr?.stack,
         });
         isLocal = false;
         playUri = null;
       }
     }
 
+    if (!isCurrent()) {
+      return { isLocal: false, uri: null, superseded: true };
+    }
+
     if (!playUri) {
       isLocal = false;
       playUri = normalizedStreamUrl;
-      console.log('[Coordinator][Stage 3: remote_replace]', {
+      this._log('[Coordinator][Stage 3: remote_replace]', {
         trackId: trackIdStr,
         normalizedStreamUrl,
-        headersKeys,
       });
 
-      const cleanHeaders = {};
-      for (const [k, v] of Object.entries(headers)) {
-        if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
+      // При отсутствии синхронных заголовков резолвим асинхронный геттер (например, SecureStore)
+      if (!hasHeaders && typeof options.getHeadersAsync === 'function') {
+        try {
+          const asyncHeaders = await options.getHeadersAsync();
+          if (asyncHeaders && typeof asyncHeaders === 'object') {
+            for (const [k, v] of Object.entries(asyncHeaders)) {
+              if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
+            }
+            hasHeaders = Object.keys(cleanHeaders).length > 0;
+          }
+        } catch (hdrErr) {
+          this._warn('[Coordinator] Failed to resolve auth headers asynchronously:', hdrErr?.message);
+        }
       }
-      const hasHeaders = Object.keys(cleanHeaders).length > 0;
+
+      if (!isCurrent()) {
+        return { isLocal: false, uri: null, superseded: true };
+      }
+
       const source = hasHeaders
         ? { uri: normalizedStreamUrl, headers: cleanHeaders }
         : { uri: normalizedStreamUrl };
 
       try {
-        player.replace(source);
+        const replaceRes = await this._performReplace(player, source, isCurrent, currentGeneration);
+        if (replaceRes.superseded) return { isLocal: false, uri: null, superseded: true };
       } catch (remoteErr) {
-        console.error('[Coordinator][Stage 3: remote_replace FAILED]', {
-          trackId: trackIdStr,
-          normalizedStreamUrl,
-          headersKeys,
-          error: remoteErr?.message,
-          name: remoteErr?.name,
-          stack: remoteErr?.stack,
-        });
+        if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
+        this._log('[Coordinator][Stage 3: remote_replace retrying once via replaceCurrentSource...]');
 
-        // Defensive retry: если в нативном реестре остался preloadedPlayer от предыдущей сессии,
-        // первый вызов player.replace() извлёк его из словаря. Второй вызов гарантированно пойдёт по ветке replaceCurrentSource!
-        console.log('[Coordinator][Stage 3: remote_replace retrying once via replaceCurrentSource...]');
         try {
-          player.replace(source);
+          const retryRes = await this._performReplace(player, source, isCurrent, currentGeneration);
+          if (retryRes.superseded) return { isLocal: false, uri: null, superseded: true };
         } catch (retryErr) {
-          console.error('[Coordinator][Stage 3: remote_replace retry FAILED]', retryErr);
-          throw remoteErr;
+          if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
+
+          this.currentPlayUri = null;
+          this.currentIsLocal = false;
+          const classified = classifyPlaybackError(retryErr || remoteErr, trackIdStr);
+          this.networkError = classified.message;
+          this.networkStatus = 'error';
+          this.lastErrorType = classified.type;
+          this._notifyState();
+          throw classified;
         }
+      }
+
+      if (!isCurrent()) {
+        return { isLocal: false, uri: null, superseded: true };
       }
 
       // Запускаем фоновое кеширование (если не отключено)
       if (!this.bypassCache) {
-        this.cache.getOrFetch(trackIdStr, normalizedStreamUrl, { headers }).catch((err) => {
-          console.warn(`[Coordinator] Background cache for track ${trackIdStr} failed:`, err?.message);
+        this.cache.getOrFetch(trackIdStr, normalizedStreamUrl, { headers: cleanHeaders }).catch((cacheErr) => {
+          this._warn(`[Coordinator] Background cache for track ${trackIdStr} failed:`, cacheErr?.message);
         });
       }
     }
 
-    // СТАДИЯ 4: Запуск воспроизведения (native play)
-    console.log('[Coordinator][Stage 4: player_play]', {
+    if (!isCurrent()) {
+      return { isLocal: false, uri: null, superseded: true };
+    }
+
+    // СТАДИЯ 4: Native play
+    this._log('[Coordinator][Stage 4: player_play]', {
       trackId: trackIdStr,
       isLocal,
       playUri,
     });
 
     try {
-      player.play();
+      await player.play();
     } catch (playErr) {
-      console.error('[Coordinator][Stage 4: player_play FAILED]', {
+      if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
+
+      this.currentPlayUri = null;
+      this.currentIsLocal = false;
+      const classified = new PlaybackError(playErr?.message || 'Player play failed', {
+        type: 'play_error',
+        cause: playErr,
         trackId: trackIdStr,
-        isLocal,
-        playUri,
-        error: playErr?.message,
-        name: playErr?.name,
-        stack: playErr?.stack,
       });
-      throw playErr;
+      this.networkError = classified.message;
+      this.networkStatus = 'error';
+      this.lastErrorType = classified.type;
+      this._notifyState();
+      throw classified;
     }
 
+    if (!isCurrent()) {
+      return { isLocal: false, uri: null, superseded: true };
+    }
+
+    // Сохраняем активный источник после успешного replace + play
+    this.currentPlayUri = playUri;
+    this.currentIsLocal = isLocal;
+    this._currentSourceHeaders = hasHeaders ? cleanHeaders : null;
+
     // СТАДИЯ 5: Обновление метаданных Lock Screen
-    console.log('[Coordinator][Stage 5: lock_screen]', {
+    this._log('[Coordinator][Stage 5: lock_screen]', {
       trackId: trackIdStr,
       title: track?.title,
     });
 
     try {
-      this.updateLockScreenMetadata(player, track);
+      await this.updateLockScreenMetadata(player, track, isCurrent);
     } catch (lockErr) {
-      console.warn('[Coordinator][Stage 5: lock_screen FAILED]', lockErr?.message);
+      this._warn('[Coordinator][Stage 5: lock_screen FAILED]', lockErr?.message);
+    }
+
+    if (!isCurrent()) {
+      return { isLocal: false, uri: null, superseded: true };
     }
 
     // Сбрасываем ошибку сети при успешном начале воспроизведения
     this.networkError = null;
     this.networkStatus = 'good';
+    this.lastErrorType = null;
     this._notifyState();
 
     return { isLocal, uri: playUri };
@@ -292,11 +535,19 @@ export class PlaybackCoordinator {
 
     // Обновляем статус следующего трека
     const nextTrack = this.upNextQueue[0];
-    if (nextTrack?.id) {
-      this.nextTrackStatus = this.scheduler.getStatus(nextTrack.id);
-      this.networkError = this.scheduler.getError(nextTrack.id)?.message || null;
+    const nextId = (nextTrack?.id !== undefined && nextTrack?.id !== null)
+      ? nextTrack.id
+      : nextTrack?.track_id;
+
+    if (nextId !== undefined && nextId !== null && (nextId !== '' || nextId === 0)) {
+      const nextIdStr = String(nextId).trim();
+      this.nextTrackStatus = this.scheduler.getStatus(nextIdStr);
+      const err = this.scheduler.getError(nextIdStr);
+      this.networkError = err?.message || null;
       if (this.nextTrackStatus === TRACK_STATUS.FAILED) {
         this.networkStatus = 'error';
+        const classified = classifyPlaybackError(err, nextIdStr);
+        this.lastErrorType = classified.type;
       }
     } else {
       this.nextTrackStatus = TRACK_STATUS.IDLE;
@@ -336,12 +587,33 @@ export class PlaybackCoordinator {
 
   /**
    * Обновляет метаданные экрана блокировки (Now Playing Info) для трека.
+   * Безопасен к асинхронным гонкам и смене активного трека.
    */
-  updateLockScreenMetadata(player, track) {
+  async updateLockScreenMetadata(player, track, isCurrent = null) {
     if (!player || typeof player.setActiveForLockScreen !== 'function') return;
+    if (isCurrent && !isCurrent()) return;
 
     try {
-      const token = getCachedAuthToken();
+      let token = getCachedAuthToken();
+      if (!token) {
+        try {
+          token = await getAuthToken();
+        } catch {}
+      }
+
+      if (isCurrent && !isCurrent()) return;
+
+      const trackId = (track?.id !== undefined && track?.id !== null) ? track.id : track?.track_id;
+      if (this.currentTrack) {
+        const currentId = (this.currentTrack?.id !== undefined && this.currentTrack?.id !== null)
+          ? this.currentTrack.id
+          : this.currentTrack?.track_id;
+        if (trackId !== undefined && currentId !== undefined && String(trackId).trim() !== String(currentId).trim()) {
+          // Трек уже сменился — не перезаписываем экран блокировки устаревшими данными
+          return;
+        }
+      }
+
       const artworkUrl = track?.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
       player.setActiveForLockScreen(
         true,
@@ -358,13 +630,13 @@ export class PlaybackCoordinator {
         }
       );
     } catch (err) {
-      console.warn('[Coordinator] Failed to set lock screen controls:', err);
+      this._warn('[Coordinator] Failed to set lock screen controls:', err?.message);
     }
   }
 
   /**
    * Подписка на изменение сетевых статусов и предзагрузки для UI.
-   * @param {Function} listener ({ networkStatus, nextTrackStatus, networkError, isBufferingSlow }) => void
+   * @param {Function} listener ({ networkStatus, nextTrackStatus, networkError, isBufferingSlow, lastErrorType }) => void
    * @returns {Function} unsubscribe
    */
   subscribe(listener) {
@@ -379,6 +651,7 @@ export class PlaybackCoordinator {
       networkStatus: this.networkStatus,
       nextTrackStatus: this.nextTrackStatus,
       networkError: this.networkError,
+      lastErrorType: this.lastErrorType || null,
       isBufferingSlow: this.isBufferingSlow,
     };
   }
@@ -387,23 +660,23 @@ export class PlaybackCoordinator {
 
   _handleSchedulerEvent(event) {
     const nextTrack = this.upNextQueue[0];
-    if (nextTrack && String(nextTrack.id) === String(event.trackId)) {
+    const nextId = (nextTrack?.id !== undefined && nextTrack?.id !== null)
+      ? nextTrack.id
+      : nextTrack?.track_id;
+    if (nextId !== undefined && nextId !== null && String(nextId).trim() === String(event.trackId).trim()) {
       this.nextTrackStatus = event.status;
       if (event.status === TRACK_STATUS.READY) {
         this.networkError = null;
         this.networkStatus = 'good';
+        this.lastErrorType = null;
       } else if (event.status === TRACK_STATUS.FAILED) {
         this.networkError = event.error?.message || 'Failed to download';
         this.networkStatus = 'error';
+        const classified = classifyPlaybackError(event.error, event.trackId);
+        this.lastErrorType = classified.type;
       }
       this._notifyState();
     }
-  }
-
-  _nativePreloadNext(_track, _options = {}) {
-    // Disabled: expo-audio native preload registers an AVQueuePlayer in the native registry,
-    // which triggers an NSInvalidArgumentException / HostFunction crash in unpatched iOS binaries.
-    // Background preloading is handled safely and reliably by PreloadScheduler + AudioCache using local file URIs.
   }
 
   _notifyState() {
@@ -412,8 +685,26 @@ export class PlaybackCoordinator {
       try {
         listener(state);
       } catch (err) {
-        console.error('[Coordinator] listener error:', err);
+        this._warn('[Coordinator] listener error:', err);
       }
+    }
+  }
+
+  _log(...args) {
+    if (this.debug) {
+      console.log(...args);
+    }
+  }
+
+  _warn(...args) {
+    if (this.debug) {
+      console.warn(...args);
+    }
+  }
+
+  _error(...args) {
+    if (this.debug) {
+      console.error(...args);
     }
   }
 }

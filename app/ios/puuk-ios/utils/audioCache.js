@@ -22,7 +22,8 @@ export class AudioCache {
     this.tempDir = new Directory(this.cacheDir, options.tempDirName || TEMP_DIR_NAME);
     this.manifestFile = new File(this.cacheDir, options.manifestFileName || MANIFEST_FILE_NAME);
     this.manifest = {}; // [trackId]: { uri, size, mtime, lastAccessed }
-    this.ongoingDownloads = new Map(); // trackId => { promise, task, tempFile, cancelled }
+    this.ongoingDownloads = new Map(); // trackId => { promise, task, tempFile, cancelled, generation }
+    this.downloadGenerations = new Map(); // trackId => number
     this.maxSizeBytes = options.maxSizeBytes || DEFAULT_MAX_SIZE_BYTES;
     this.downloadTimeoutMs = options.downloadTimeoutMs || DOWNLOAD_TIMEOUT_MS;
     this.safetyMarginBytes = options.safetyMarginBytes || SAFETY_MARGIN_BYTES;
@@ -155,6 +156,55 @@ export class AudioCache {
   }
 
   /**
+   * Возвращает текущее состояние загрузки трека:
+   * 'cached' | 'downloading' | 'idle'
+   * Предоставляет планировщику и координатору единый публичный контракт статуса без прямого доступа к ongoingDownloads.
+   *
+   * @param {string|number} trackId
+   * @returns {{ status: 'cached'|'downloading'|'idle', uri?: string, promise?: Promise<string> }}
+   */
+  getDownloadState(trackId) {
+    if (!trackId && trackId !== 0) return { status: 'idle' };
+    const trackIdStr = String(trackId).trim();
+
+    const cachedUri = this.getCachedUri(trackIdStr);
+    if (cachedUri) {
+      return { status: 'cached', uri: cachedUri };
+    }
+
+    const record = this.ongoingDownloads.get(trackIdStr);
+    if (record && record.promise && !record.cancelled) {
+      return { status: 'downloading', promise: record.promise };
+    }
+
+    return { status: 'idle' };
+  }
+
+  /**
+   * Проверяет, выполняется ли в данный момент фоновая загрузка трека.
+   * @param {string|number} trackId
+   * @returns {boolean}
+   */
+  isDownloading(trackId) {
+    if (!trackId && trackId !== 0) return false;
+    const trackIdStr = String(trackId).trim();
+    const record = this.ongoingDownloads.get(trackIdStr);
+    return Boolean(record && record.promise && !record.cancelled);
+  }
+
+  /**
+   * Возвращает Promise текущей активной загрузки или null.
+   * @param {string|number} trackId
+   * @returns {Promise<string>|null}
+   */
+  getOngoingPromise(trackId) {
+    if (!trackId && trackId !== 0) return null;
+    const trackIdStr = String(trackId).trim();
+    const record = this.ongoingDownloads.get(trackIdStr);
+    return (record && record.promise && !record.cancelled) ? record.promise : null;
+  }
+
+  /**
    * Возвращает file:// URI для трека:
    * 1. Если уже в кеше — возвращает готовый URI.
    * 2. Если загрузка уже идёт — возвращает существующий Promise (deduplication).
@@ -178,15 +228,43 @@ export class AudioCache {
 
     // 2. Если загрузка уже идёт — возвращаем существующий Promise синхронно (deduplication)
     if (this.ongoingDownloads.has(trackIdStr)) {
-      return this.ongoingDownloads.get(trackIdStr).promise;
+      const ongoing = this.ongoingDownloads.get(trackIdStr);
+      if (options.signal) {
+        if (options.signal.aborted) {
+          const err = new Error('Download cancelled');
+          err.name = 'AbortError';
+          return Promise.reject(err);
+        }
+        return new Promise((resolve, reject) => {
+          const onAbort = () => {
+            const err = new Error('Download cancelled');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          options.signal.addEventListener('abort', onAbort, { once: true });
+          ongoing.promise
+            .then(resolve)
+            .catch(reject)
+            .finally(() => {
+              if (typeof options.signal?.removeEventListener === 'function') {
+                options.signal.removeEventListener('abort', onAbort);
+              }
+            });
+        });
+      }
+      return ongoing.promise;
     }
 
     // 3. Создаём запись и регистрируем промис сразу
+    const generation = (this.downloadGenerations.get(trackIdStr) || 0) + 1;
+    this.downloadGenerations.set(trackIdStr, generation);
+
     const downloadRecord = {
       promise: null,
       task: null,
       tempFile: null,
       cancelled: false,
+      generation,
     };
 
     const promise = (async () => {
@@ -206,7 +284,10 @@ export class AudioCache {
         const fileUri = await this._downloadWithRetry(trackIdStr, remoteUri, options, downloadRecord);
         return fileUri;
       } finally {
-        this.ongoingDownloads.delete(trackIdStr);
+        const current = this.ongoingDownloads.get(trackIdStr);
+        if (current?.promise === promise) {
+          this.ongoingDownloads.delete(trackIdStr);
+        }
       }
     })();
 
@@ -222,6 +303,8 @@ export class AudioCache {
    */
   cancel(trackId) {
     const trackIdStr = String(trackId);
+    this.downloadGenerations.set(trackIdStr, (this.downloadGenerations.get(trackIdStr) || 0) + 1);
+
     const record = this.ongoingDownloads.get(trackIdStr);
     if (!record) return;
 
@@ -324,14 +407,22 @@ export class AudioCache {
   }
 
   async _downloadWithRetry(trackIdStr, remoteUri, options, record, attempt = 0) {
-    if (record?.cancelled || options.signal?.aborted) {
+    if (
+      record?.cancelled ||
+      options.signal?.aborted ||
+      this.downloadGenerations.get(trackIdStr) !== record?.generation
+    ) {
       throw new Error('Download cancelled');
     }
 
     try {
       return await this._downloadAttempt(trackIdStr, remoteUri, options, record);
     } catch (err) {
-      if (record?.cancelled || options.signal?.aborted) {
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
         throw new Error('Download cancelled');
       }
 
@@ -346,9 +437,12 @@ export class AudioCache {
   }
 
   async _downloadAttempt(trackIdStr, remoteUri, options, record) {
+    const generation = record?.generation ?? this.downloadGenerations.get(trackIdStr) ?? 0;
     const tempFileName = `${trackIdStr}_${Date.now()}.part.mp3`;
     const tempFile = new File(this.tempDir, tempFileName);
-    const finalFile = new File(this.cacheDir, `${trackIdStr}.mp3`);
+    // Уникальный final-путь на поколение загрузки: отменённая/устаревшая задача
+    // физически не может перезаписать или удалить файл более новой загрузки.
+    const finalFile = new File(this.cacheDir, `${trackIdStr}_${generation}.mp3`);
 
     if (record) {
       record.tempFile = tempFile;
@@ -392,7 +486,11 @@ export class AudioCache {
 
       clearTimeout(timeoutId);
 
-      if (record?.cancelled || options.signal?.aborted) {
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
         throw new Error('Download cancelled');
       }
 
@@ -406,16 +504,51 @@ export class AudioCache {
         throw new Error('Downloaded file has 0 bytes');
       }
 
-      // Атомарное перемещение tempFile -> finalFile
+      // Проверка актуальности поколения перед перемещением файла
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
+        throw new Error('Download cancelled');
+      }
+
+      // Атомарное перемещение tempFile -> finalFile (уникальный путь для этого поколения)
+      // Удаляем только возможный orphan от предыдущего запуска, где счётчик поколений начинался заново.
       if (finalFile.exists) {
         try {
           finalFile.delete();
         } catch {}
       }
-
       await tempFile.move(finalFile);
 
-      // Запись в manifest
+      // Повторная проверка актуальности поколения ПОСЛЕ асинхронного перемещения файла
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
+        try {
+          if (finalFile.exists) {
+            finalFile.delete();
+          }
+        } catch {}
+        throw new Error('Download cancelled');
+      }
+
+      // Отмена могла произойти после move-проверки, но до публикации записи.
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
+        try {
+          if (finalFile.exists) finalFile.delete();
+        } catch {}
+        throw new Error('Download cancelled');
+      }
+
+      const previousUri = this.manifest[trackIdStr]?.uri;
       const now = Date.now();
       this.manifest[trackIdStr] = {
         uri: finalFile.uri,
@@ -425,6 +558,31 @@ export class AudioCache {
       };
 
       await this._saveManifest();
+
+      // Не оставляем в manifest результат, если отмена случилась во время его записи.
+      if (
+        record?.cancelled ||
+        options.signal?.aborted ||
+        this.downloadGenerations.get(trackIdStr) !== record?.generation
+      ) {
+        if (this.manifest[trackIdStr]?.uri === finalFile.uri) {
+          delete this.manifest[trackIdStr];
+          await this._saveManifest();
+        }
+        try {
+          if (finalFile.exists) finalFile.delete();
+        } catch {}
+        throw new Error('Download cancelled');
+      }
+
+      // Убираем предыдущий файл только после публикации нового и если он больше не используется.
+      if (previousUri && previousUri !== finalFile.uri && this.manifest[trackIdStr]?.uri !== previousUri) {
+        try {
+          const previousFile = new File(previousUri);
+          if (previousFile.exists) previousFile.delete();
+        } catch {}
+      }
+
       await this._enforceSizeLimit();
 
       return finalFile.uri;

@@ -41,6 +41,8 @@ export const getCachedAuthHeaders = () => {
   return cachedToken ? { Authorization: `Bearer ${cachedToken}` } : null;
 };
 
+export const getCachedUser = () => cachedUser;
+
 export const getAuthToken = async () => {
   if (cachedToken) return cachedToken;
   try {

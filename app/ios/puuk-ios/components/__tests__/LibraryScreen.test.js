@@ -2,7 +2,7 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { DeviceEventEmitter, RefreshControl, ActivityIndicator } from 'react-native';
 import LibraryScreen from '../LibraryScreen';
-import { fetchCatalogWithCache, setCachedCatalog } from '../../utils/apiCache';
+import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog } from '../../utils/apiCache';
 import { authFetch } from '../../utils/api';
 
 jest.mock('../../utils/api', () => ({
@@ -13,6 +13,7 @@ jest.mock('../../utils/api', () => ({
 jest.mock('../../utils/apiCache', () => ({
   fetchCatalogWithCache: jest.fn(),
   setCachedCatalog: jest.fn().mockResolvedValue({}),
+  removeCachedCatalog: jest.fn().mockResolvedValue(undefined),
   DEFAULT_TTL_MS: {
     favorites: 30000,
     playlists: 60000,
