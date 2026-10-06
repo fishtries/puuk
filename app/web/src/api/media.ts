@@ -76,6 +76,44 @@ export async function fetchAuthorizedBlobUrl(sourceUrl: string): Promise<string>
 export interface MediaTicketResponse {
   url: string;
   expires_in: number;
+  expires_at?: number;
+}
+
+const TICKET_CACHE_LIMIT = 200;
+const TICKET_EXPIRY_MARGIN_MS = 5_000;
+
+interface CachedTicket {
+  url: string;
+  expiresAtMs: number;
+  authToken: string | null;
+}
+
+const ticketByTrackId = new Map<string, CachedTicket>();
+
+function ticketExpiresAtMs(ticket: MediaTicketResponse): number {
+  if (typeof ticket.expires_at === 'number' && Number.isFinite(ticket.expires_at)) {
+    return ticket.expires_at * 1000;
+  }
+  return Date.now() + Math.max(0, ticket.expires_in) * 1000;
+}
+
+function rememberTicket(trackId: string, entry: CachedTicket): void {
+  ticketByTrackId.delete(trackId);
+  ticketByTrackId.set(trackId, entry);
+
+  while (ticketByTrackId.size > TICKET_CACHE_LIMIT) {
+    const oldest = ticketByTrackId.keys().next().value;
+    if (oldest === undefined) break;
+    ticketByTrackId.delete(oldest);
+  }
+}
+
+export function invalidateAudioTicket(trackId: string): void {
+  ticketByTrackId.delete(trackId);
+}
+
+export function resetAudioTicketCache(): void {
+  ticketByTrackId.clear();
 }
 
 /**
@@ -83,8 +121,26 @@ export interface MediaTicketResponse {
  * (обычный apiClient-вызов), сам <audio> играет прямой URL /api/stream/{id}?mt=...
  * — браузер начинает воспроизведение на первых чанках и тянет остальное
  * по Range, не дожидаясь полного файла.
+ *
+ * Тикеты кэшируются по track_id до истечения срока (expires_at от сервера):
+ * повторное включение того же трека не порождает лишний запрос media-ticket.
  */
 export async function resolveAuthorizedAudioUrl(trackId: string): Promise<string> {
+  const authToken = localStorage.getItem('puuk_token');
+  const cached = ticketByTrackId.get(trackId);
+  if (cached) {
+    if (
+      cached.authToken === authToken &&
+      cached.expiresAtMs - Date.now() > TICKET_EXPIRY_MARGIN_MS
+    ) {
+      // LRU: освежаем позицию, чтобы живые тикеты не вытеснялись
+      ticketByTrackId.delete(trackId);
+      ticketByTrackId.set(trackId, cached);
+      return cached.url;
+    }
+    ticketByTrackId.delete(trackId);
+  }
+
   const ticket = await apiClient<MediaTicketResponse>('/api/media-ticket', {
     method: 'POST',
     body: JSON.stringify({ track_id: trackId }),
@@ -92,5 +148,7 @@ export async function resolveAuthorizedAudioUrl(trackId: string): Promise<string
   if (!ticket?.url) {
     throw new Error('Media ticket response has no url');
   }
-  return ticket.url.startsWith('/') ? `${API_BASE_URL}${ticket.url}` : ticket.url;
+  const url = ticket.url.startsWith('/') ? `${API_BASE_URL}${ticket.url}` : ticket.url;
+  rememberTicket(trackId, { url, expiresAtMs: ticketExpiresAtMs(ticket), authToken });
+  return url;
 }

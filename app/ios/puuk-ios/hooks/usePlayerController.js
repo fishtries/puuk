@@ -13,6 +13,7 @@ import {
   ApiError,
 } from '../utils/api';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
+import { clearSavedLastTrack } from '../utils/settings';
 
 /**
  * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
@@ -700,6 +701,32 @@ export default function usePlayerController({ setTracks }) {
     }
   }, [history, currentTrack, requestExpandPlayer, fetchQueue, loadAndPlay, recordTrackHistory]);
 
+  const dismissPlayer = useCallback(async () => {
+    try {
+      player.pause();
+    } catch (e) {
+      console.warn('[usePlayerController] dismissPlayer pause error:', e);
+    }
+    try {
+      if (typeof player.setActiveForLockScreen === 'function') {
+        player.setActiveForLockScreen(false);
+      }
+    } catch (e) {
+      console.warn('[usePlayerController] dismissPlayer lock screen error:', e);
+    }
+    isWaveSessionRef.current = false;
+    currentTrackRef.current = null;
+    setCurrentTrack(null);
+    setUpNextQueue([]);
+    setIsPlayerVisible(false);
+    defaultPlaybackCoordinator.updateQueue(null, []);
+    try {
+      await clearSavedLastTrack();
+    } catch (e) {
+      console.warn('[usePlayerController] dismissPlayer clear storage error:', e);
+    }
+  }, [player]);
+
   return {
     player,
     status,
@@ -721,6 +748,7 @@ export default function usePlayerController({ setTracks }) {
     playTrackList,
     handleToggleLike,
     startWave,
+    dismissPlayer,
     // Network UX & Cache state (Agent 5 & 6)
     networkStatus: networkUX.networkStatus,
     nextTrackStatus: networkUX.nextTrackStatus,

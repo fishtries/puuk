@@ -14,6 +14,7 @@ import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -82,6 +83,7 @@ function AppContent() {
     playTrackList,
     handleToggleLike,
     startWave,
+    dismissPlayer,
     networkStatus,
     nextTrackStatus,
     networkError,
@@ -123,14 +125,7 @@ function AppContent() {
     };
   }, [currentTrack, setCurrentTrack, setTracks]);
 
-  const fallbackTrack = useMemo(() => ({
-    id: null,
-    title: 'Puuk Music',
-    artist: 'Select a track to start',
-    coverArt: null,
-  }), []);
-
-  const activeTrack = currentTrack || (tracks.length > 0 ? tracks[0] : fallbackTrack);
+  const activeTrack = currentTrack;
   const displayTitle = activeTrack?.title || 'Puuk Music';
 
   // Геометрия подложки плеера и карточки главных экранов
@@ -140,6 +135,24 @@ function AppContent() {
 
   // Reanimated shared progress (0 = свернуто, мини-плеер внизу; 1 = раскрыт плеер под карточкой)
   const expandProgress = useSharedValue(0);
+
+  // Reanimated состояние закрытия мини-плеера насовсем (0 = активен, 1 = скрыт/выгружен)
+  const dismissDragY = useSharedValue(0);
+  const dismissProgress = useSharedValue(currentTrack ? 0 : 1);
+
+  useEffect(() => {
+    if (currentTrack) {
+      dismissProgress.value = withTiming(0, {
+        duration: 250,
+        easing: Easing.bezier(0.25, 1, 0.5, 1),
+      });
+    } else {
+      dismissProgress.value = withTiming(1, {
+        duration: 250,
+        easing: Easing.bezier(0.25, 1, 0.5, 1),
+      });
+    }
+  }, [currentTrack]);
 
   const handleClose = useCallback(() => {
     setIsPlayerVisible(false);
@@ -176,6 +189,7 @@ function AppContent() {
   }, [playerExpandToken]);
 
   // Анимированный сдвиг карточки вверх при раскрытии плеера снизу
+  // и распрямление вниз к краю экрана при скрытии мини-плеера
   const animatedCardStyle = useAnimatedStyle(() => {
     const translateY = interpolate(
       expandProgress.value,
@@ -183,7 +197,24 @@ function AppContent() {
       [0, -cardTravel],
       Extrapolation.CLAMP
     );
+    const dragProg = Math.min(1, Math.max(0, dismissDragY.value / bottomBarHeight));
+    const effectiveDismiss = Math.min(1, Math.max(dismissProgress.value, dragProg));
+    const bottom = interpolate(
+      effectiveDismiss,
+      [0, 1],
+      [bottomBarHeight, 0],
+      Extrapolation.CLAMP
+    );
+    const borderRadius = interpolate(
+      effectiveDismiss,
+      [0, 1],
+      [32, 0],
+      Extrapolation.CLAMP
+    );
     return {
+      bottom,
+      borderBottomLeftRadius: borderRadius,
+      borderBottomRightRadius: borderRadius,
       transform: [{ translateY }],
     };
   });
@@ -196,40 +227,94 @@ function AppContent() {
     };
   });
 
-  // Анимация мини-плеера (обертка остается прозрачной, кнопки плавно исчезают внутри MiniPlayerBar)
-  const miniPlayerAnimatedStyle = useAnimatedStyle(() => {
-    return {};
+  // Анимация затухания светящейся границы при скрытии плеера
+  const glowBoundaryAnimatedStyle = useAnimatedStyle(() => {
+    const dragProg = Math.min(1, Math.max(0, dismissDragY.value / bottomBarHeight));
+    const effectiveDismiss = Math.min(1, Math.max(dismissProgress.value, dragProg));
+    const opacity = interpolate(
+      effectiveDismiss,
+      [0, 0.3],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
+    return {
+      opacity,
+    };
   });
 
-  // Жест свайпа вверх по мини-плееру для раскрытия плеера снизу
+  // Анимация мини-плеера: смещение вниз за жестом и уход за нижний край при закрытии
+  const miniPlayerAnimatedStyle = useAnimatedStyle(() => {
+    const dismissTranslateY = interpolate(
+      dismissProgress.value,
+      [0, 1],
+      [0, bottomBarHeight + 20],
+      Extrapolation.CLAMP
+    );
+    const opacity = interpolate(
+      dismissProgress.value,
+      [0, 0.7],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
+    return {
+      transform: [{ translateY: dismissTranslateY + dismissDragY.value }],
+      opacity,
+    };
+  });
+
+  const triggerDismissHaptic = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+  }, []);
+
+  const handleDismiss = useCallback(() => {
+    triggerDismissHaptic();
+    dismissPlayer();
+  }, [triggerDismissHaptic, dismissPlayer]);
+
+  // Жест свайпа по мини-плееру: вверх — раскрыть, вниз — закрыть насовсем
   const miniPlayerSwipeGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY(-8)
-      .failOffsetY(15)
+      .activeOffsetY([-8, 8])
       .onUpdate((event) => {
         'worklet';
-        if (event.translationY <= 0) {
+        if (event.translationY < 0) {
+          dismissDragY.value = 0;
           const prog = Math.min(1, Math.max(0, -event.translationY / (height * 0.75)));
           expandProgress.value = prog;
+        } else {
+          expandProgress.value = 0;
+          dismissDragY.value = Math.max(0, event.translationY);
         }
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY < -50 || event.velocityY < -300) {
+        if (event.translationY < -35 || event.velocityY < -200) {
+          dismissDragY.value = 0;
           expandProgress.value = withSpring(1, {
             damping: 28,
             stiffness: 220,
             mass: 0.8,
           });
           runOnJS(handleExpand)();
+        } else if (event.translationY > 40 || event.velocityY > 200) {
+          dismissDragY.value = 0;
+          dismissProgress.value = withTiming(1, {
+            duration: 250,
+            easing: Easing.bezier(0.25, 1, 0.5, 1),
+          });
+          runOnJS(handleDismiss)();
         } else {
           expandProgress.value = withTiming(0, {
             duration: 250,
             easing: Easing.bezier(0.25, 1, 0.5, 1),
           });
+          dismissDragY.value = withSpring(0, {
+            damping: 24,
+            stiffness: 240,
+          });
         }
       });
-  }, [handleExpand]);
+  }, [height, handleExpand, handleDismiss]);
 
   const handleMiniPlayPause = useCallback(() => {
     if (!currentTrack) {
@@ -247,7 +332,6 @@ function AppContent() {
   const topPeekSwipeGesture = useMemo(() => {
     return Gesture.Pan()
       .activeOffsetY(5)
-      .failOffsetY(-15)
       .onUpdate((event) => {
         'worklet';
         if (event.translationY >= 0) {
@@ -257,7 +341,7 @@ function AppContent() {
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY > 50 || event.velocityY > 300) {
+        if (event.translationY > 35 || event.velocityY > 200) {
           expandProgress.value = withTiming(0, {
             duration: 250,
             easing: Easing.bezier(0.25, 1, 0.5, 1),
@@ -374,6 +458,8 @@ function AppContent() {
         topPeekHeight={topPeekHeight}
         bottomBarHeight={bottomBarHeight}
         insets={insets}
+        dismissProgress={dismissProgress}
+        dismissDragY={dismissDragY}
         networkStatus={networkStatus}
         nextTrackStatus={nextTrackStatus}
         networkError={networkError}
@@ -406,6 +492,10 @@ function AppContent() {
             onOpenAuthModal={() => setIsAuthModalVisible(true)}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
+            onExpand={handleExpand}
+            dismissProgress={dismissProgress}
+            dismissDragY={dismissDragY}
+            onDismiss={handleDismiss}
             onLoadMoreTracks={loadMoreTracks}
             hasMoreTracks={hasMoreTracks}
             isLoadingMoreTracks={isLoadingMoreTracks}
@@ -439,12 +529,14 @@ function AppContent() {
         </Animated.View>
 
         {/* Светящаяся полоса-индикатор прогресса трека вдоль нижней скругленной границы */}
-        <GlowTrackBoundary
-          currentTime={status.currentTime}
-          duration={status.duration}
-          isPlaying={isPlaying}
-          accentColor={accentColor}
-        />
+        <Animated.View style={glowBoundaryAnimatedStyle} pointerEvents="none">
+          <GlowTrackBoundary
+            currentTime={status.currentTime}
+            duration={status.duration}
+            isPlaying={isPlaying}
+            accentColor={accentColor}
+          />
+        </Animated.View>
       </Animated.View>
 
       {/* СЛОЙ 2 (ВЕРХНИЙ): Мини-плеер внизу экрана (всегда виден в свернутом виде) */}
@@ -454,7 +546,7 @@ function AppContent() {
           { height: bottomBarHeight },
           miniPlayerAnimatedStyle,
         ]}
-        pointerEvents={isPlayerVisible ? 'none' : 'auto'}
+        pointerEvents={isPlayerVisible || !currentTrack ? 'none' : 'auto'}
       >
         <MiniPlayerBar
           currentTrack={activeTrack}

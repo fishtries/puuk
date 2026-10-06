@@ -1,17 +1,26 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   StyleSheet,
   DeviceEventEmitter,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { SymbolView } from 'expo-symbols';
 import * as Haptics from 'expo-haptics';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
-import Animated, { useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  interpolate,
+  Extrapolation,
+  withSpring,
+  withTiming,
+  runOnJS,
+  Easing,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import AppHeader from '../components/AppHeader';
 import HomeScreen from '../components/HomeScreen';
@@ -33,6 +42,10 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   onOpenAuthModal,
   expandProgress,
   isPlayerVisible,
+  onExpand,
+  dismissProgress,
+  dismissDragY,
+  onDismiss,
   onLoadMoreTracks,
   hasMoreTracks,
   isLoadingMoreTracks,
@@ -136,6 +149,70 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
     };
   });
 
+  const insets = useSafeAreaInsets();
+
+  const tabBarSwipeGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetY([-8, 8])
+      .onUpdate((event) => {
+        'worklet';
+        if (!currentTrack) return;
+        if (event.translationY <= 0) {
+          if (dismissDragY) dismissDragY.value = 0;
+          if (expandProgress) {
+            const prog = Math.min(1, Math.max(0, -event.translationY / 300));
+            expandProgress.value = prog;
+          }
+        } else {
+          if (expandProgress) expandProgress.value = 0;
+          if (dismissDragY) {
+            dismissDragY.value = Math.max(0, event.translationY);
+          }
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        if (!currentTrack) return;
+        if (event.translationY < -35 || event.velocityY < -200) {
+          if (dismissDragY) dismissDragY.value = 0;
+          if (expandProgress) {
+            expandProgress.value = withSpring(1, {
+              damping: 28,
+              stiffness: 220,
+              mass: 0.8,
+            });
+          }
+          if (onExpand) {
+            runOnJS(onExpand)();
+          }
+        } else if (event.translationY > 40 || event.velocityY > 200) {
+          if (dismissDragY) dismissDragY.value = 0;
+          if (dismissProgress) {
+            dismissProgress.value = withTiming(1, {
+              duration: 250,
+              easing: Easing.bezier(0.25, 1, 0.5, 1),
+            });
+          }
+          if (onDismiss) {
+            runOnJS(onDismiss)();
+          }
+        } else {
+          if (expandProgress) {
+            expandProgress.value = withTiming(0, {
+              duration: 250,
+              easing: Easing.bezier(0.25, 1, 0.5, 1),
+            });
+          }
+          if (dismissDragY) {
+            dismissDragY.value = withSpring(0, {
+              damping: 24,
+              stiffness: 240,
+            });
+          }
+        }
+      });
+  }, [currentTrack, expandProgress, onExpand, dismissProgress, dismissDragY, onDismiss]);
+
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: '#000' }}>
@@ -160,14 +237,18 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
             ]}
             pointerEvents={isPlayerVisible ? 'none' : 'auto'}
           >
-            <BottomTabBar {...props} />
+            <GestureDetector gesture={tabBarSwipeGesture}>
+              <View>
+                <BottomTabBar {...props} />
+              </View>
+            </GestureDetector>
           </Animated.View>
         )}
         screenOptions={{
           lazy: false,
           detachInactiveScreens: false,
           headerShown: false,
-          safeAreaInsets: { bottom: 6 },
+          safeAreaInsets: { bottom: currentTrack ? 6 : (insets?.bottom || 16) },
           tabBarStyle: {
             borderTopColor: 'rgba(255, 255, 255, 0.15)',
             borderTopWidth: StyleSheet.hairlineWidth,

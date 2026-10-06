@@ -150,6 +150,7 @@ let blobCounter = 0;
 (globalThis.URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
 
 const { usePlayerStore } = await import('../usePlayerStore.ts');
+const { resetAudioTicketCache } = await import('../../api/media.ts');
 
 async function settleAsyncChains(times = 6): Promise<void> {
   for (let i = 0; i < times; i += 1) {
@@ -212,6 +213,7 @@ beforeEach(() => {
   waveQueueFetchUrls.length = 0;
   waveQueueReplies = [];
   queueReplyOverride = null;
+  resetAudioTicketCache();
   audioInstance.srcLog.length = 0;
 });
 

@@ -164,8 +164,20 @@ export const getSavedLastTrack = async () => {
   return null;
 };
 
+export const clearSavedLastTrack = async () => {
+  cachedLastTrack = null;
+  try {
+    await SecureStore.deleteItemAsync(LAST_TRACK_KEY, SECURE_STORE_OPTIONS);
+  } catch (e) {
+    console.warn('[Last track clear error]', e);
+  }
+};
+
 export const setSavedLastTrack = async (track) => {
-  if (!track || !track.id) return;
+  if (!track || !track.id) {
+    await clearSavedLastTrack();
+    return;
+  }
   cachedLastTrack = track;
   try {
     await SecureStore.setItemAsync(LAST_TRACK_KEY, JSON.stringify(track), SECURE_STORE_OPTIONS);

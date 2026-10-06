@@ -91,19 +91,30 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
-def create_media_ticket(user: dict, track_id: str) -> str:
-    """Подписанный media-тикет для стриминга конкретного трека (короткий TTL)."""
+def create_media_ticket_with_expiry(user: dict, track_id: str) -> tuple[str, int]:
+    """
+    Подписанный media-тикет для стриминга конкретного трека (короткий TTL).
+    Возвращает (тикет, expires_at): expires_at — unix-время истечения (совпадает
+    с exp внутри JWT), чтобы клиенты могли кэшировать тикет до срока.
+    """
     now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=MEDIA_TICKET_TTL_SECONDS)
+    expires_at = int(expires.timestamp())
     payload = {
         "sub": str(user["id"]),
         "tid": track_id,
         "scope": MEDIA_TICKET_SCOPE,
         "jti": uuid.uuid4().hex,
         "iat": int(now.timestamp()),
-        "exp": int(expires.timestamp()),
+        "exp": expires_at,
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM), expires_at
+
+
+def create_media_ticket(user: dict, track_id: str) -> str:
+    """Совместимая обёртка: подписанный media-тикет без expires_at."""
+    ticket, _ = create_media_ticket_with_expiry(user, track_id)
+    return ticket
 
 
 def verify_media_ticket(token: str, track_id: str) -> Optional[dict]:

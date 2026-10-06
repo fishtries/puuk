@@ -21,6 +21,10 @@ export default function RootNavigator({
   onOpenAuthModal,
   expandProgress,
   isPlayerVisible,
+  onExpand,
+  dismissProgress,
+  dismissDragY,
+  onDismiss,
   onLoadMoreTracks,
   hasMoreTracks,
   isLoadingMoreTracks,
@@ -43,6 +47,10 @@ export default function RootNavigator({
             onOpenAuthModal={onOpenAuthModal}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
+            onExpand={onExpand}
+            dismissProgress={dismissProgress}
+            dismissDragY={dismissDragY}
+            onDismiss={onDismiss}
             onLoadMoreTracks={onLoadMoreTracks}
             hasMoreTracks={hasMoreTracks}
             isLoadingMoreTracks={isLoadingMoreTracks}

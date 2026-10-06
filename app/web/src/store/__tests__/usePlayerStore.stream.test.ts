@@ -85,8 +85,10 @@ globalThis.Audio = function (): HTMLAudioElement {
   return audioInstance as unknown as HTMLAudioElement;
 } as unknown as typeof Audio;
 
+let currentAuthToken = 'test-token';
+
 globalThis.localStorage = {
-  getItem: () => 'test-token',
+  getItem: () => currentAuthToken,
   setItem: () => {},
   removeItem: () => {},
 } as unknown as Storage;
@@ -134,6 +136,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 }) as typeof fetch;
 
 const { usePlayerStore } = await import('../usePlayerStore.ts');
+const { resetAudioTicketCache, resolveAuthorizedAudioUrl } = await import('../../api/media.ts');
 
 const track = (id: string): Track => ({ id, title: `Title ${id}`, artist: `Artist ${id}`, duration: 180 });
 
@@ -148,6 +151,7 @@ function streamSrcLog(): string[] {
 }
 
 beforeEach(() => {
+  currentAuthToken = 'test-token';
   usePlayerStore.setState({
     currentTrack: null,
     status: 'idle',
@@ -169,11 +173,25 @@ beforeEach(() => {
   });
   networkCalls.length = 0;
   ticketFactories.length = 0;
+  resetAudioTicketCache();
   audioInstance.srcLog.length = 0;
   audioInstance.paused = true;
 });
 
 describe('Переключение трека: немедленное глушение и гонки загрузки', () => {
+  it('кэш тикета не используется после смены auth-токена', async () => {
+    const firstUrl = await resolveAuthorizedAudioUrl('A');
+
+    currentAuthToken = 'another-user-token';
+    const secondUrl = await resolveAuthorizedAudioUrl('A');
+
+    assert.notEqual(secondUrl, firstUrl);
+    assert.equal(
+      networkCalls.filter((call) => call.url.includes('/api/media-ticket')).length,
+      2,
+    );
+  });
+
   it('1. прежний источник глушится синхронно, до ответа media-тикета', async () => {
     usePlayerStore.setState({ currentTrack: track('A'), queue: [track('A')], status: 'playing' });
     audioInstance.paused = false;

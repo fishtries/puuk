@@ -35,15 +35,17 @@ jest.mock('../../utils/playbackCoordinator', () => {
   };
 });
 
+const mockPlayerInstance = {
+  replace: jest.fn(),
+  play: jest.fn(),
+  pause: jest.fn(),
+  seekTo: jest.fn(),
+  setActiveForLockScreen: jest.fn(),
+  addListener: jest.fn(() => ({ remove: jest.fn() })),
+};
+
 jest.mock('expo-audio', () => ({
-  useAudioPlayer: jest.fn(() => ({
-    replace: jest.fn(),
-    play: jest.fn(),
-    pause: jest.fn(),
-    seekTo: jest.fn(),
-    setActiveForLockScreen: jest.fn(),
-    addListener: jest.fn(() => ({ remove: jest.fn() })),
-  })),
+  useAudioPlayer: jest.fn(() => mockPlayerInstance),
   useAudioPlayerStatus: jest.fn(() => ({
     playing: false,
     currentTime: 0,
@@ -606,6 +608,33 @@ describe('usePlayerController', () => {
       expect(attempts).toBe(1);
 
       console.warn = originalWarn;
+    });
+  });
+
+  describe('dismissPlayer', () => {
+    it('stops audio playback, clears queue, resets currentTrack, and deactivates lock screen', async () => {
+      const list = [
+        { id: 101, title: 'Track 101' },
+        { id: 102, title: 'Track 102' },
+      ];
+
+      await act(async () => {
+        controller.playTrackList(list, 0);
+      });
+
+      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 101 }));
+      expect(controller.upNextQueue).toHaveLength(1);
+
+      await act(async () => {
+        await controller.dismissPlayer();
+      });
+
+      expect(controller.player.pause).toHaveBeenCalled();
+      expect(controller.player.setActiveForLockScreen).toHaveBeenCalledWith(false);
+      expect(controller.currentTrack).toBeNull();
+      expect(controller.upNextQueue).toEqual([]);
+      expect(controller.isPlayerVisible).toBe(false);
+      expect(defaultPlaybackCoordinator.updateQueue).toHaveBeenCalledWith(null, []);
     });
   });
 });

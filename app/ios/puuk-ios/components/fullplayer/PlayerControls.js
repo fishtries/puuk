@@ -172,7 +172,7 @@ const PlayerControls = ({
     return Gesture.Pan()
       .enabled(isEffectivelyCompact)
       .activeOffsetY(-8)
-      .failOffsetY(20)
+      .failOffsetY(50)
       .onEnd((event) => {
         'worklet';
         if (event.translationY < -10 || event.velocityY < -150) {

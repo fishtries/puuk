@@ -1,4 +1,5 @@
 """Streaming endpoints: raw audio files, embedded covers, dominant cover color."""
+import logging
 import os
 import uuid
 from typing import Optional
@@ -6,7 +7,7 @@ from typing import Optional
 import db
 from auth import (
     MEDIA_TICKET_TTL_SECONDS,
-    create_media_ticket,
+    create_media_ticket_with_expiry,
     get_cover_user,
     get_current_user,
     get_stream_user,
@@ -19,6 +20,8 @@ from services.recommendation_service import client
 from services.cover_extractor import extract_cover_bytes, extract_dominant_hex
 from config import COLLECTION_NAME
 
+logger = logging.getLogger("puuk.streaming")
+
 router = APIRouter(tags=["streaming"])
 
 
@@ -29,6 +32,7 @@ class MediaTicketRequest(BaseModel):
 class MediaTicketResponse(BaseModel):
     url: str
     expires_in: int
+    expires_at: int
 
 
 @router.post("/api/media-ticket", response_model=MediaTicketResponse)
@@ -40,17 +44,34 @@ def issue_media_ticket(
     Выдаёт короткоживущий media-тикет для стриминга одного трека.
     Веб получает его по Bearer (обычный fetch), затем <audio> играет
     /api/stream/{id}?mt=... напрямую — поток с Range вместо полной blob-загрузки.
+
+    Трек проверяется в SQLite до выдачи: несуществующий/удалённый трек -> 404,
+    чтобы клиенты не получали тикет, ведущий к бесполезному запросу стрима.
     """
     try:
         uuid.UUID(payload.track_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Невалидный track_id")
 
-    ticket = create_media_ticket(current_user, payload.track_id)
+    if not db.get_track(payload.track_id):
+        raise HTTPException(status_code=404, detail="Трек не найден")
+
+    ticket, expires_at = create_media_ticket_with_expiry(current_user, payload.track_id)
     return MediaTicketResponse(
         url=f"/api/stream/{payload.track_id}?mt={ticket}",
         expires_in=MEDIA_TICKET_TTL_SECONDS,
+        expires_at=expires_at,
     )
+
+
+def _resolve_db_file_path(db_track: dict) -> Optional[str]:
+    """SQLite file_path -> абсолютный/относительный путь, валидный на диске."""
+    cand_path = db_track.get("file_path")
+    if not cand_path:
+        return None
+    if not cand_path.startswith("/"):
+        cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
+    return cand_path
 
 
 def _resolve_stream_file_path(
@@ -64,15 +85,16 @@ def _resolve_stream_file_path(
     raise_on_qdrant_error=True reproduces legacy /api/stream semantics (HTTP 500
     on Qdrant failure); cover/color endpoints historically swallowed the error
     and fell back to defaults. db_track lets callers reuse an already loaded row.
+
+    Внимание: /api/stream этот хелпер больше не использует — стриминг идёт
+    только по SQLite (см. stream_track). Fallback остаётся для cover/color.
     """
     file_path = None
     if db_track is None:
         db_track = db.get_track(track_id)
-    if db_track and db_track.get("file_path"):
-        cand_path = db_track["file_path"]
-        if not cand_path.startswith("/"):
-            cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
-        if os.path.isfile(cand_path):
+    if db_track:
+        cand_path = _resolve_db_file_path(db_track)
+        if cand_path and os.path.isfile(cand_path):
             file_path = cand_path
 
     if not file_path:
@@ -97,14 +119,29 @@ def _resolve_stream_file_path(
 
 @router.get("/api/stream/{track_id}")
 def stream_track(track_id: str, current_user: dict = Depends(get_stream_user)):
-    """Стриминг аудиофайла по track_id (сначала быстрый поиск в SQLite)."""
+    """
+    Стриминг аудиофайла по track_id.
+
+    Критический путь воспроизведения: только SQLite (tracks.file_path ->
+    os.path.isfile -> FileResponse с поддержкой Range/206). Qdrant в путь
+    стриминга не вовлекается — временный сбой Qdrant не должен ломать
+    воспроизведение уже просканированной библиотеки.
+    """
     try:
         uuid.UUID(track_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Невалидный track_id")
 
-    file_path = _resolve_stream_file_path(track_id, raise_on_qdrant_error=True)
+    db_track = db.get_track(track_id)
+    file_path = _resolve_db_file_path(db_track) if db_track else None
+
     if not file_path or not os.path.isfile(file_path):
+        if db_track:
+            logger.warning(
+                "stream: track %s in DB but file missing on disk: %s",
+                track_id,
+                file_path or db_track.get("file_path"),
+            )
         raise HTTPException(status_code=404, detail="Файл трека не найден")
 
     from services.cover_extractor import get_media_type

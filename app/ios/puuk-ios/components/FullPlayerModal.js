@@ -56,6 +56,8 @@ const FullPlayerModal = ({
   bottomBarHeight,
   topPeekHeight,
   insets: propInsets,
+  dismissProgress,
+  dismissDragY,
   networkStatus = 'good',
   nextTrackStatus = 'idle',
   networkError = null,
@@ -233,8 +235,7 @@ const FullPlayerModal = ({
 
   const createSwipeDownGesture = () => {
     return Gesture.Pan()
-      .activeOffsetY(10)
-      .failOffsetY(-15)
+      .activeOffsetY(6)
       .onUpdate((event) => {
         'worklet';
         if (event.translationY >= 0) {
@@ -244,7 +245,7 @@ const FullPlayerModal = ({
       })
       .onEnd((event) => {
         'worklet';
-        if (event.translationY > 70 || event.velocityY > 350) {
+        if (event.translationY > 35 || event.velocityY > 200) {
           expandProgress.value = withTiming(0, {
             duration: 250,
             easing: Easing.bezier(0.25, 1, 0.5, 1),
@@ -425,6 +426,20 @@ const FullPlayerModal = ({
     const translateX = expandTranslateX + lyricsTranslateX;
     const translateY = expandTranslateY + lyricsTranslateY;
 
+    const dismissY = ((dismissDragY ? dismissDragY.value : 0) +
+      interpolate(
+        dismissProgress ? dismissProgress.value : 0,
+        [0, 1],
+        [0, effectiveBottomBarHeight + 20],
+        Extrapolation.CLAMP
+      )) * (1 - expandProgress.value);
+    const dismissOpacity = interpolate(
+      dismissProgress ? dismissProgress.value : 0,
+      [0, 0.7],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
+
     const shadowOpacity = interpolate(
       expandProgress.value,
       [0, 1],
@@ -455,13 +470,13 @@ const FullPlayerModal = ({
     );
 
     return {
-      opacity: 1,
+      opacity: expandProgress.value > 0.1 ? 1 : dismissOpacity,
       shadowOpacity,
       shadowRadius,
       elevation,
       transform: [
         { translateX },
-        { translateY },
+        { translateY: translateY + dismissY },
         { perspective: 1200 },
         { rotateY: `${rotateY}deg` },
         { scale },
@@ -538,11 +553,25 @@ const FullPlayerModal = ({
       Extrapolation.CLAMP
     );
 
+    const dismissY = ((dismissDragY ? dismissDragY.value : 0) +
+      interpolate(
+        dismissProgress ? dismissProgress.value : 0,
+        [0, 1],
+        [0, effectiveBottomBarHeight + 20],
+        Extrapolation.CLAMP
+      )) * (1 - expandProgress.value);
+    const dismissOpacity = interpolate(
+      dismissProgress ? dismissProgress.value : 0,
+      [0, 0.7],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
+
     return {
-      opacity: lyricsOpacity,
+      opacity: lyricsOpacity * (expandProgress.value > 0.1 ? 1 : dismissOpacity),
       transform: [
         { translateX: expandTranslateX },
-        { translateY: expandTranslateY + lyricsTranslateY },
+        { translateY: expandTranslateY + lyricsTranslateY + dismissY },
         { scale: expandScale * lyricsScale },
       ],
       transformOrigin: 'left center',
@@ -754,7 +783,7 @@ const FullPlayerModal = ({
                 right: 0,
                 bottom: 0,
                 paddingTop: effectiveTopPeekHeight + 10,
-                paddingBottom: insets.bottom + 25,
+                paddingBottom: 0,
                 width: width,
                 height: height,
                 zIndex: 20,
@@ -866,6 +895,26 @@ const FullPlayerModal = ({
                 onToggleQueue={toggleQueue}
                 onToggleLyrics={handleToggleLyrics}
               />
+              <GestureDetector gesture={bottomSwipeGesture}>
+                <View
+                  style={{
+                    width: '100%',
+                    height: (insets?.bottom || 34) + 20,
+                    alignItems: 'center',
+                    justifyContent: 'flex-start',
+                    paddingTop: 8,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 36,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                    }}
+                  />
+                </View>
+              </GestureDetector>
             </Animated.View>
 
           </Animated.View>
