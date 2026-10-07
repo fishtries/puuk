@@ -1,0 +1,250 @@
+                        ^~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:31649:25: warning: the variable "TextEncoder" was not declared in anonymous function
+      var encoder = new TextEncoder();
+                        ^~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:33524:19: warning: the variable "URL" was not declared in function "getBundleUrl"
+    var url = new URL(scriptURL);
+                  ^~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:33917:50: warning: the variable "Request" was not declared in anonymous arrow function
+...ody' in input || input instanceof Request || input[Symbol.toStringTag] ===...
+                                     ^~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:37312:13: warning: the variable "clearImmediate" was not declared in anonymous arrow function
+            clearImmediate(flushQueueImmediate);
+            ^~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:38875:32: warning: the variable "requestAnimationFrame" was not declared in anonymous function
+        this._animationFrame = requestAnimationFrame(() => this.onUpdate());
+                               ^~~~~~~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:55475:22: warning: the variable "ReadableStream" was not declared in function "wrapWithConsumption"
+    var stream = new ReadableStream({
+                     ^~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:55746:18: warning: the variable "Headers" was not declared in anonymous function
+      return new Headers(this._rawHeaders);
+                 ^~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:56377:16: warning: Direct call to eval(), but lexical scope is not supported.
+        return eval(body);
+               ^~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:57447:21: warning: the variable "Image" was not declared in anonymous arrow function
+      var img = new Image();
+                    ^~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:68447:9: warning: the variable "REACT_NAVIGATION_DEVTOOLS" was not declared in anonymous arrow function
+        REACT_NAVIGATION_DEVTOOLS.set(refContainer.current, {
+        ^~~~~~~~~~~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:98309:51: warning: the variable "WeakRef" was not declared in function "createSerializable"
+      if (globalThis.WeakRef && cached instanceof WeakRef) {
+                                                  ^~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:100193:28: warning: Direct call to eval(), but lexical scope is not supported.
+              workletFun = eval('(' + initData.code + '\n)');
+                           ^~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:100431:9: warning: the variable "cancelAnimationFrame" was not declared in anonymous arrow function
+        cancelAnimationFrame(rafHandle);
+        ^~~~~~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:120524:41: warning: the variable "getComputedStyle" was not declared in function "fixElementPosition"
+...entBorderTopValue = parseInt(getComputedStyle(parent).borderTopWidth);
+                                ^~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:120854:28: warning: the variable "HTMLElement" was not declared in function "cleanupEnteringAnimations"
+      if (child instanceof HTMLElement) {
+                           ^~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:124788:24: warning: the variable "MutationObserver" was not declared in function "addHTMLMutationObserver"
+    var observer = new MutationObserver(mutationsList => {
+                       ^~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:125238:25: warning: the variable "setInterval" was not declared in anonymous function
+      this.intervalId = setInterval(this.syncPropsBackToReact.bind(this), FLU...
+                        ^~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:125242:9: warning: the variable "clearInterval" was not declared in anonymous function
+        clearInterval(this.intervalId);
+        ^~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:130698:5: warning: the variable "jest" was not declared in anonymous arrow function
+    jest.useFakeTimers();
+    ^~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:150523:28: warning: the variable "fetch" was not declared in anonymous function
+          response = await fetch(url, {
+                           ^~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:156036:18: warning: the variable "WritableStream" was not declared in anonymous function
+      return new WritableStream(new _internalStreams.FileSystemWritableSink(s...
+                 ^~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:156046:18: warning: the variable "Response" was not declared in anonymous function
+      return new Response(await this.arrayBuffer(), {
+                 ^~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:160525:12: warning: the variable "atob" was not declared in anonymous arrow function
+    return atob(content);
+           ^~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:175777:16: warning: the variable "requestIdleCallback" was not declared in anonymous arrow function
+      var id = requestIdleCallback(() => {
+               ^~~~~~~~~~~~~~~~~~~
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/main.jsbundle:175780:20: warning: the variable "cancelIdleCallback" was not declared in anonymous arrow function
+      return () => cancelIdleCallback(id);
+                   ^~~~~~~~~~~~~~~~~~
++ [[ '' == true ]]
++ BUNDLE_FILE=/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/Puuk.app/main.jsbundle
++ [[ false != true ]]
++ [[ ! -f /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/Puuk.app/main.jsbundle ]]
+
+GenerateDSYMFile /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/Puuk.app.dSYM /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/dsymutil /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk -o /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/Puuk.app.dSYM
+
+PhaseScriptExecution [CP]\ Copy\ Pods\ Resources /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Script-800E24972A6A228C8D4807E9.sh (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /bin/sh -c /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Script-800E24972A6A228C8D4807E9.sh
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/EXConstants/EXConstants.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/EXConstants/ExpoConstants_privacy.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/ExpoFileSystem/ExpoFileSystem_privacy.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/RNSVG/RNSVGFilters.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/React-Core/React-Core_privacy.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/React-cxxreact/React-cxxreact_privacy.bundle
+/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/React-timing/React-timing_privacy.bundle
+Transfer starting: 21 files
+EXConstants.bundle/
+EXConstants.bundle/Info.plist
+EXConstants.bundle/app.config
+ExpoConstants_privacy.bundle/
+ExpoConstants_privacy.bundle/Info.plist
+ExpoConstants_privacy.bundle/PrivacyInfo.xcprivacy
+ExpoFileSystem_privacy.bundle/
+ExpoFileSystem_privacy.bundle/Info.plist
+RNSVGFilters.bundle/
+RNSVGFilters.bundle/Info.plist
+RNSVGFilters.bundle/RNSVGArithmeticFilter.iphoneos.metallib
+RNSVGFilters.bundle/RNSVGCompositeXor.iphoneos.metallib
+React-Core_privacy.bundle/
+React-Core_privacy.bundle/Info.plist
+React-Core_privacy.bundle/PrivacyInfo.xcprivacy
+React-cxxreact_privacy.bundle/
+React-cxxreact_privacy.bundle/Info.plist
+React-cxxreact_privacy.bundle/PrivacyInfo.xcprivacy
+React-timing_privacy.bundle/
+React-timing_privacy.bundle/Info.plist
+React-timing_privacy.bundle/PrivacyInfo.xcprivacy
+
+sent 18778 bytes  received 370 bytes  1268079 bytes/sec
+total size is 16750  speedup is 0.87
+Transfer starting: 21 files
+
+sent 1342 bytes  received 20 bytes  648571 bytes/sec
+total size is 16750  speedup is 12.30
+
+PhaseScriptExecution [CP]\ Embed\ Pods\ Frameworks /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Script-FF9B49A9B6C5F18DC45040F2.sh (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /bin/sh -c /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Script-FF9B49A9B6C5F18DC45040F2.sh
+mkdir -p /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/Puuk.app/Frameworks
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/ExpoFileSystem/ExpoFileSystem.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+ExpoFileSystem.framework/
+ExpoFileSystem.framework/ExpoFileSystem
+ExpoFileSystem.framework/Info.plist
+
+sent 1136042 bytes  received 70 bytes  56522985 bytes/sec
+total size is 1135478  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/ExpoModulesCore/ExpoModulesCore.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+ExpoModulesCore.framework/
+ExpoModulesCore.framework/ExpoModulesCore
+ExpoModulesCore.framework/Info.plist
+
+sent 3827140 bytes  received 70 bytes  103159299 bytes/sec
+total size is 3826244  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/ExpoModulesJSI/ExpoModulesJSI.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+ExpoModulesJSI.framework/
+ExpoModulesJSI.framework/ExpoModulesJSI
+ExpoModulesJSI.framework/Info.plist
+
+sent 906061 bytes  received 70 bytes  45081144 bytes/sec
+total size is 905525  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/ExpoModulesWorklets/ExpoModulesWorklets.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+ExpoModulesWorklets.framework/
+ExpoModulesWorklets.framework/ExpoModulesWorklets
+ExpoModulesWorklets.framework/Info.plist
+
+sent 164464 bytes  received 70 bytes  26972786 bytes/sec
+total size is 164000  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/React-Core-prebuilt/React.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+React.framework/
+React.framework/Info.plist
+React.framework/React
+
+sent 12017472 bytes  received 70 bytes  95301681 bytes/sec
+total size is 12015616  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/ReactNativeDependencies/ReactNativeDependencies.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 12 files
+ReactNativeDependencies.framework/
+ReactNativeDependencies.framework/Info.plist
+ReactNativeDependencies.framework/ReactNativeDependencies
+ReactNativeDependencies.framework/ReactNativeDependencies_boost.bundle/
+ReactNativeDependencies.framework/ReactNativeDependencies_boost.bundle/Info.plist
+ReactNativeDependencies.framework/ReactNativeDependencies_boost.bundle/PrivacyInfo.xcprivacy
+ReactNativeDependencies.framework/ReactNativeDependencies_folly.bundle/
+ReactNativeDependencies.framework/ReactNativeDependencies_folly.bundle/Info.plist
+ReactNativeDependencies.framework/ReactNativeDependencies_folly.bundle/PrivacyInfo.xcprivacy
+ReactNativeDependencies.framework/ReactNativeDependencies_glog.bundle/
+ReactNativeDependencies.framework/ReactNativeDependencies_glog.bundle/Info.plist
+ReactNativeDependencies.framework/ReactNativeDependencies_glog.bundle/PrivacyInfo.xcprivacy
+
+sent 1242199 bytes  received 220 bytes  72656081 bytes/sec
+total size is 1240342  speedup is 1.00
+rsync --delete -av --filter P .*.?????? --links --filter "- CVS/" --filter "- .svn/" --filter "- .git/" --filter "- .hg/" --filter "- Headers" --filter "- PrivateHeaders" --filter "- Modules" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/Release-iphoneos/XCFrameworkIntermediates/hermes-engine/Pre-built/hermesvm.framework" "/Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks"
+Transfer starting: 3 files
+hermesvm.framework/
+hermesvm.framework/Info.plist
+hermesvm.framework/hermesvm
+
+sent 5068055 bytes  received 70 bytes  112375277 bytes/sec
+total size is 5067035  speedup is 1.00
+
+CopySwiftLibs /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk --scan-folder /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks --scan-folder /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/PlugIns --scan-folder /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/SystemExtensions --scan-folder /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Extensions --platform iphoneos --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.b5WkUH/Metal.xctoolchain --toolchain /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Frameworks --unsigned-destination /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/BuildProductsPath/SwiftSupport --strip-bitcode --strip-bitcode-tool /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+ExtractAppIntentsMetadata (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.b5WkUH/Metal.xctoolchain --module-name Puuk --sdk-root /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk --xcode-version 17F113 --platform-family iOS --deployment-target 16.4 --bundle-identifier com.fishtries.puuk --output /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app --target-triple arm64-apple-ios16.4 --binary-file /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk --dependency-file /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Objects-normal/arm64/Puuk_dependency_info.dat --stringsdata-file /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Objects-normal/arm64/Puuk.SwiftFileList --metadata-file-list /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Puuk.DependencyMetadataFileList --static-metadata-file-list /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Puuk.DependencyStaticMetadataFileList --swift-const-vals-list /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Objects-normal/arm64/Puuk.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --validate-assistant-intents --no-app-shortcuts-localization
+2026-10-07 18:30:05.336 appintentsmetadataprocessor[29088:76702] Starting appintentsmetadataprocessor export
+2026-10-07 18:30:05.356 appintentsmetadataprocessor[29088:76702] warning: Metadata extraction skipped. No AppIntents.framework dependency found.
+
+AppIntentsSSUTraining (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsnltrainingprocessor --infoplist-path /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Info.plist --temp-dir-path /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/ssu --bundle-id com.fishtries.puuk --product-path /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app --extracted-metadata-path /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Metadata.appintents --deployment-postprocessing --metadata-file-list /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/IntermediateBuildFilesPath/Puuk.build/Release-iphoneos/Puuk.build/Puuk.DependencyMetadataFileList --source-file /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Info.plist --archive-ssu-assets
+2026-10-07 18:30:05.398 appintentsnltrainingprocessor[29089:76705] Parsing options for appintentsnltrainingprocessor
+2026-10-07 18:30:05.399 appintentsnltrainingprocessor[29089:76705] Starting AppIntents SSU YAML Generation
+2026-10-07 18:30:05.408 appintentsnltrainingprocessor[29089:76705] No AppShortcuts found - Skipping.
+
+Strip /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -D /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app/Puuk
+
+SetOwnerAndGroup runner:staff /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /usr/sbin/chown -RH runner:staff /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app
+
+SetMode u+w,go-w,a+rX /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /bin/chmod -RH u+w,go-w,a+rX /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app
+
+RegisterExecutionPolicyException /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    builtin-RegisterExecutionPolicyException /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app
+
+Validate /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    builtin-validationUtility /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app -validate-for-store -shallow-bundle -infoplist-subpath Info.plist
+
+Touch /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app (in target 'Puuk' from project 'Puuk')
+    cd /Users/runner/work/puuk/puuk/app/ios/puuk-ios/ios
+    /usr/bin/touch -c /Users/runner/work/puuk/puuk/app/ios/puuk-ios/build/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/Puuk/InstallationBuildProductsLocation/Applications/Puuk.app
+
+warning: Run script build phase '[CP-User] [Hermes] Replace Hermes for the right configuration, if needed' will be run during every build because it does not specify any outputs. To address this issue, either add output dependencies to the script phase, or configure it to run in every build by unchecking "Based on dependency analysis" in the script phase. (in target 'hermes-engine' from project 'Pods')
+note: Run script build phase '[CP-User] [RNDeps] Replace React Native Dependencies for the right configuration, if needed' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'ReactNativeDependencies' from project 'Pods')
+note: Run script build phase '[CP-User] [RN]Check FBReactNativeSpec' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'React-RCTFBReactNativeSpec' from project 'Pods')
+note: Run script build phase '[CP-User] [RNCore] Replace React Native Core for the right configuration, if needed' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'React-Core-prebuilt' from project 'Pods')
+note: Run script build phase '[CP-User] [Expo] Switch ExpoModulesWorklets XCFramework for build configuration' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'ExpoModulesWorklets' from project 'Pods')
+note: Run script build phase '[CP-User] Build ExpoModulesJSI xcframework' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'ExpoModulesJSI' from project 'Pods')
+note: Run script build phase '[CP-User] [Expo] Switch ExpoModulesCore XCFramework for build configuration' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'ExpoModulesCore' from project 'Pods')
+note: Run script build phase '[CP-User] [Expo] Switch ExpoFileSystem XCFramework for build configuration' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'ExpoFileSystem' from project 'Pods')
+note: Run script build phase '[Expo] Configure project' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'Puuk' from project 'Puuk')
+note: Run script build phase 'Bundle React Native code and images' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'Puuk' from project 'Puuk')
+note: Run script build phase '[CP-User] Generate app.config for prebuilt Constants.manifest' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'EXConstants' from project 'Pods')
+** ARCHIVE SUCCEEDED **
+
