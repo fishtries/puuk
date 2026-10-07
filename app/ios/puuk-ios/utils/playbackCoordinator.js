@@ -112,49 +112,8 @@ export function areHeadersEqual(a, b) {
   return true;
 }
 
-/**
- * Нормализует stream URL для воспроизведения:
- * - Гарантирует корректный базовый SERVER_URL (без лишних слешей)
- * - Гарантирует формат https://<host>/api/stream/<id>
- * - Исключает двойные слеши, кавычки, пробелы
- * - Проверяет валидность URL
- *
- * @param {Object} track
- * @param {string} [serverUrl]
- * @returns {string}
- */
-export function normalizeStreamUrl(track, serverUrl = SERVER_URL) {
-  if (!track) return '';
-  const rawTrackId = (track.id !== undefined && track.id !== null)
-    ? track.id
-    : track.track_id;
-  if (!rawTrackId && rawTrackId !== 0) return '';
-  const trackIdStr = String(rawTrackId).trim().replace(/['"]/g, '');
-
-  const cleanServerUrl = (serverUrl || 'https://web.puuk.fun')
-    .trim()
-    .replace(/['"]/g, '')
-    .replace(/\/+$/, '');
-
-  const rawStream = typeof track.stream_url === 'string'
-    ? track.stream_url.trim().replace(/['"]/g, '')
-    : '';
-
-  let normalized;
-  const streamPathIndex = rawStream.indexOf('/api/stream/');
-  if (streamPathIndex !== -1) {
-    const pathPart = rawStream.slice(streamPathIndex).replace(/\/+/g, '/');
-    normalized = `${cleanServerUrl}${pathPart}`;
-  } else if (rawStream.startsWith('http://') || rawStream.startsWith('https://')) {
-    normalized = rawStream;
-  } else if (rawStream.startsWith('/')) {
-    normalized = `${cleanServerUrl}${rawStream.replace(/\/+/g, '/')}`;
-  } else {
-    normalized = `${cleanServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
-  }
-
-  return normalized;
-}
+import { normalizeStreamUrl } from './streamUrl';
+export { normalizeStreamUrl };
 
 export class PlaybackCoordinator {
   constructor(options = {}) {
@@ -529,6 +488,18 @@ export class PlaybackCoordinator {
   updateQueue(currentTrack, upNextQueue = [], options = {}) {
     this.currentTrack = currentTrack;
     this.upNextQueue = Array.isArray(upNextQueue) ? upNextQueue : [];
+
+    // Защищаем текущий трек и очередь от LRU вытеснения из кеша
+    if (this.cache && typeof this.cache.setProtectedTrackIds === 'function') {
+      const protectedIds = [];
+      const curId = currentTrack?.id !== undefined && currentTrack?.id !== null ? currentTrack.id : currentTrack?.track_id;
+      if (curId !== undefined && curId !== null) protectedIds.push(curId);
+      for (const t of this.upNextQueue) {
+        const qId = t?.id !== undefined && t?.id !== null ? t.id : t?.track_id;
+        if (qId !== undefined && qId !== null) protectedIds.push(qId);
+      }
+      this.cache.setProtectedTrackIds(protectedIds);
+    }
 
     // Синхронизируем планировщик
     this.scheduler.syncQueue(currentTrack, this.upNextQueue, options);

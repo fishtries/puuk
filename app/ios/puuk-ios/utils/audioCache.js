@@ -29,6 +29,15 @@ export class AudioCache {
     this.safetyMarginBytes = options.safetyMarginBytes || SAFETY_MARGIN_BYTES;
     this.isInitialized = false;
     this._saveManifestTimeout = null;
+    this.protectedTrackIds = new Set();
+  }
+
+  /**
+   * Устанавливает ID треков, защищённых от LRU вытеснения (текущий трек, очередь).
+   * @param {Array<string|number>} ids
+   */
+  setProtectedTrackIds(ids) {
+    this.protectedTrackIds = new Set((ids || []).map(id => String(id).trim()));
   }
 
   /**
@@ -714,6 +723,9 @@ export class AudioCache {
     let hasEvicted = false;
     for (const entry of entries) {
       if (currentTotal <= this.maxSizeBytes) break;
+      if (this.protectedTrackIds.has(String(entry.id).trim())) {
+        continue;
+      }
 
       try {
         const file = new File(entry.uri);

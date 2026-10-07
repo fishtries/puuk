@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { View, StyleSheet, Dimensions, AppState } from 'react-native';
 import Svg, { Path, Rect, G, Defs, LinearGradient, Stop, Filter, FeGaussianBlur } from 'react-native-svg';
 
 import {
@@ -19,6 +19,15 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
   accentColor = '#FFDAB9',
   width = SCREEN_WIDTH,
 }) {
+  const [isAppActive, setIsAppActive] = useState(() => AppState.currentState === 'active');
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      setIsAppActive(nextState === 'active');
+    });
+    return () => sub.remove();
+  }, []);
+
   // Плавный интерполированный прогресс (0..1)
   const [displayProgress, setDisplayProgress] = useState(() => {
     if (!duration || duration <= 0) return 0;
@@ -42,7 +51,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
     };
   }, [currentTime, isPlaying, duration]);
 
-  // Непрерывная 60fps интерполяция прогресса между дискретными тиками expo-audio
+  // Непрерывная 60fps интерполяция прогресса между дискретными тиками expo-audio (только при активном экране)
   useEffect(() => {
     let animId;
 
@@ -60,12 +69,12 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         setDisplayProgress(0);
       }
 
-      if (playing) {
+      if (playing && isAppActive) {
         animId = requestAnimationFrame(tick);
       }
     };
 
-    if (isPlaying && duration > 0) {
+    if (isPlaying && duration > 0 && isAppActive) {
       animId = requestAnimationFrame(tick);
     } else {
       tick();
@@ -74,7 +83,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
     return () => {
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [isPlaying, duration]);
+  }, [isPlaying, duration, isAppActive]);
 
   const totalLength = useMemo(() => {
     return getBoundaryTotalLength(width, CORNER_RADIUS);

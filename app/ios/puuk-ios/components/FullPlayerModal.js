@@ -178,12 +178,12 @@ const FullPlayerModal = ({
     }
   }, [currentTrack]);
 
-  // Синхронизация полосы прогресса с аудио
+  // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт)
   useEffect(() => {
-    if (!isSliding && duration > 0) {
+    if (isPlayerVisible && !isSliding && duration > 0) {
       slideProgressShared.value = withTiming(currentTime / duration, { duration: 250 });
     }
-  }, [currentTime, duration, isSliding]);
+  }, [currentTime, duration, isSliding, isPlayerVisible]);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;

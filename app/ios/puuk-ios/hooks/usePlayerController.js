@@ -106,7 +106,9 @@ export default function usePlayerController({ setTracks }) {
   const pendingHistoryRef = useRef([]);
   const recordTrackHistoryRef = useRef(null);
 
-  const player = useAudioPlayer();
+  const player = useAudioPlayer(null, {
+    keepAudioSessionActive: true,
+  });
   const status = useAudioPlayerStatus(player);
 
   useEffect(() => {

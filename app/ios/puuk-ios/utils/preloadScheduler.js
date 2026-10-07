@@ -11,6 +11,8 @@
 
 import defaultAudioCache from './audioCache';
 import { getCurrentNetworkPolicy, subscribeNetworkPolicy, SAFE_NETWORK_POLICY } from './networkPolicy';
+import { SERVER_URL } from './api';
+import { normalizeStreamUrl } from './streamUrl';
 
 export const TRACK_STATUS = {
   IDLE: 'idle',
@@ -35,10 +37,11 @@ export class PreloadScheduler {
    * @param {Function} [options.subscribeNetworkPolicy] - Функция подписки на изменения сети
    */
   constructor(options = {}) {
+    this.serverUrl = options.serverUrl || SERVER_URL;
     this.maxConcurrent = options.maxConcurrent ?? 2;
     this.lookahead = options.lookahead ?? 2;
     this.cache = options.cache || defaultAudioCache;
-    this.getStreamUrl = options.getStreamUrl || ((t) => t?.stream_url || (t?.id ? `/api/stream/${t.id}` : null));
+    this.getStreamUrl = options.getStreamUrl || ((t) => normalizeStreamUrl(t, this.serverUrl));
     this.gracePeriodMs = options.gracePeriodMs ?? GRACE_PERIOD_MS;
     this.staleSyncLimit = options.staleSyncLimit ?? STALE_SYNC_LIMIT;
     this.getNetworkPolicy = options.getNetworkPolicy || getCurrentNetworkPolicy;

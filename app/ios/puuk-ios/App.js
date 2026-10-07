@@ -38,6 +38,7 @@ import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './hooks/useTracksPagination';
 import { authFetch, checkAuth, addAuthListener, SERVER_URL, setServerUrl } from './utils/api';
 import { loadSettings, getSavedLastTrack, setSavedLastTrack, getSettings, addSettingsListener } from './utils/settings';
+import defaultAudioCache from './utils/audioCache';
 
 const { height } = Dimensions.get('window');
 
@@ -372,6 +373,10 @@ function AppContent() {
         if (savedTrack && !currentTrack) {
           setCurrentTrack(savedTrack);
         }
+
+        defaultAudioCache.init().catch((err) => {
+          console.warn('[AudioCache init warning]', err);
+        });
 
         const user = await checkAuth();
         if (isMounted) {

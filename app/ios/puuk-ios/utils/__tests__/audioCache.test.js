@@ -566,4 +566,33 @@ describe('AudioCache', () => {
       MockFile.prototype.move = originalMove;
     }
   });
+
+  test('setProtectedTrackIds protects active tracks from LRU eviction', async () => {
+    const smallCache = new AudioCache({
+      baseDir: 'file://mock/documents',
+      maxSizeBytes: 250,
+    });
+    await smallCache.init();
+
+    // Populate cache with 3 tracks (100 bytes each)
+    mockFs.set('file://mock/documents/audio-cache/track-1_1.mp3', { content: 'x'.repeat(100), size: 100, isDir: false });
+    mockFs.set('file://mock/documents/audio-cache/track-2_1.mp3', { content: 'x'.repeat(100), size: 100, isDir: false });
+    mockFs.set('file://mock/documents/audio-cache/track-3_1.mp3', { content: 'x'.repeat(100), size: 100, isDir: false });
+
+    smallCache.manifest = {
+      'track-1': { uri: 'file://mock/documents/audio-cache/track-1_1.mp3', size: 100, lastAccessed: 1000 },
+      'track-2': { uri: 'file://mock/documents/audio-cache/track-2_1.mp3', size: 100, lastAccessed: 2000 },
+      'track-3': { uri: 'file://mock/documents/audio-cache/track-3_1.mp3', size: 100, lastAccessed: 3000 },
+    };
+
+    // Track 1 is the oldest, but it is currently playing and protected!
+    smallCache.setProtectedTrackIds(['track-1']);
+
+    await smallCache._enforceSizeLimit();
+
+    // Track 1 must NOT be evicted because it is protected; Track 2 should be evicted instead!
+    expect(smallCache.manifest['track-1']).toBeDefined();
+    expect(smallCache.manifest['track-2']).toBeUndefined();
+    expect(smallCache.manifest['track-3']).toBeDefined();
+  });
 });
