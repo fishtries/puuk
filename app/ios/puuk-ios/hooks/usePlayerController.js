@@ -603,7 +603,6 @@ export default function usePlayerController({ setTracks }) {
     isWaveSessionRef.current = true;
     setCurrentTrack(track);
     loadAndPlay(track);
-    requestExpandPlayer();
     // Инвалидируем ответы старой очереди до запуска нового запроса.
     // Иначе fetchQueue захватит уже устаревшую эпоху и сможет примешать
     // старый ответ к новой сессии воспроизведения.
@@ -614,7 +613,7 @@ export default function usePlayerController({ setTracks }) {
       queuedIds: [],
     });
     recordTrackHistory(trackId);
-  }, [currentTrack, history, requestExpandPlayer, fetchQueue, loadAndPlay, recordTrackHistory]);
+  }, [currentTrack, history, fetchQueue, loadAndPlay, recordTrackHistory]);
 
   const playTrackList = useCallback((trackList, startIndex = 0) => {
     if (!trackList || trackList.length === 0) return;
@@ -632,12 +631,11 @@ export default function usePlayerController({ setTracks }) {
     isWaveSessionRef.current = false;
     setCurrentTrack(track);
     loadAndPlay(track);
-    requestExpandPlayer();
     // Ручной плейлист также инвалидирует in-flight wave queue response.
     queueEpochRef.current += 1;
     setUpNextQueue(queue);
     recordTrackHistory(trackId);
-  }, [currentTrack, requestExpandPlayer, loadAndPlay, recordTrackHistory]);
+  }, [currentTrack, loadAndPlay, recordTrackHistory]);
 
   const handleToggleLike = useCallback(async (track) => {
     if (!track) return;
@@ -686,7 +684,6 @@ export default function usePlayerController({ setTracks }) {
       isWaveSessionRef.current = true;
       setCurrentTrack(waveTrack);
       loadAndPlay(waveTrack);
-      requestExpandPlayer();
       queueEpochRef.current += 1;
       setUpNextQueue([]);
       fetchQueue(waveTrackId, undefined, {
@@ -699,7 +696,7 @@ export default function usePlayerController({ setTracks }) {
         console.warn("Failed to start wave:", error.message);
       }
     }
-  }, [history, currentTrack, requestExpandPlayer, fetchQueue, loadAndPlay, recordTrackHistory]);
+  }, [history, currentTrack, fetchQueue, loadAndPlay, recordTrackHistory]);
 
   const dismissPlayer = useCallback(async () => {
     try {

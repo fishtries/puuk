@@ -636,5 +636,28 @@ describe('usePlayerController', () => {
       expect(controller.isPlayerVisible).toBe(false);
       expect(defaultPlaybackCoordinator.updateQueue).toHaveBeenCalledWith(null, []);
     });
+
+    it('keeps player in compact mode (isPlayerVisible remains false) when playing tracks', async () => {
+      const list = [
+        { id: 201, title: 'Compact Track 1' },
+        { id: 202, title: 'Compact Track 2' },
+      ];
+
+      expect(controller.isPlayerVisible).toBe(false);
+
+      await act(async () => {
+        controller.playTrackList(list, 0);
+      });
+
+      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 201 }));
+      expect(controller.isPlayerVisible).toBe(false);
+
+      await act(async () => {
+        controller.playTrack(list[1]);
+      });
+
+      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 202 }));
+      expect(controller.isPlayerVisible).toBe(false);
+    });
   });
 });
