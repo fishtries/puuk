@@ -186,15 +186,6 @@ const PlayerControls = ({
       <GestureDetector gesture={Gesture.Simultaneous(bottomSwipeGesture, swipeUpCompactGesture)}>
         <Animated.View layout={LinearTransition.springify()} style={{ width: '100%' }}>
 
-          {isEffectivelyCompact && (
-            <Pressable
-              onPress={exitCompactMode}
-              hitSlop={{ top: 20, bottom: 15, left: 30, right: 30 }}
-              style={styles.compactHandleContainer}
-            >
-              <View style={styles.compactHandlePill} />
-            </Pressable>
-          )}
 
           <ProgressBar
             styles={styles}

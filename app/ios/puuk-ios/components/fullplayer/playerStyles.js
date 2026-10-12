@@ -27,11 +27,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dragIndicator: {
-    width: 40,
+  topGrabberContainer: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    marginBottom: 4,
+  },
+  topGrabberPill: {
+    width: 38,
     height: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 3,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
   },
   artContainer: {
     width: width - 60,
@@ -42,7 +49,7 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 10,
     marginBottom: 20,
-    marginTop: 20,
+    marginTop: 10,
   },
   trackInfoContainer: {
     width: '100%',
@@ -140,20 +147,6 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     width: '100%',
     alignItems: 'center',
-  },
-  compactHandleContainer: {
-    width: '100%',
-    height: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-    marginBottom: -2,
-  },
-  compactHandlePill: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.35)',
   },
   compactBottomRow: {
     flexDirection: 'row',

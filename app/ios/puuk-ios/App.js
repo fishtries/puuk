@@ -4,16 +4,11 @@ import {
   View,
   Dimensions,
   StyleSheet,
-  Text,
-  TouchableOpacity,
-  Platform,
   ActivityIndicator,
   DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
@@ -131,10 +126,9 @@ function AppContent() {
 
   // Геометрия подложки плеера и карточки главных экранов
   const bottomBarHeight = 64 + (insets.bottom || 34);
-  const topPeekHeight = (insets.top || 47) + 46;
-  const cardTravel = Math.max(100, height - bottomBarHeight - topPeekHeight);
+  const cardTravel = height;
 
-  // Reanimated shared progress (0 = свернуто, мини-плеер внизу; 1 = раскрыт плеер под карточкой)
+  // Reanimated shared progress (0 = свернуто, мини-плеер внизу; 1 = раскрыт плеер на весь экран)
   const expandProgress = useSharedValue(0);
 
   // Reanimated состояние закрытия мини-плеера насовсем (0 = активен, 1 = скрыт/выгружен)
@@ -220,26 +214,24 @@ function AppContent() {
     };
   });
 
-  // Появление верхней скругленной шапки («Swipe down to hide»)
-  const topPeekAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(expandProgress.value, [0.75, 1], [0, 1], Extrapolation.CLAMP);
-    return {
-      opacity,
-    };
-  });
-
-  // Анимация затухания светящейся границы при скрытии плеера
+  // Анимация затухания светящейся границы при раскрытии плеера или скрытии мини-плеера
   const glowBoundaryAnimatedStyle = useAnimatedStyle(() => {
     const dragProg = Math.min(1, Math.max(0, dismissDragY.value / bottomBarHeight));
     const effectiveDismiss = Math.min(1, Math.max(dismissProgress.value, dragProg));
-    const opacity = interpolate(
+    const dismissOpacity = interpolate(
       effectiveDismiss,
       [0, 0.3],
       [1, 0],
       Extrapolation.CLAMP
     );
+    const expandOpacity = interpolate(
+      expandProgress.value,
+      [0, 0.15],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
     return {
-      opacity,
+      opacity: dismissOpacity * expandOpacity,
     };
   });
 
@@ -329,34 +321,6 @@ function AppContent() {
     }
   }, [currentTrack, tracks, playTrack, startWave, togglePlayPause]);
 
-  // Жест свайпа вниз по верхней шапке для закрытия плеера
-  const topPeekSwipeGesture = useMemo(() => {
-    return Gesture.Pan()
-      .activeOffsetY(5)
-      .onUpdate((event) => {
-        'worklet';
-        if (event.translationY >= 0) {
-          const prog = Math.max(0, 1 - (event.translationY / (height * 0.75)));
-          expandProgress.value = prog;
-        }
-      })
-      .onEnd((event) => {
-        'worklet';
-        if (event.translationY > 35 || event.velocityY > 200) {
-          expandProgress.value = withTiming(0, {
-            duration: 250,
-            easing: Easing.bezier(0.25, 1, 0.5, 1),
-          });
-          runOnJS(handleClose)();
-        } else {
-          expandProgress.value = withSpring(1, {
-            damping: 28,
-            stiffness: 220,
-            mass: 0.8,
-          });
-        }
-      });
-  }, [handleClose]);
 
   // Последовательная инициализация настроек и авторизации при старте приложения
   useEffect(() => {
@@ -460,7 +424,6 @@ function AppContent() {
         onToggleLike={() => handleToggleLike(activeTrack)}
         isLiked={!!activeTrack?.is_liked}
         expandProgress={expandProgress}
-        topPeekHeight={topPeekHeight}
         bottomBarHeight={bottomBarHeight}
         insets={insets}
         dismissProgress={dismissProgress}
@@ -483,6 +446,7 @@ function AppContent() {
           },
           animatedCardStyle,
         ]}
+        pointerEvents={isPlayerVisible ? 'none' : 'auto'}
       >
         <NavigationContainer ref={navigationRef}>
           <RootNavigator
@@ -507,31 +471,6 @@ function AppContent() {
             onRefreshTracks={refreshTracks}
           />
         </NavigationContainer>
-
-        {/* Верхняя скругленная шапка карточки («Swipe down to hide»), остающаяся вверху экрана при открытом плеере */}
-        <Animated.View
-          style={[
-            styles.topPeekOverlay,
-            { height: topPeekHeight },
-            topPeekAnimatedStyle,
-          ]}
-          pointerEvents={isPlayerVisible ? 'auto' : 'none'}
-        >
-          <BlurView
-            tint={Platform.OS === 'ios' ? 'systemChromeMaterialDark' : 'dark'}
-            intensity={90}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0, 0, 0, 0.35)' }]} />
-
-          <GestureDetector gesture={topPeekSwipeGesture}>
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={handleClose}
-              style={[StyleSheet.absoluteFill, styles.topPeekTouchArea]}
-            />
-          </GestureDetector>
-        </Animated.View>
 
         {/* Светящаяся полоса-индикатор прогресса трека вдоль нижней скругленной границы */}
         <Animated.View style={glowBoundaryAnimatedStyle} pointerEvents="none">
@@ -622,23 +561,5 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'transparent',
-    zIndex: 25,
-  },
-  topPeekOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    overflow: 'hidden',
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255, 255, 255, 0.15)',
-    zIndex: 50,
-  },
-  topPeekTouchArea: {
-    ...StyleSheet.absoluteFillObject,
   },
 });

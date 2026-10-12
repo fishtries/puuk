@@ -9,6 +9,7 @@ import {
 import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import CoverImage from './CoverImage';
 import { authFetch } from '../utils/api';
 
@@ -67,7 +68,7 @@ const FullPlayerModal = ({
   const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
   const insets = propInsets || initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
   const effectiveBottomBarHeight = bottomBarHeight || (64 + (insets.bottom || 34));
-  const effectiveTopPeekHeight = topPeekHeight || ((insets.top || 47) + 46);
+  const effectiveTopInset = insets?.top || 47;
   const bgColor = useSharedValue('#4c2e4f');
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSliding, setIsSliding] = useState(false);
@@ -162,21 +163,39 @@ const FullPlayerModal = ({
   }, [playerExpandToken, externalExpandProgress]);
 
   useEffect(() => {
-    if (currentTrack?.coverArt && currentTrack.coverArt.includes('/api/cover/')) {
-      const colorUrl = currentTrack.coverArt.replace('/api/cover/', '/api/color/');
-      authFetch(colorUrl)
+    if (!currentTrack || currentTrack.id === 'placeholder') return;
+
+    if (currentTrack.cover_color) {
+      bgColor.value = currentTrack.cover_color;
+    }
+
+    const trackId = currentTrack.id;
+    if (trackId) {
+      authFetch(`/api/color/${encodeURIComponent(trackId)}`)
         .then(r => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         })
         .then(data => {
-          if (data.color) {
-            bgColor.value = withTiming(data.color, { duration: 800 });
+          if (data?.color) {
+            bgColor.value = data.color;
           }
         })
-        .catch(err => console.log('Failed to fetch color', err));
+        .catch(err => {
+          if (currentTrack?.coverArt && currentTrack.coverArt.includes('/api/cover/')) {
+            const colorUrl = currentTrack.coverArt.replace('/api/cover/', '/api/color/');
+            authFetch(colorUrl)
+              .then(r => r.ok && r.json())
+              .then(data => {
+                if (data?.color) {
+                  bgColor.value = data.color;
+                }
+              })
+              .catch(() => {});
+          }
+        });
     }
-  }, [currentTrack]);
+  }, [currentTrack?.id, currentTrack?.cover_color, currentTrack?.coverArt]);
 
   // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт)
   useEffect(() => {
@@ -309,6 +328,18 @@ const FullPlayerModal = ({
     };
   });
 
+  const topGrabberAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(
+      expandProgress.value,
+      [0.4, 0.85],
+      [0, 1],
+      Extrapolation.CLAMP
+    ) * (1 - lyricsTransition.value);
+    return {
+      opacity,
+    };
+  });
+
   const toggleQueue = () => {
     const nextState = !isQueueVisible;
     if (nextState) {
@@ -367,9 +398,9 @@ const FullPlayerModal = ({
   const fullCenterX = width / 2;
   const expandDeltaX = miniCenterX - fullCenterX;
 
-  const fullArtTopY = effectiveTopPeekHeight + 30; // safeArea paddingTop (effectiveTopPeekHeight + 10) + marginTop 20
+  const fullArtTopY = effectiveTopInset + 41; // safeArea paddingTop (effectiveTopInset + 6) + grabber 25 + marginTop 10
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
-  const TARGET_DELTA_Y = (effectiveTopPeekHeight + 32) - fullArtCenterY;
+  const TARGET_DELTA_Y = (effectiveTopInset + 32) - fullArtCenterY;
 
   const miniArtTopY = height - effectiveBottomBarHeight + 10;
   const miniArtCenterY = miniArtTopY + MINI_ART_SIZE / 2; // height - effectiveBottomBarHeight + 32
@@ -700,6 +731,12 @@ const FullPlayerModal = ({
     };
   });
 
+  const ambientCoverAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: interpolate(expandProgress.value, [0, 0.4], [0, 1], Extrapolation.CLAMP),
+    };
+  });
+
   const fallbackTrack = useMemo(() => ({
     id: 'placeholder',
     title: 'Puuk Music',
@@ -732,13 +769,32 @@ const FullPlayerModal = ({
           {/* Плавно меняющийся сплошной цветной фон */}
           <Animated.View style={[StyleSheet.absoluteFill, animatedBgStyle]} />
 
-          {/* Градиент затемнения (от полностью прозрачного до цвета подвала) */}
-          <Animated.View style={[StyleSheet.absoluteFill, gradientOverlayAnimatedStyle]} pointerEvents="none">
-            <LinearGradient
-              colors={['#00000000', '#000000']}
-              style={StyleSheet.absoluteFill}
-            />
-          </Animated.View>
+          {/* Dynamic ambient cover art background for expanded player */}
+          {activeTrack?.coverArt && (
+            <Animated.View style={[StyleSheet.absoluteFill, ambientCoverAnimatedStyle]} pointerEvents="none">
+              <CoverImage
+                source={activeTrack.coverArt}
+                style={[StyleSheet.absoluteFill, { transform: [{ scale: 1.4 }] }]}
+                blurRadius={40}
+                resizeMode="cover"
+              />
+              <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+              <LinearGradient
+                colors={['rgba(0,0,0,0.2)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.85)']}
+                locations={[0, 0.45, 1]}
+                style={StyleSheet.absoluteFill}
+              />
+            </Animated.View>
+          )}
+
+          {!activeTrack?.coverArt && (
+            <Animated.View style={[StyleSheet.absoluteFill, gradientOverlayAnimatedStyle]} pointerEvents="none">
+              <LinearGradient
+                colors={['#120d1400', '#120d14']}
+                style={StyleSheet.absoluteFill}
+              />
+            </Animated.View>
+          )}
 
           <AppleLyricsView
             isLyricsView={isLyricsView}
@@ -752,7 +808,7 @@ const FullPlayerModal = ({
             trackIsLiked={trackIsLiked}
             displayTitle={displayTitle}
             displayArtist={displayArtist}
-            insets={{ ...insets, top: effectiveTopPeekHeight }}
+            insets={insets}
             width={width}
             height={height}
             contentAnimatedStyle={lyricsModalContentAnimatedStyle}
@@ -782,7 +838,7 @@ const FullPlayerModal = ({
                 left: 0,
                 right: 0,
                 bottom: 0,
-                paddingTop: effectiveTopPeekHeight + 10,
+                paddingTop: effectiveTopInset + 6,
                 paddingBottom: 0,
                 width: width,
                 height: height,
@@ -800,6 +856,18 @@ const FullPlayerModal = ({
               >
                 <GestureDetector gesture={mainSwipeGesture}>
                   <Animated.View style={{ width: '100%', flex: 1, alignItems: 'center', backgroundColor: 'transparent' }}>
+                    {/* Top Grabber / Pull Trigger */}
+                    <Animated.View style={topGrabberAnimatedStyle}>
+                      <TouchableOpacity
+                        onPress={handleClose}
+                        hitSlop={{ top: 15, bottom: 20, left: 40, right: 40 }}
+                        activeOpacity={0.6}
+                        style={styles.topGrabberContainer}
+                      >
+                        <View style={styles.topGrabberPill} />
+                      </TouchableOpacity>
+                    </Animated.View>
+
                     <Animated.View style={[styles.artContainer, albumArtFlipStyle]}>
                       <Animated.View style={[{ width: '100%', height: '100%', overflow: 'hidden' }, albumArtRadiusStyle]}>
                         <CoverImage
@@ -899,21 +967,10 @@ const FullPlayerModal = ({
                 <View
                   style={{
                     width: '100%',
-                    height: (insets?.bottom || 34) + 20,
-                    alignItems: 'center',
-                    justifyContent: 'flex-start',
-                    paddingTop: 8,
+                    height: (insets?.bottom || 34) + 12,
+                    backgroundColor: 'transparent',
                   }}
-                >
-                  <View
-                    style={{
-                      width: 36,
-                      height: 4,
-                      borderRadius: 2,
-                      backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                    }}
-                  />
-                </View>
+                />
               </GestureDetector>
             </Animated.View>
 

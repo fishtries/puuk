@@ -31,6 +31,7 @@ export function normalizeTrackDto(source) {
     stream_url: source?.stream_url,
     is_liked: !!source?.is_liked,
     coverArt: source?.coverArt || `${SERVER_URL}/api/cover/${id}`,
+    cover_color: source?.cover_color,
   };
 }
 
