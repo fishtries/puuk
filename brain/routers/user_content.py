@@ -26,6 +26,9 @@ def get_base_url(request: Request) -> str:
 def like_track(track_id: str, current_user: dict = Depends(get_current_user)):
     track = db.get_track(track_id)
     if not track:
+        from services.media_locations import ensure_track_in_db
+        track = ensure_track_in_db(track_id)
+    if not track:
         raise HTTPException(status_code=404, detail="Трек не найден")
     
     db.add_favorite(current_user["id"], track_id)
@@ -51,6 +54,9 @@ def get_favorites(request: Request, current_user: dict = Depends(get_current_use
 def log_history(track_id: str, current_user: dict = Depends(get_current_user)):
     track = db.get_track(track_id)
     if not track:
+        from services.media_locations import ensure_track_in_db
+        track = ensure_track_in_db(track_id)
+    if not track:
         raise HTTPException(status_code=404, detail="Трек не найден")
         
     db.add_history(current_user["id"], track_id)
@@ -68,6 +74,9 @@ def get_history(request: Request, limit: int = 50, current_user: dict = Depends(
 @router.post("/tracks/{track_id}/dislike", summary="Поставить дизлайк треку (скрыть из волны)")
 def dislike_track(track_id: str, current_user: dict = Depends(get_current_user)):
     track = db.get_track(track_id)
+    if not track:
+        from services.media_locations import ensure_track_in_db
+        track = ensure_track_in_db(track_id)
     if not track:
         raise HTTPException(status_code=404, detail="Трек не найден")
         

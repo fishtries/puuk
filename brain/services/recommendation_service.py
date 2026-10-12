@@ -477,6 +477,9 @@ def build_wave_track_payload(
     if db_track is None:
         db_track = db.get_track(track_id)
     if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id, pick.payload)
+    if not db_track:
         from services.media_locations import extract_full_metadata
         title, artist, _, _, duration = extract_full_metadata(pick.payload.get("file_path", ""))
         file_path = pick.payload.get("file_path", "")

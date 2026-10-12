@@ -61,3 +61,63 @@ def scan_library():
             added += 1
 
     return {"status": "success", "tracks_scanned": added}
+
+
+def sync_missing_tracks_to_db() -> dict:
+    """
+    Фоновая сверка: добавляет в SQLite треки, существующие в Qdrant или на диске,
+    но отсутствующие в puuk.db. Гарантирует целостность базы без полного пересканирования.
+    """
+    from services.media_locations import ensure_track_in_db, ensure_track_from_file, client
+    from config import COLLECTION_NAME
+
+    synced_qdrant = 0
+    synced_disk = 0
+
+    # 1. Синхронизация точек из Qdrant
+    try:
+        offset = None
+        while True:
+            records, next_page = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=250,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for record in records:
+                point_id = str(record.id)
+                if not db.get_track(point_id):
+                    row = ensure_track_in_db(point_id, record.payload)
+                    if row:
+                        synced_qdrant += 1
+            if next_page is None:
+                break
+            offset = next_page
+    except Exception as e:
+        print(f"[sync_missing_tracks_to_db] Qdrant scroll warning: {e}")
+
+    # 2. Быстрая проверка новых файлов на диске
+    try:
+        effective_music_dir = get_effective_music_dir()
+        base_path = Path(effective_music_dir)
+        if base_path.exists() and base_path.is_dir():
+            for file_path in base_path.rglob("*"):
+                if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                    rel_path = str(file_path.relative_to(base_path))
+                    track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
+                    if not db.get_track(track_id):
+                        row = ensure_track_from_file(str(file_path), track_id=track_id)
+                        if row:
+                            synced_disk += 1
+    except Exception as e:
+        print(f"[sync_missing_tracks_to_db] Disk check warning: {e}")
+
+    if synced_qdrant or synced_disk:
+        print(f"[sync_missing_tracks_to_db] Восстановлено: {synced_qdrant} из Qdrant, {synced_disk} с диска")
+
+    return {
+        "status": "success",
+        "synced_from_qdrant": synced_qdrant,
+        "synced_from_disk": synced_disk,
+    }

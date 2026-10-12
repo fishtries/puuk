@@ -9,7 +9,7 @@ try:
 except ImportError:
     from .security import hash_password
 
-from repositories.base import get_connection
+from repositories.base import get_connection, CATALOG_META_TABLE_SQL
 
 
 def _ensure_columns(cursor, table_name: str, expected_columns: dict):
@@ -121,6 +121,9 @@ def verify_and_repair_schema(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_loudness_status ON tracks(loudness_status);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_title ON albums(title_normalized);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_artist ON albums(album_artist_normalized);")
+
+    # 4. Таблица-счётчик версии каталога
+    cursor.execute(CATALOG_META_TABLE_SQL)
 
 
 
@@ -243,6 +246,10 @@ def init_db():
     );
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_mutation_journal_track ON track_mutation_journal(track_id, created_at DESC);")
+
+    # Таблица-счётчик версии каталога (HTTP-кэш /api/tracks): инкрементируется
+    # мутациями каталога вместо тяжёлого агрегирующего запроса на каждый запрос.
+    cursor.execute(CATALOG_META_TABLE_SQL)
 
     # 5. Таблица плейлистов
     cursor.execute("""

@@ -52,7 +52,7 @@ def resolve_track_file_path(db_track: Dict[str, Any]) -> Tuple[str, str]:
 
     effective_dir = get_music_dir()
     
-    # Try direct relative path inside effective_dir
+    # 1. Try direct relative or safe absolute path inside effective_dir
     try:
         candidate = validate_safe_path(rel_path, effective_dir)
         if os.path.exists(candidate):
@@ -60,7 +60,17 @@ def resolve_track_file_path(db_track: Dict[str, Any]) -> Tuple[str, str]:
     except (PermissionError, ValueError):
         pass
 
-    # Try basename inside effective_dir
+    # 2. Try stripping redundant "music/" prefix if path was saved as music/...
+    if rel_path.startswith("music/") or rel_path.startswith("./music/"):
+        stripped = rel_path.split("music/", 1)[1]
+        try:
+            cand_stripped = validate_safe_path(stripped, effective_dir)
+            if os.path.exists(cand_stripped):
+                return cand_stripped, effective_dir
+        except (PermissionError, ValueError):
+            pass
+
+    # 3. Try basename inside effective_dir
     basename = os.path.basename(rel_path)
     try:
         candidate_base = validate_safe_path(basename, effective_dir)
@@ -69,7 +79,18 @@ def resolve_track_file_path(db_track: Dict[str, Any]) -> Tuple[str, str]:
     except (PermissionError, ValueError):
         pass
 
-    # Check local temp_audio fallback
+    # 4. Check strict candidates / Qdrant fallback
+    from services.media_locations import locate_track_file_strict_candidates
+    fb_path = locate_track_file_strict_candidates(rel_path, db_track.get("id", ""))
+    if fb_path and os.path.exists(fb_path):
+        try:
+            cand_fb = validate_safe_path(fb_path, effective_dir)
+            if os.path.exists(cand_fb):
+                return cand_fb, effective_dir
+        except (PermissionError, ValueError):
+            pass
+
+    # 5. Check local temp_audio fallback
     temp_audio_dir = os.path.realpath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio"))
     if os.path.exists(temp_audio_dir):
         try:
@@ -186,6 +207,9 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     """
     db_track = db.get_track(track_id)
     if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id)
+    if not db_track:
         raise HTTPException(status_code=404, detail="Track not found")
 
     abs_path, effective_dir = resolve_track_file_path(db_track)
@@ -194,6 +218,7 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     actual_meta = read_audio_metadata(abs_path)
 
     # Check for desynchronization
+    file_stem = os.path.splitext(os.path.basename(abs_path))[0]
     stat = os.stat(abs_path)
     if stat.st_mtime_ns != db_track.get("file_mtime_ns") or stat.st_size != db_track.get("file_size"):
         # Auto-resync SQLite with actual file state
@@ -207,6 +232,12 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
             album_id = db.resolve_album(actual_meta.album, album_artist=fallback_artist, year=actual_meta.year)
         else:
             album_id = db_track.get("album_id")
+
+        if (not actual_meta.title or actual_meta.title == file_stem) and db_track.get("title"):
+            actual_meta.title = db_track["title"]
+        if (not actual_meta.artist or actual_meta.artist == "Неизвестный исполнитель") and db_track.get("artist"):
+            actual_meta.artist = db_track["artist"]
+
         db.update_track_metadata_from_audio(track_id, actual_meta, album_id=album_id, cover_version_inc=False)
         db_track = db.get_track(track_id)
 
@@ -238,10 +269,18 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
         except Exception:
             auto_genres_val = None
 
+    effective_title = actual_meta.title
+    if (not effective_title or effective_title == file_stem) and db_track.get("title"):
+        effective_title = db_track["title"]
+
+    effective_artist = actual_meta.artist
+    if (not effective_artist or effective_artist == "Неизвестный исполнитель") and db_track.get("artist"):
+        effective_artist = db_track["artist"]
+
     return {
         "id": track_id,
-        "title": actual_meta.title or db_track["title"],
-        "artist": actual_meta.artist or db_track["artist"],
+        "title": effective_title or db_track["title"],
+        "artist": effective_artist or db_track["artist"],
         "album": album_name,
         "album_artist": actual_meta.album_artist or db_track.get("album_artist"),
         "year": actual_meta.year or db_track.get("year"),
@@ -319,6 +358,9 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     альбомный сервис (весь релиз редактируется единым идентификатором).
     """
     db_track = db.get_track(track_id)
+    if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id)
     if not db_track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -421,6 +463,9 @@ def resync_track_from_disk(track_id: str, current_user: Optional[Dict[str, Any]]
     Idempotent recovery: re-reads actual audio file and updates SQLite.
     """
     db_track = db.get_track(track_id)
+    if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id)
     if not db_track:
         raise HTTPException(status_code=404, detail="Track not found")
 

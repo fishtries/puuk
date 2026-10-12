@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI):
             print("[Startup] База puuk.db пуста, выполняем сканирование библиотеки...")
             scan_library()
             print("[Startup] Сканирование завершено.")
+        else:
+            import asyncio
+            from services.library_service import sync_missing_tracks_to_db
+            asyncio.create_task(asyncio.to_thread(sync_missing_tracks_to_db))
     except Exception as e:
         print(f"[Startup] Предупреждение при стартовой проверке библиотеки: {e}")
     yield

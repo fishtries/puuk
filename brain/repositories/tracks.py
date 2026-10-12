@@ -3,7 +3,11 @@ import json
 from typing import Optional, List, Dict, Any
 
 from repositories import albums
-from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
+from repositories.base import (
+    get_connection,
+    TRACK_SUMMARY_COLUMNS,
+    bump_catalog_version,
+)
 
 
 def get_all_tracks():
@@ -96,6 +100,8 @@ def delete_track(track_id) -> bool:
         cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         deleted = cursor.rowcount > 0
         cursor.execute("DELETE FROM track_mutation_journal WHERE track_id = ?", (track_id,))
+        if deleted:
+            bump_catalog_version(conn)
         conn.commit()
         return deleted
     except Exception:
@@ -210,6 +216,7 @@ def add_or_update_track(
             INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -217,10 +224,12 @@ def update_track_cover_color(track_id, cover_color):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE tracks SET cover_color = ? WHERE id = ?", (cover_color, track_id))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
 def update_track_lyrics(track_id, lyrics, lyrics_source=None, lyrics_status=None):
+    """Обновляет текст трека. Не входит в TRACK_SUMMARY_COLUMNS — версию каталога не двигает."""
     conn = get_connection()
     cursor = conn.cursor()
     if lyrics_source or lyrics_status:
@@ -306,6 +315,7 @@ def update_track_metadata(track_id, title, artist, album_id, lyrics):
         SET title = ?, artist = ?, album_id = ?, lyrics = ?
         WHERE id = ?
     """, (title, artist, album_id, lyrics, track_id))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -369,6 +379,7 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
         meta.file_mtime_ns,
         track_id
     ))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -441,6 +452,7 @@ def update_track_auto_genres(
                 auto_genre_sync_pending = ?
             WHERE id = ?
         """, (serialized, model_name, status, int(sync_pending), str(track_id)))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -485,6 +497,7 @@ def mark_auto_genre_failed(track_id: str) -> None:
             auto_genre_updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
     """, (str(track_id),))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -542,6 +555,7 @@ def update_track_loudness(
         file_mtime_ns,
         str(track_id),
     ))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -567,6 +581,7 @@ def set_track_loudness_status(track_id: str, status: str, error: Optional[str] =
                 loudness_error = NULL
             WHERE id = ?
         """, (status, str(track_id)))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -591,6 +606,7 @@ def reset_track_loudness_pending(
             loudness_retry_count = 0
         WHERE id = ?
     """, (file_size, file_mtime_ns, file_size, file_mtime_ns, str(track_id)))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 
@@ -607,6 +623,8 @@ def reset_failed_loudness() -> int:
         WHERE loudness_status = 'failed'
     """)
     count = cursor.rowcount
+    if count:
+        bump_catalog_version(conn)
     conn.commit()
     conn.close()
     return count

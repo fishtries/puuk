@@ -6,8 +6,10 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -42,6 +44,9 @@ class TestCoverCache(unittest.TestCase):
 
     def _get(self, headers=None):
         return self.client.get(f"/api/cover/{TRACK_ID}", headers={**self.auth, **(headers or {})})
+
+    def _get_color(self, track_id):
+        return self.client.get(f"/api/color/{track_id}", headers=self.auth)
 
     def test_01_first_request_has_etag_and_cache_control(self):
         resp = self._get()
@@ -100,6 +105,52 @@ class TestCoverCache(unittest.TestCase):
 
     def _get_ghost(self, track_id, etag):
         return self.client.get(f"/api/cover/{track_id}", headers={**self.auth, "If-None-Match": etag})
+
+    def test_06_color_qdrant_relative_path_uses_safe_music_root(self):
+        track_id = str(uuid.uuid4())
+        db.add_or_update_track(
+            track_id=track_id,
+            file_path="not-present.mp3",
+            title="Qdrant Color Track",
+            album_id=None,
+            artist="Cache Artist",
+        )
+        with tempfile.TemporaryDirectory() as music_dir:
+            artist_dir = os.path.join(music_dir, "Artist")
+            os.makedirs(artist_dir)
+            audio_path = os.path.join(artist_dir, "remote.mp3")
+            with open(audio_path, "wb") as audio_file:
+                audio_file.write(b"audio")
+
+            point = mock.MagicMock()
+            point.payload = {"file_path": "Artist/remote.mp3"}
+            with mock.patch("routers.streaming.get_effective_music_dir", return_value=music_dir), \
+                 mock.patch("services.media_locations.get_effective_music_dir", return_value=music_dir), \
+                 mock.patch("routers.streaming.client.retrieve", return_value=[point]), \
+                 mock.patch("routers.streaming.extract_dominant_hex", return_value="#123abc") as extract_color, \
+                 mock.patch("routers.streaming.db.update_track_cover_color") as save_color:
+                response = self._get_color(track_id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"color": "#123abc"})
+        extract_color.assert_called_once_with(audio_path)
+        save_color.assert_called_once_with(track_id, "#123abc")
+        conn = db.get_connection()
+        conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        conn.commit()
+        conn.close()
+
+    def test_07_color_qdrant_path_traversal_is_rejected(self):
+        track_id = str(uuid.uuid4())
+        point = mock.MagicMock()
+        point.payload = {"file_path": "/etc/passwd"}
+        with mock.patch("routers.streaming.client.retrieve", return_value=[point]), \
+             mock.patch("routers.streaming.extract_dominant_hex") as extract_color:
+            response = self._get_color(track_id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"color": "#13141f"})
+        extract_color.assert_not_called()
 
 
 if __name__ == "__main__":

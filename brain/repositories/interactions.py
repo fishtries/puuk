@@ -58,6 +58,23 @@ def get_favorite_track_ids(user_id: int) -> set[str]:
     conn.close()
     return ids
 
+def get_favorites_fingerprint(user_id: int) -> str:
+    """
+    Дешёвый отпечаток лайков пользователя для валидации кэша /api/tracks:
+    (число лайков, max(added_at, id)) — детерминирован без загрузки всех id.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) AS cnt,
+               COALESCE(MAX(added_at), '') AS max_added,
+               COALESCE(MAX(rowid), 0) AS max_rowid
+        FROM user_favorites WHERE user_id = ?
+    """, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return f"{row['cnt']}-{row['max_added']}-{row['max_rowid']}"
+
 # --- История (History) ---
 
 def add_history(user_id: int, track_id: str):

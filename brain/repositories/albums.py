@@ -9,7 +9,11 @@ import sqlite3
 import unicodedata
 from typing import Any, Dict, List, Optional
 
-from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
+from repositories.base import (
+    get_connection,
+    TRACK_SUMMARY_COLUMNS,
+    bump_catalog_version,
+)
 
 UNKNOWN_ALBUM_TITLE = "Unknown Album"
 VARIOUS_ARTISTS = "Various Artists"
@@ -222,6 +226,8 @@ def update_album_fields(album_id, title=None, album_artist=None, year=UNCHANGED)
         f"UPDATE albums SET {', '.join(set_clauses)} WHERE id = ?",
         tuple(params),
     )
+    # Название альбома видно в DTO каталога треков (поле album) — двигаем версию.
+    bump_catalog_version(conn)
     conn.commit()
     updated = get_album(album_id)
     conn.close()
@@ -240,6 +246,8 @@ def rebind_tracks_to_album(track_ids: List[str], target_album_id) -> int:
         (target_album_id, *track_ids),
     )
     count = cursor.rowcount
+    if count:
+        bump_catalog_version(conn)
     conn.commit()
     conn.close()
     return count
@@ -273,6 +281,7 @@ def merge_album_into(source_album_id, target_album_id) -> None:
                 tuple(params),
             )
     cursor.execute("DELETE FROM albums WHERE id = ?", (source_album_id,))
+    bump_catalog_version(conn)
     conn.commit()
     conn.close()
 

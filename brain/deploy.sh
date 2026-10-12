@@ -9,7 +9,7 @@ LOCAL_DIR="${SCRIPT_DIR}/"
 SERVER_IP="${SERVER_IP:-192.168.1.117}"
 SERVER_PORT="${SERVER_PORT:-59348}"
 SERVER_USER="${SERVER_USER:-fish}"
-REMOTE_DIR="${REMOTE_DIR:-/home/fish/apps/puuk/brain/}"
+REMOTE_DIR="${REMOTE_DIR:-/home/fish/apps/puuk/puuk/brain/}"
 
 # Опции
 DO_INSTALL=false
@@ -99,6 +99,11 @@ fi
 echo "📦 Синхронизация файлов brain..."
 rsync "${RSYNC_ARGS[@]}" "$LOCAL_DIR" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR"
 
+if [ "$DRY_RUN" = false ]; then
+    echo "🔄 Перезапуск backend (puuk-brain)..."
+    ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP" 'systemctl restart puuk-brain 2>/dev/null || pkill -9 -f "[p]uuk/brain.*uvicorn" 2>/dev/null || true'
+fi
+
 BOT_LOCAL_DIR="${SCRIPT_DIR}/../tg_music_bot/"
 if [ -d "$BOT_LOCAL_DIR" ]; then
     BOT_REMOTE_DIR="$(dirname "${REMOTE_DIR%/}")/tg_music_bot/"
@@ -118,7 +123,7 @@ if [ -d "$BOT_LOCAL_DIR" ]; then
     
     if [ "$DRY_RUN" = false ]; then
         echo "🔄 Перезапуск Telegram-бота..."
-        ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP" 'kill $(pgrep -f "[t]g_music_bot/venv/bin/python bot.py") 2>/dev/null || true'
+        ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP" 'systemctl restart puuk-telegram-bot 2>/dev/null || pkill -9 -f "[t]g_music_bot/venv/bin/python bot\.py" 2>/dev/null || true'
     fi
 fi
 

@@ -129,12 +129,14 @@ class TestMediaTicket(unittest.TestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_10_unknown_track_is_404_no_ticket(self):
-        """Трек отсутствует в SQLite -> 404, тикет не выдаётся."""
+        """Неизвестный Qdrant/SQLite трек -> 404, тикет не выдаётся."""
         ghost_id = str(uuid.uuid4())
-        with mock.patch("routers.streaming.create_media_ticket_with_expiry") as create_ticket:
+        with mock.patch("services.media_locations.client.retrieve", return_value=[]), \
+             mock.patch("routers.streaming.create_media_ticket_with_expiry") as create_ticket:
             resp = self.client.post("/api/media-ticket", json={"track_id": ghost_id}, headers=self.headers)
         self.assertEqual(resp.status_code, 404)
         create_ticket.assert_not_called()
+        self.assertIsNone(db.get_track(ghost_id))
 
     def test_11_expired_ticket_url_still_shape_compatible(self):
         """Контракт ответа: url/expires_in/expires_at; url играет без заголовков."""
@@ -153,10 +155,11 @@ class TestMediaTicket(unittest.TestCase):
 
 
 class TestStreamContract(unittest.TestCase):
-    """Контракт /api/stream: SQLite-only, Range, заголовки, отсутствие Qdrant.
+    """Контракт /api/stream: SQLite-first, Range, заголовки, recovery на cache miss.
 
-    Критический путь воспроизведения не должен зависеть от Qdrant: временный
-    сбой векторной БД не ломает стриминг просканированной библиотеки.
+    Обычное воспроизведение уже зарегистрированного трека не зависит от Qdrant.
+    Для отсутствующей записи разрешено безопасное восстановление через Qdrant,
+    если он указывает на существующий файл внутри музыкального каталога.
     """
 
     @classmethod
@@ -177,6 +180,7 @@ class TestStreamContract(unittest.TestCase):
         cls.missing_file_track_id = str(uuid.uuid4())
         cls.ghost_track_id = str(uuid.uuid4())
         cls.qdrant_only_track_id = str(uuid.uuid4())
+        cls.ticket_recovery_track_id = str(uuid.uuid4())
 
         db.add_or_update_track(
             track_id=cls.track_id,
@@ -204,8 +208,14 @@ class TestStreamContract(unittest.TestCase):
         db.delete_user(cls.user_id)
         conn = db.get_connection()
         conn.cursor().execute(
-            "DELETE FROM tracks WHERE id IN (?, ?, ?)",
-            (cls.track_id, cls.missing_file_track_id, cls.ghost_track_id),
+            "DELETE FROM tracks WHERE id IN (?, ?, ?, ?, ?)",
+            (
+                cls.track_id,
+                cls.missing_file_track_id,
+                cls.ghost_track_id,
+                cls.qdrant_only_track_id,
+                cls.ticket_recovery_track_id,
+            ),
         )
         conn.commit()
         conn.close()
@@ -213,12 +223,16 @@ class TestStreamContract(unittest.TestCase):
     def _get(self, track_id: str, headers: dict | None = None):
         return self.client.get(f"/api/stream/{track_id}", headers=headers or self.headers)
 
-    def test_01_full_response_headers(self):
-        resp = self._get(self.track_id)
+    def test_01_full_response_headers_and_sqlite_only_path(self):
+        with mock.patch("routers.streaming.client.retrieve") as retrieve:
+            with self.assertLogs("puuk.streaming", level="INFO") as captured:
+                resp = self._get(self.track_id)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.headers["accept-ranges"], "bytes")
         self.assertTrue(resp.headers["content-type"].startswith("audio/"))
         self.assertEqual(int(resp.headers["content-length"]), os.path.getsize(SAMPLE_MP3))
+        retrieve.assert_not_called()
+        self.assertTrue(any("path=sqlite" in line for line in captured.output))
 
     def test_02_range_start(self):
         with open(SAMPLE_MP3, "rb") as f:
@@ -264,6 +278,18 @@ class TestStreamContract(unittest.TestCase):
         resp = self._get(self.missing_file_track_id)
         self.assertEqual(resp.status_code, 404)
 
+    def test_07b_missing_file_ticket_is_404_without_qdrant(self):
+        with mock.patch("routers.streaming.client.retrieve") as retrieve, \
+             mock.patch("routers.streaming.create_media_ticket_with_expiry") as create_ticket:
+            resp = self.client.post(
+                "/api/media-ticket",
+                json={"track_id": self.missing_file_track_id},
+                headers=self.headers,
+            )
+        self.assertEqual(resp.status_code, 404)
+        retrieve.assert_not_called()
+        create_ticket.assert_not_called()
+
     def test_08_db_track_missing_file_does_not_touch_qdrant_and_logs(self):
         with mock.patch("routers.streaming.client.retrieve") as retrieve:
             with self.assertLogs("puuk.streaming", level="WARNING") as captured:
@@ -272,18 +298,53 @@ class TestStreamContract(unittest.TestCase):
         retrieve.assert_not_called()
         self.assertTrue(any("file missing" in line for line in captured.output))
 
-    def test_09_unknown_track_id_is_404_without_qdrant(self):
-        with mock.patch("routers.streaming.client.retrieve") as retrieve:
+    def test_09_unknown_track_id_is_404(self):
+        with mock.patch("services.media_locations.client.retrieve", return_value=[]):
             resp = self._get(self.ghost_track_id)
         self.assertEqual(resp.status_code, 404)
-        retrieve.assert_not_called()
+        self.assertIsNone(db.get_track(self.ghost_track_id))
 
-    def test_10_qdrant_only_track_not_streamable(self):
-        """Даже если Qdrant знает путь, стрим отвечает 404 (SQLite-only)."""
-        with mock.patch("routers.streaming.client.retrieve") as retrieve:
-            resp = self._get(self.qdrant_only_track_id)
+    def test_09b_unsafe_recovery_payload_is_404_without_placeholder(self):
+        point = mock.MagicMock()
+        point.id = self.ghost_track_id
+        point.payload = {"file_path": "/etc/passwd", "title": "Outside", "artist": "Unknown"}
+        with mock.patch("services.media_locations.client.retrieve", return_value=[point]) as retrieve:
+            resp = self._get(self.ghost_track_id)
         self.assertEqual(resp.status_code, 404)
-        retrieve.assert_not_called()
+        self.assertIsNone(db.get_track(self.ghost_track_id))
+        # Recovery ограничен: один retrieve, повторный запрос по тому же ID не выполняется.
+        retrieve.assert_called_once()
+
+    def test_10_missing_track_auto_recovered_and_streamable(self):
+        """Если трек отсутствует в SQLite, но есть в Qdrant и на диске — восстанавливается и играет."""
+        mock_point = mock.MagicMock()
+        mock_point.id = self.qdrant_only_track_id
+        mock_point.payload = {
+            "file_path": SAMPLE_MP3,
+            "title": "Recovered Stream Track",
+            "artist": "Recovered Artist",
+            "duration": 120.0,
+        }
+        with mock.patch("services.media_locations.client.retrieve", return_value=[mock_point]) as retrieve:
+            with self.assertLogs("puuk.streaming", level="INFO") as captured:
+                resp = self._get(self.qdrant_only_track_id)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(int(resp.headers["content-length"]), os.path.getsize(SAMPLE_MP3))
+            self.assertIsNotNone(db.get_track(self.qdrant_only_track_id))
+            self.assertTrue(any("source=stream" in line and "recovered=True" in line for line in captured.output))
+            self.assertTrue(any("path=recovery" in line for line in captured.output))
+            self.assertEqual(retrieve.call_count, 1)
+
+        # Восстановленная запись становится обычным SQLite-hit: повторный stream
+        # и выдача media-ticket уже не обращаются к Qdrant.
+        with mock.patch("services.media_locations.client.retrieve") as retrieve_again:
+            ticket_resp = self.client.post(
+                "/api/media-ticket", json={"track_id": self.qdrant_only_track_id}, headers=self.headers
+            )
+            self.assertEqual(ticket_resp.status_code, 200)
+            resp = self._get(self.qdrant_only_track_id)
+            self.assertEqual(resp.status_code, 200)
+            retrieve_again.assert_not_called()
 
     def test_11_bearer_and_ticket_auth_still_work(self):
         resp = self._get(self.track_id)
@@ -294,6 +355,71 @@ class TestStreamContract(unittest.TestCase):
         ).json()
         resp = self.client.get(body["url"])
         self.assertEqual(resp.status_code, 200)
+
+    def test_12_media_ticket_recovers_missing_track(self):
+        """SQLite miss при выдаче тикета: recovery из Qdrant -> тикет -> воспроизведение."""
+        mock_point = mock.MagicMock()
+        mock_point.id = self.ticket_recovery_track_id
+        mock_point.payload = {
+            "file_path": SAMPLE_MP3,
+            "title": "Ticket Recovery Track",
+            "artist": "Recovered Artist",
+            "duration": 120.0,
+        }
+        with mock.patch("services.media_locations.client.retrieve", return_value=[mock_point]) as retrieve:
+            resp = self.client.post(
+                "/api/media-ticket", json={"track_id": self.ticket_recovery_track_id}, headers=self.headers
+            )
+        self.assertEqual(resp.status_code, 200)
+        # Recovery ограничен: ровно один запрос к Qdrant (без повторного retrieve).
+        retrieve.assert_called_once()
+        self.assertIsNotNone(db.get_track(self.ticket_recovery_track_id))
+
+        # Восстановленный трек: воспроизведение по тикету и повторная выдача — без Qdrant.
+        with mock.patch("services.media_locations.client.retrieve") as retrieve_again:
+            stream_resp = self.client.get(resp.json()["url"])
+            self.assertEqual(stream_resp.status_code, 200)
+            self.assertEqual(int(stream_resp.headers["content-length"]), os.path.getsize(SAMPLE_MP3))
+            again = self.client.post(
+                "/api/media-ticket", json={"track_id": self.ticket_recovery_track_id}, headers=self.headers
+            )
+            self.assertEqual(again.status_code, 200)
+            retrieve_again.assert_not_called()
+
+    def test_13_deleted_track_ticket_is_404(self):
+        """Удалённый трек: новый тикет не выдаётся, ранее выданный тикет не играет."""
+        doomed_id = str(uuid.uuid4())
+        db.add_or_update_track(
+            track_id=doomed_id,
+            file_path=os.path.abspath(SAMPLE_MP3),
+            title="Doomed Track",
+            album_id=None,
+            artist="Contract Artist",
+            lyrics="",
+            added_by_user_id=self.user_id,
+        )
+        body = self.client.post(
+            "/api/media-ticket", json={"track_id": doomed_id}, headers=self.headers
+        ).json()
+        self.assertTrue(body["url"].startswith(f"/api/stream/{doomed_id}?mt="))
+
+        conn = db.get_connection()
+        conn.cursor().execute("DELETE FROM tracks WHERE id = ?", (doomed_id,))
+        conn.commit()
+        conn.close()
+
+        # Трек удалён и в Qdrant отсутствует: recovery невозможен.
+        with mock.patch("services.media_locations.client.retrieve", return_value=[]) as retrieve:
+            resp = self.client.post(
+                "/api/media-ticket", json={"track_id": doomed_id}, headers=self.headers
+            )
+            self.assertEqual(resp.status_code, 404)
+            self.assertIsNone(db.get_track(doomed_id))
+
+            stream_resp = self.client.get(body["url"])
+            self.assertEqual(stream_resp.status_code, 404)
+            # По одному ограниченному recovery-запросу на каждый HTTP-запрос.
+            self.assertEqual(retrieve.call_count, 2)
 
 
 if __name__ == "__main__":

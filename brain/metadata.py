@@ -678,11 +678,19 @@ def validate_safe_path(rel_path: str, music_dir: str) -> str:
     if not rel_path or not rel_path.strip():
         raise ValueError("File path cannot be empty")
 
-    # Disallow absolute paths or explicit relative traversal indicators
-    if os.path.isabs(rel_path) or ".." in rel_path:
+    root = os.path.realpath(music_dir)
+
+    # If path is already absolute, verify it resides strictly inside root
+    if os.path.isabs(rel_path):
+        target = os.path.realpath(rel_path)
+        if os.path.commonpath((root, target)) != root:
+            raise PermissionError("Access denied: path traverses outside music directory")
+        return target
+
+    # Disallow explicit relative traversal indicators
+    if ".." in rel_path:
         raise PermissionError("Access denied: path traverses outside music directory")
 
-    root = os.path.realpath(music_dir)
     target = os.path.realpath(os.path.join(root, rel_path.lstrip("/")))
     if os.path.commonpath((root, target)) != root:
         raise PermissionError("Access denied: path traverses outside music directory")

@@ -92,6 +92,9 @@ def delete_track_everywhere(track_id: str, current_user: Dict[str, Any]) -> Dict
     """
     db_track = db.get_track(track_id)
     if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id)
+    if not db_track:
         raise HTTPException(status_code=404, detail="Трек не найден")
 
     check_track_edit_permissions(db_track, current_user)

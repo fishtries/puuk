@@ -1,6 +1,7 @@
 """Streaming endpoints: raw audio files, embedded covers, dominant cover color."""
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -12,7 +13,7 @@ from auth import (
     get_current_user,
     get_stream_user,
 )
-from config import MUSIC_DIR, DEFAULT_COVER_PATH, DEFAULT_COVER_COLOR
+from config import get_effective_music_dir, DEFAULT_COVER_PATH, DEFAULT_COVER_COLOR
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -45,16 +46,24 @@ def issue_media_ticket(
     Веб получает его по Bearer (обычный fetch), затем <audio> играет
     /api/stream/{id}?mt=... напрямую — поток с Range вместо полной blob-загрузки.
 
-    Трек проверяется в SQLite до выдачи: несуществующий/удалённый трек -> 404,
-    чтобы клиенты не получали тикет, ведущий к бесполезному запросу стрима.
+    Трек проверяется до выдачи: обычный путь — SQLite; при отсутствии записи
+    допускается одна попытка восстановления из Qdrant (файл должен существовать
+    внутри музыкального каталога). Несуществующий/удалённый/невоспроизводимый
+    трек -> 404, чтобы клиенты не получали тикет, ведущий к бесполезному запросу.
     """
     try:
         uuid.UUID(payload.track_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Невалидный track_id")
 
-    if not db.get_track(payload.track_id):
+    track = db.get_track(payload.track_id)
+    if not track:
+        track = _recover_missing_track(payload.track_id, "media-ticket")
+    if not track:
         raise HTTPException(status_code=404, detail="Трек не найден")
+
+    if not _resolve_db_file_path(track):
+        raise HTTPException(status_code=404, detail="Файл трека не найден")
 
     ticket, expires_at = create_media_ticket_with_expiry(current_user, payload.track_id)
     return MediaTicketResponse(
@@ -65,13 +74,38 @@ def issue_media_ticket(
 
 
 def _resolve_db_file_path(db_track: dict) -> Optional[str]:
-    """SQLite file_path -> абсолютный/относительный путь, валидный на диске."""
+    """SQLite file_path -> абсолютный путь к файлу внутри MUSIC_DIR."""
+    from services.media_locations import resolve_safe_music_file
     cand_path = db_track.get("file_path")
     if not cand_path:
         return None
-    if not cand_path.startswith("/"):
-        cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
-    return cand_path
+    safe = resolve_safe_music_file(cand_path)
+    if safe:
+        return safe
+    rel = cand_path.lstrip("/")
+    safe_rel = resolve_safe_music_file(os.path.join(get_effective_music_dir(), rel))
+    if safe_rel:
+        return safe_rel
+    safe_base = resolve_safe_music_file(os.path.join(get_effective_music_dir(), os.path.basename(cand_path)))
+    if safe_base:
+        return safe_base
+    return None
+
+
+def _recover_missing_track(track_id: str, source: str) -> Optional[dict]:
+    """Run the Qdrant recovery path only after an SQLite cache miss."""
+    from services.media_locations import ensure_track_in_db
+
+    started_at = time.perf_counter()
+    track = ensure_track_in_db(track_id)
+    logger.info(
+        "track recovery completed source=%s track_id=%s recovered=%s duration_ms=%.2f",
+        source,
+        track_id,
+        bool(track),
+        (time.perf_counter() - started_at) * 1000,
+    )
+    return track
 
 
 def _resolve_stream_file_path(
@@ -80,21 +114,15 @@ def _resolve_stream_file_path(
     db_track: Optional[dict] = None,
 ) -> str | None:
     """
-    SQLite-first file resolution with Qdrant fallback.
-
-    raise_on_qdrant_error=True reproduces legacy /api/stream semantics (HTTP 500
-    on Qdrant failure); cover/color endpoints historically swallowed the error
-    and fell back to defaults. db_track lets callers reuse an already loaded row.
-
-    Внимание: /api/stream этот хелпер больше не использует — стриминг идёт
-    только по SQLite (см. stream_track). Fallback остаётся для cover/color.
+    SQLite-first file resolution with safe path check and Qdrant fallback.
     """
+    from services.media_locations import resolve_safe_music_file
     file_path = None
     if db_track is None:
         db_track = db.get_track(track_id)
     if db_track:
         cand_path = _resolve_db_file_path(db_track)
-        if cand_path and os.path.isfile(cand_path):
+        if cand_path:
             file_path = cand_path
 
     if not file_path:
@@ -104,12 +132,16 @@ def _resolve_stream_file_path(
                 ids=[track_id],
                 with_payload=True,
             )
-            if records:
+            if records and records[0].payload:
                 cand_path = records[0].payload.get("file_path", "")
-                if cand_path and not cand_path.startswith("/"):
-                    cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
-                if cand_path and os.path.isfile(cand_path):
-                    file_path = cand_path
+                if cand_path:
+                    safe = resolve_safe_music_file(cand_path)
+                    if safe:
+                        file_path = safe
+                    else:
+                        safe_base = resolve_safe_music_file(os.path.join(get_effective_music_dir(), os.path.basename(cand_path)))
+                        if safe_base:
+                            file_path = safe_base
         except Exception as e:
             if raise_on_qdrant_error:
                 raise HTTPException(status_code=500, detail=str(e))
@@ -121,19 +153,28 @@ def _resolve_stream_file_path(
 def stream_track(track_id: str, current_user: dict = Depends(get_stream_user)):
     """
     Стриминг аудиофайла по track_id.
-
-    Критический путь воспроизведения: только SQLite (tracks.file_path ->
-    os.path.isfile -> FileResponse с поддержкой Range/206). Qdrant в путь
-    стриминга не вовлекается — временный сбой Qdrant не должен ломать
-    воспроизведение уже просканированной библиотеки.
+    Обычный путь читает SQLite и локальный файл; Qdrant используется только для
+    восстановления записи при SQLite cache miss.
     """
     try:
         uuid.UUID(track_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Невалидный track_id")
 
+    started_at = time.perf_counter()
     db_track = db.get_track(track_id)
+    recovery_path = not db_track
+    if not db_track:
+        db_track = _recover_missing_track(track_id, "stream")
+
     file_path = _resolve_db_file_path(db_track) if db_track else None
+    logger.info(
+        "stream file resolution completed path=%s track_id=%s found=%s duration_ms=%.2f",
+        "recovery" if recovery_path else "sqlite",
+        track_id,
+        bool(file_path and os.path.isfile(file_path)),
+        (time.perf_counter() - started_at) * 1000,
+    )
 
     if not file_path or not os.path.isfile(file_path):
         if db_track:
@@ -235,11 +276,7 @@ def get_track_color(
 
     file_path = None
     if db_track and db_track.get("file_path"):
-        cand_path = db_track["file_path"]
-        if not cand_path.startswith("/"):
-            cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
-        if os.path.isfile(cand_path):
-            file_path = cand_path
+        file_path = _resolve_db_file_path(db_track)
 
     if not file_path:
         try:
@@ -248,12 +285,17 @@ def get_track_color(
                 ids=[track_id],
                 with_payload=True,
             )
-            if records:
+            if records and records[0].payload:
                 cand_path = records[0].payload.get("file_path", "")
-                if cand_path and not cand_path.startswith("/"):
-                    cand_path = os.path.join(MUSIC_DIR, os.path.basename(cand_path))
-                if os.path.isfile(cand_path):
-                    file_path = cand_path
+                if cand_path:
+                    from services.media_locations import resolve_safe_music_file
+
+                    music_dir = get_effective_music_dir()
+                    file_path = resolve_safe_music_file(cand_path, music_dir)
+                    if not file_path:
+                        file_path = resolve_safe_music_file(
+                            os.path.join(music_dir, os.path.basename(cand_path)), music_dir
+                        )
         except Exception:
             pass
 

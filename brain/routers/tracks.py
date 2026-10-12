@@ -1,8 +1,10 @@
 """Track catalog endpoints: listing, details, metadata editing, resync."""
+import hashlib
 import uuid
 from typing import Optional, Literal, Union, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import db
@@ -12,6 +14,27 @@ from serializers import serialize_track
 from services.lyrics_service import get_track_lyrics_payload
 
 router = APIRouter(prefix="/api", tags=["tracks"])
+
+_TRACKS_CACHE_CONTROL = "private, max-age=30"
+
+
+def _build_tracks_etag(user_id: int, favorites_fp: str, catalog_version: int, limit: int, offset: int) -> str:
+    """
+    ETag страницы каталога: пользователь + отпечаток его лайков (is_liked
+    персональный), версия данных каталога (bump_catalog_version при мутациях),
+    окно limit/offset. Версия каталога — счётчик в catalog_meta, а не тяжёлый
+    агрегирующий запрос COUNT/MAX на каждый HTTP-запрос.
+    """
+    payload = f"tracks:{user_id}:{favorites_fp}:{catalog_version}:{limit}:{offset}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f'"tracks-{digest}"'
+
+
+def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
+    if not if_none_match:
+        return False
+    candidates = [candidate.strip() for candidate in if_none_match.split(",")]
+    return etag in candidates or "*" in candidates
 
 
 class TrackEditPayload(BaseModel):
@@ -69,12 +92,34 @@ def get_all_tracks(
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
 ):
-    """Возвращает страницу треков из базы данных SQLite (без lyrics) с персональными лайками."""
+    """Возвращает страницу треков из базы данных SQLite (без lyrics) с персональными лайками.
+
+    HTTP-кэш: ETag из (пользователь, отпечаток лайков, версия каталога, limit, offset),
+    Cache-Control: private, max-age=30. При совпадении If-None-Match — 304 без
+    чтения страницы и сериализации; мутации каталога инкрементируют версию
+    (bump_catalog_version), лайки меняют персональный отпечаток.
+    """
     try:
+        favorites_fp = db.get_favorites_fingerprint(current_user["id"])
+        etag = _build_tracks_etag(
+            current_user["id"],
+            favorites_fp,
+            db.get_catalog_version(),
+            limit,
+            offset,
+        )
+        cache_headers = {"ETag": etag, "Cache-Control": _TRACKS_CACHE_CONTROL}
+
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=cache_headers)
+
         records = db.get_tracks_page(limit=limit, offset=offset)
         fav_ids = db.get_favorite_track_ids(current_user["id"])
         base_url = get_base_url(request)
-        return [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in records]
+        payload = [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in records]
+        return JSONResponse(content=payload, headers=cache_headers)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

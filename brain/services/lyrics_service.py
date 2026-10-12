@@ -42,6 +42,9 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
     """Fetches lyrics from DB. If empty (or forced), queries LRCLIB/syncedlyrics."""
     db_track = db.get_track(track_id)
     if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id)
+    if not db_track:
         return None
 
     title = db_track.get('title') or ''

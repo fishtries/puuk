@@ -6,7 +6,7 @@ callers (api, routers, services, bot, tests) keep working untouched.
 
 New code should import from `repositories` directly.
 """
-from repositories.base import get_connection
+from repositories.base import get_connection, bump_catalog_version, get_catalog_version
 from repositories.schema import init_db, apply_migrations, _ensure_columns
 from repositories.users import (
     create_user,
@@ -26,6 +26,7 @@ from repositories.interactions import (
     is_favorite,
     get_user_favorites,
     get_favorite_track_ids,
+    get_favorites_fingerprint,
     add_history,
     get_user_history,
     add_dislike,
