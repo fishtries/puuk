@@ -17,6 +17,10 @@ _TEST_DB_DIR = os.environ.setdefault("PUUK_TESTS_TMP", tempfile.mkdtemp(prefix="
 os.environ.setdefault("PUUK_DB_PATH", os.path.join(_TEST_DB_DIR, "test_puuk.db"))
 # Детерминированный пароль админа в изолированной тестовой БД (тесты логинятся как admin/admin)
 os.environ.setdefault("PUUK_ADMIN_PASSWORD", "admin")
+# Тесты не должны писать в рабочий Qdrant (он доступен с машины разработчика).
+# Интеграционные точки доставки очереди отключены; тесты сервиса инжектят fake-клиент.
+os.environ.setdefault("EMBEDDING_QUEUE_ENABLED", "false")
+os.environ.setdefault("EMBEDDING_RECONCILE_ENABLED", "false")
 
 if 'config' in sys.modules:
     print("!!! CONFIG ALREADY LOADED at test_db_path import:", file=sys.stderr)

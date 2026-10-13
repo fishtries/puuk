@@ -212,6 +212,102 @@ async def process_mode_selection(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+def enqueue_embedding_tasks(track_records: list[dict], music_dir: str = MUSIC_DIR) -> dict | None:
+    """Best-effort: ставит скачанные треки в ML-очередь Qdrant.
+
+    Сюда попадают только подтверждённые файлы внутри MUSIC_DIR (см.
+    index_downloaded_tracks): fallback-имя несуществующего файла задание не
+    создаёт. Сбой Qdrant логируется и не должен превращать успешную загрузку в
+    неуспешную — повторную доставку выполнит периодическая сверка.
+    """
+    if not track_records:
+        return None
+    try:
+        from services.embedding_queue_service import (
+            enqueue_missing_tracks,
+            get_qdrant_client,
+            is_queue_delivery_enabled,
+        )
+        if not is_queue_delivery_enabled():
+            return None
+        counters = enqueue_missing_tracks(get_qdrant_client(), track_records, music_dir)
+        logging.info(f"Embedding queue (bot): {counters}")
+        return counters
+    except Exception as ex:
+        logging.error(f"Не удалось поставить задания ML для скачанных треков: {ex}")
+        return None
+
+
+def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir: str = MUSIC_DIR) -> int:
+    """Индексирует скачанные треки в SQLite и добавляет их в Лайки пользователя.
+
+    Для Spotify обрабатывает каждый трек из track_info['tracks'] с реальными
+    метаданными (title/artist/album), для остальных — сам track_info.
+    Плейлисты Spotify индексируются, но в Лайки не добавляются — только
+    одиночные треки.
+    """
+    if not puuk_user:
+        return 0
+
+    is_playlist = track_info.get('is_spotify') and track_info.get('total_tracks', 0) > 1
+    candidates = track_info.get('tracks', []) if track_info.get('is_spotify') else [track_info]
+    indexed = 0
+    real_files: list[dict] = []
+    for meta in candidates:
+        try:
+            title = meta.get('title') or 'Unknown Title'
+            artist = meta.get('artist') or 'Unknown Artist'
+            album = meta.get('album') or ''
+            filepath = meta.get('filepath')
+            has_real_file = False
+            if filepath and os.path.exists(filepath):
+                real_music_dir = os.path.realpath(music_dir)
+                real_file = os.path.realpath(filepath)
+                if real_file != real_music_dir and not real_file.startswith(real_music_dir + os.sep):
+                    logging.warning(f"Skipping index for path outside MUSIC_DIR: {filepath}")
+                    continue
+                rel_path = os.path.relpath(real_file, real_music_dir)
+                has_real_file = True
+            else:
+                rel_path = f"{title} - {artist}.mp3"
+
+            album_id = None
+            if album:
+                try:
+                    album_id = db.resolve_album(
+                        album,
+                        album_artist=meta.get('album_artist') or artist,
+                    )
+                except Exception as ex:
+                    logging.warning(f"Error resolving album for {rel_path}: {ex}")
+
+            track_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
+            db.add_or_update_track(
+                track_id=track_uuid,
+                file_path=rel_path,
+                title=title,
+                album_id=album_id,
+                artist=artist,
+                added_by_user_id=puuk_user['id'],
+                duration=meta.get('duration'),
+            )
+            if not is_playlist:
+                db.add_favorite(puuk_user['id'], track_uuid)
+            if has_real_file:
+                real_files.append({
+                    'id': track_uuid,
+                    'file_path': rel_path,
+                    'title': title,
+                    'artist': artist,
+                    'duration': meta.get('duration'),
+                })
+            indexed += 1
+        except Exception as ex:
+            logging.error(f"Error indexing track {meta.get('filepath')}: {ex}")
+    enqueue_embedding_tasks(real_files, music_dir)
+    return indexed
+
+
 async def process_download(user_id: int, chat_id: int, url: str, status_msg: Message):
     loop = asyncio.get_running_loop()
     last_edit_time = 0
@@ -265,35 +361,20 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
             puuk_user = get_puuk_user(user_id)
             liked_note = ""
             
-            # Автоматическая индексация и добавление в Лайки пользователя (7.1)
-            if puuk_user and not track_info.get('is_spotify'):
-                try:
-                    filepath = track_info.get('filepath')
-                    if filepath and os.path.exists(filepath):
-                        rel_path = os.path.relpath(filepath, MUSIC_DIR)
-                    else:
-                        rel_path = f"{track_info['title']} - {track_info['artist']}.mp3"
-
-                    track_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
-                    db.add_or_update_track(
-                        track_id=track_uuid,
-                        file_path=rel_path,
-                        title=track_info['title'],
-                        album_id=None,
-                        artist=track_info['artist'],
-                        added_by_user_id=puuk_user['id']
-                    )
-                    db.add_favorite(puuk_user['id'], track_uuid)
-                    liked_note = "\n❤️ <b>Трек автоматически добавлен в ваши Лайки в Puuk!</b>"
-                except Exception as ex:
-                    logging.error(f"Error auto-favoriting track: {ex}")
+            # Автоматическая индексация; в Лайки попадают только одиночные треки (7.1)
+            indexed_count = index_downloaded_tracks(track_info, puuk_user)
+            is_playlist = track_info.get('is_spotify') and track_info.get('total_tracks', 0) > 1
+            if indexed_count and not is_playlist:
+                liked_note = f"\n❤️ <b>Добавлено в ваши Лайки в Puuk: {indexed_count}</b>"
+            elif indexed_count and is_playlist:
+                liked_note = f"\n📚 <b>Проиндексировано треков: {indexed_count}</b>"
 
             if track_info.get('is_spotify'):
                 total_dl = track_info.get('total_tracks', 0)
                 if total_dl > 1:
-                    response_text = f"✅ <b>Плейлист Spotify успешно скачан!</b>\nЗагружено треков: {total_dl}\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>"
+                    response_text = f"✅ <b>Плейлист Spotify успешно скачан!</b>\nЗагружено треков: {total_dl}\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>{liked_note}"
                 elif total_dl == 1:
-                    response_text = f"✅ <b>Трек Spotify успешно скачан!</b>\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>"
+                    response_text = f"✅ <b>Трек Spotify успешно скачан!</b>\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>{liked_note}"
                 else:
                     response_text = f"❌ <b>Не удалось загрузить трек Spotify.</b>"
             else:

@@ -60,7 +60,32 @@ def scan_library():
 
             added += 1
 
-    return {"status": "success", "tracks_scanned": added}
+    result = {"status": "success", "tracks_scanned": added}
+    queue_counters = _deliver_embedding_queue()
+    if queue_counters is not None:
+        result["embedding_queue"] = queue_counters
+    return result
+
+
+def _deliver_embedding_queue():
+    """Best-effort: queue catalog tracks that are missing a Qdrant queue point.
+
+    A Qdrant outage must never fail the scan: the error is logged and the
+    periodic reconciliation retries on a later pass.
+    """
+    from services.embedding_queue_service import (
+        get_qdrant_client,
+        is_queue_delivery_enabled,
+        reconcile_embedding_queue,
+    )
+
+    if not is_queue_delivery_enabled():
+        return None
+    try:
+        return reconcile_embedding_queue(get_qdrant_client())
+    except Exception as e:
+        print(f"[scan] Не удалось поставить задания ML в Qdrant: {e}")
+        return None
 
 
 def sync_missing_tracks_to_db() -> dict:

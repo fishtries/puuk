@@ -3,6 +3,7 @@
 Assembles routers, wires services, and keeps backwards-compatible exports
 used by the test suite (apply_diversity_penalty, get_smart_recommendations, ...).
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,51 @@ from services.library_service import scan_library
 apply_diversity_penalty = recommendation_service.apply_diversity_penalty
 get_smart_recommendations = recommendation_service.get_smart_recommendations
 client = recommendation_service.client
+
+EMBEDDING_RECONCILE_ENABLED = os.getenv("EMBEDDING_RECONCILE_ENABLED", "true").lower() in ("true", "1", "yes")
+EMBEDDING_RECONCILE_INTERVAL_SEC = float(os.getenv("EMBEDDING_RECONCILE_INTERVAL_SEC", "300"))
+EMBEDDING_RECONCILE_LOCK_PATH = os.getenv("EMBEDDING_RECONCILE_LOCK", "/tmp/puuk_embedding_reconcile.lock")
+
+
+def _acquire_reconcile_owner():
+    """Ensures a single API process owns the periodic reconciliation.
+
+    With multiple workers each process would otherwise re-scan and re-write the
+    same queue. Returns a lock handle, ``True`` when file locking is
+    unavailable, or ``None`` when another process owns it.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return True
+    try:
+        handle = open(EMBEDDING_RECONCILE_LOCK_PATH, "w")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        return None
+
+
+async def _embedding_reconcile_loop():
+    """Periodically recovers SQLite tracks missing a Qdrant queue point.
+
+    Runs one pass at startup, then repeats at the configured interval. Passes
+    never overlap (the loop is sequential) and every failure is logged and
+    retried on the next iteration.
+    """
+    from services.embedding_queue_service import get_qdrant_client, reconcile_embedding_queue
+
+    while True:
+        try:
+            client = get_qdrant_client()
+            counters = await asyncio.to_thread(reconcile_embedding_queue, client)
+            if counters.get("enqueued") or counters.get("failed"):
+                print(f"[EmbeddingReconcile] {counters}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[EmbeddingReconcile] Ошибка сверки (повтор на следующем проходе): {e}")
+        await asyncio.sleep(EMBEDDING_RECONCILE_INTERVAL_SEC)
 
 
 @asynccontextmanager
@@ -35,12 +81,29 @@ async def lifespan(app: FastAPI):
             scan_library()
             print("[Startup] Сканирование завершено.")
         else:
-            import asyncio
             from services.library_service import sync_missing_tracks_to_db
             asyncio.create_task(asyncio.to_thread(sync_missing_tracks_to_db))
     except Exception as e:
         print(f"[Startup] Предупреждение при стартовой проверке библиотеки: {e}")
-    yield
+
+    reconcile_task = None
+    reconcile_owner = None
+    if EMBEDDING_RECONCILE_ENABLED:
+        reconcile_owner = _acquire_reconcile_owner()
+        if reconcile_owner is not None:
+            reconcile_task = asyncio.create_task(_embedding_reconcile_loop())
+
+    try:
+        yield
+    finally:
+        if reconcile_task is not None:
+            reconcile_task.cancel()
+            try:
+                await reconcile_task
+            except asyncio.CancelledError:
+                pass
+        if reconcile_owner is not None and reconcile_owner is not True:
+            reconcile_owner.close()
 
 
 ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() in ("true", "1", "yes")

@@ -70,6 +70,28 @@ def get_catalog_tracks() -> List[Dict[str, Any]]:
     conn.close()
     return tracks
 
+def get_tracks_for_embedding_reconcile() -> List[Dict[str, Any]]:
+    """Каталог для сверки ML-очереди: без lyrics, но с полными loudness-полями.
+
+    TRACK_SUMMARY_COLUMNS не содержит loudness_analysis_version/file_size/mtime,
+    которые нужны для проверки актуальности готового результата, поэтому здесь
+    собственный узкий список колонок вместо тяжёлого SELECT t.* (lyrics).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, file_path, title, artist, duration, genre,
+               file_size, file_mtime_ns,
+               loudness_status, loudness_lufs, true_peak_db, normalization_gain_db,
+               loudness_analysis_version, loudness_file_size, loudness_file_mtime_ns,
+               loudness_error, loudness_retry_count
+        FROM tracks
+    """)
+    tracks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tracks
+
+
 def get_track_artist_map() -> Dict[str, Optional[str]]:
     """Маппинг id -> artist для резолвера артистов (вместо полной выгрузки каталога)."""
     conn = get_connection()

@@ -5,3 +5,5 @@ spotdl
 mutagen
 bcrypt>=4.0.0
 numpy>=1.24.0
+# Нужен сервису постановки ML-заданий (services/embedding_queue_service.py из brain)
+qdrant-client>=1.7.0

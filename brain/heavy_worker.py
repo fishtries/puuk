@@ -4,7 +4,9 @@ import getpass
 import json
 import logging
 import os
+import shutil
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 import urllib.request
@@ -39,11 +41,15 @@ from services.loudness import (
 SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
 SERVER_SSH_PORT = int(os.getenv("SERVER_SSH_PORT", "59348"))
 SERVER_USER = os.getenv("SERVER_USER", "fish")
+WORKER_REQUEST_TIMEOUT_SEC = float(os.getenv("WORKER_REQUEST_TIMEOUT_SEC", "30"))
+WORKER_SSH_TIMEOUT_SEC = float(os.getenv("WORKER_SSH_TIMEOUT_SEC", "30"))
 
 QDRANT_URL = os.getenv("QDRANT_URL", f"http://{SERVER_IP}:6333")
 COLLECTION_NAME = "tracks"
 
 REMOTE_MUSIC_DIR = os.getenv("REMOTE_MUSIC_DIR", "/mnt/data/projects/puuk/music")
+WORKER_AUDIO_MODE = os.getenv("WORKER_AUDIO_MODE", "sftp").lower()
+WORKER_MUSIC_DIR = os.getenv("WORKER_MUSIC_DIR", os.getenv("MUSIC_DIR", REMOTE_MUSIC_DIR))
 TEMP_DIR = Path("./temp_audio")
 VECTOR_SIZE = 400
 
@@ -75,6 +81,47 @@ logger = logging.getLogger(__name__)
 SSH_PASSWORD = None
 
 
+class LocalAudioSource:
+    """SFTP-compatible adapter for audio files on the worker host."""
+
+    def __init__(self, root: str):
+        self.root = Path(root).resolve()
+
+    def _path(self, file_path: str) -> Path:
+        path = (self.root / file_path).resolve()
+        if path != self.root and self.root not in path.parents:
+            raise ValueError(f"Путь аудио выходит за пределы MUSIC_DIR: {file_path}")
+        return path
+
+    def stat(self, file_path: str):
+        return self._path(file_path).stat()
+
+    def get(self, file_path: str, local_path: str):
+        source = self._path(file_path)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        shutil.copyfile(source, local_path)
+
+    def close(self):
+        return None
+
+
+def setup_audio_source():
+    """Returns (optional SSH client, file source) for the selected mode."""
+    if WORKER_AUDIO_MODE == "local":
+        logger.info("Режим аудио: local (%s), SFTP не используется.", WORKER_MUSIC_DIR)
+        return None, LocalAudioSource(WORKER_MUSIC_DIR)
+    if WORKER_AUDIO_MODE != "sftp":
+        raise ValueError("WORKER_AUDIO_MODE должен быть 'local' или 'sftp'")
+    return setup_sftp()
+
+
+def audio_source_path(file_path: str) -> str:
+    if WORKER_AUDIO_MODE == "local":
+        return file_path
+    return f"{REMOTE_MUSIC_DIR}/{file_path}"
+
+
 def setup_sftp() -> Tuple[paramiko.SSHClient, paramiko.SFTPClient]:
     """Установка SSH и SFTP соединения с сервером."""
     global SSH_PASSWORD
@@ -87,6 +134,9 @@ def setup_sftp() -> Tuple[paramiko.SSHClient, paramiko.SFTPClient]:
         "port": SERVER_SSH_PORT,
         "username": SERVER_USER,
         "look_for_keys": True,
+        "timeout": WORKER_SSH_TIMEOUT_SEC,
+        "banner_timeout": WORKER_SSH_TIMEOUT_SEC,
+        "auth_timeout": WORKER_SSH_TIMEOUT_SEC,
     }
 
     ssh_config_path = os.path.expanduser("~/.ssh/config")
@@ -208,7 +258,8 @@ def get_unprocessed_tracks(client: QdrantClient) -> list:
                             key="needs_embedding",
                             match=MatchValue(value=True),
                         )
-                    ]
+                    ],
+                    must_not=[FieldCondition(key="embedding_status", match=MatchValue(value="missing_file"))],
                 ),
                 limit=100,
                 offset=offset,
@@ -221,9 +272,107 @@ def get_unprocessed_tracks(client: QdrantClient) -> list:
             offset = next_page
         except Exception as e:
             logger.error(f"Ошибка при запросе к Qdrant: {e}")
-            break
+            raise
 
     return unprocessed
+
+
+def sync_sqlite_tracks_to_qdrant(
+    client: QdrantClient,
+    limit: Optional[int] = None,
+    source=None,
+) -> int:
+    """Creates queue points for tracks known to SQLite but absent in Qdrant.
+
+    NOTE: this reads the SQLite file of the machine the worker runs on, which is
+    not the server catalog. For server-side recovery use
+    ``brain/reconcile_embedding_queue.py`` (or the API periodic reconciliation),
+    which read the server database.
+
+    The API/library scanner owns SQLite metadata, while the legacy audio
+    scanner owns Qdrant queue points. New files can therefore be visible in
+    the catalog without ever entering the embedding worker queue.
+    """
+    existing_ids = set()
+    existing_paths = set()
+    offset = None
+    while True:
+        records, next_page = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=250,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        existing_ids.update(str(record.id) for record in records)
+        existing_paths.update(
+            str((record.payload or {}).get("file_path"))
+            for record in records
+            if (record.payload or {}).get("file_path")
+        )
+        if next_page is None:
+            break
+        offset = next_page
+
+    missing_points = []
+    for track in db.get_all_tracks():
+        track_id = str(track["id"])
+        file_path = str(track.get("file_path") or track_id)
+        if track_id in existing_ids or file_path in existing_paths:
+            continue
+        try:
+            uuid.UUID(track_id)
+            point_id = track_id
+        except ValueError:
+            if track_id.isascii() and track_id.isdecimal() and int(track_id) < 2**64:
+                point_id = int(track_id)
+            else:
+                logger.debug("Пропускаю SQLite-запись с невалидным Qdrant ID: %s", track_id)
+                continue
+        # A worker's local SQLite can contain deleted tracks or old test data.
+        # Only a file still present on the audio host may enter the queue.
+        if source is None:
+            raise ValueError("Для восстановления очереди нужен источник аудиофайлов")
+        try:
+            source.stat(audio_source_path(file_path))
+        except FileNotFoundError:
+            logger.info("Не восстанавливаю отсутствующий аудиофайл: %s", file_path)
+            continue
+
+        loudness_status = track.get("loudness_status") or "pending"
+        payload = {
+            "file_path": file_path,
+            "title": track.get("title") or track_id,
+            "artist": track.get("artist") or "Неизвестный исполнитель",
+            "duration": track.get("duration"),
+            "genre": track.get("genre"),
+            "lyrics": track.get("lyrics"),
+            "needs_embedding": True,
+            "loudness_status": loudness_status,
+            "loudness_lufs": track.get("loudness_lufs"),
+            "true_peak_db": track.get("true_peak_db"),
+            "normalization_gain_db": track.get("normalization_gain_db"),
+            "loudness_analysis_version": track.get("loudness_analysis_version"),
+            "loudness_file_size": track.get("loudness_file_size"),
+            "loudness_file_mtime_ns": track.get("loudness_file_mtime_ns"),
+            "loudness_error": track.get("loudness_error"),
+            "loudness_retry_count": track.get("loudness_retry_count") or 0,
+            "file_size": track.get("file_size"),
+            "file_mtime_ns": track.get("file_mtime_ns"),
+        }
+        missing_points.append(
+            PointStruct(id=point_id, vector=[0.0] * VECTOR_SIZE, payload=payload)
+        )
+        existing_paths.add(file_path)
+        if limit and len(missing_points) >= limit:
+            break
+
+    if not missing_points:
+        return 0
+
+    client.upsert(collection_name=COLLECTION_NAME, points=missing_points)
+    logger.info("Добавлено в очередь Qdrant из SQLite: %d треков.", len(missing_points))
+    return len(missing_points)
 
 
 def get_backfill_tracks(
@@ -276,7 +425,7 @@ def get_backfill_tracks(
             offset = next_page
         except Exception as e:
             logger.error(f"Ошибка при поиске треков для backfill в Qdrant: {e}")
-            break
+            raise
 
     return backfill_tracks
 
@@ -315,6 +464,13 @@ def get_loudness_tracks(
         try:
             records, next_page = client.scroll(
                 collection_name=COLLECTION_NAME,
+                scroll_filter=Filter(
+                    should=[
+                        FieldCondition(key="loudness_status", match=MatchValue(value="pending")),
+                        FieldCondition(key="loudness_status", match=MatchValue(value="failed")),
+                        FieldCondition(key="loudness_status", match=MatchValue(value="processing")),
+                    ],
+                ),
                 limit=100,
                 offset=offset,
                 with_payload=True,
@@ -332,9 +488,16 @@ def get_loudness_tracks(
                     ensure_track_in_sqlite(point_id, payload)
                     db_track = db.get_track(point_id)
 
+                payload_status = status
                 if db_track:
                     db_status = db_track.get("loudness_status")
-                    if db_status:
+                    # Qdrant is the work queue shared with the scanner/API.
+                    # Never hide an explicit queued state from it with a
+                    # stale local "analyzed" value (the worker and API may
+                    # intentionally use different SQLite files).
+                    if payload_status in ("pending", "failed", "processing"):
+                        status = payload_status
+                    elif db_status:
                         status = db_status
                     db_ver = db_track.get("loudness_analysis_version")
                     if db_ver:
@@ -370,7 +533,7 @@ def get_loudness_tracks(
             offset = next_page
         except Exception as e:
             logger.error(f"Ошибка при поиске треков для анализа громкости в Qdrant: {e}")
-            break
+            raise
 
     return loudness_tracks
 
@@ -391,7 +554,7 @@ def process_loudness_for_track(
     ensure_track_in_sqlite(point_id, payload)
     db.set_track_loudness_status(point_id, "processing")
 
-    remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
+    remote_path = audio_source_path(file_path)
     local_filename = f"loud_{Path(file_path).name}"
     local_path = TEMP_DIR / local_filename
 
@@ -516,7 +679,7 @@ def run_loudness_backfill(
 
     logger.info(f"[Loudness Backfill] Найдено {len(tracks)} треков для анализа.")
     try:
-        ssh, sftp = setup_sftp()
+        ssh, sftp = setup_audio_source()
     except Exception as e:
         logger.error(f"[Loudness Backfill] Ошибка SSH подключения: {e}")
         return 0
@@ -529,7 +692,8 @@ def run_loudness_backfill(
                 processed_count += 1
     finally:
         sftp.close()
-        ssh.close()
+        if ssh:
+            ssh.close()
         logger.info(f"[Loudness Backfill] Завершено. Успешно обработано: {processed_count}/{len(tracks)}")
 
     return processed_count
@@ -766,7 +930,7 @@ def run_backfill(
 
     ssh, sftp = None, None
     try:
-        ssh, sftp = setup_sftp()
+        ssh, sftp = setup_audio_source()
     except Exception as e:
         logger.error(f"Ошибка SSH для backfill: {e}")
         return
@@ -779,7 +943,7 @@ def run_backfill(
             if not file_path:
                 continue
 
-            remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
+            remote_path = audio_source_path(file_path)
             local_filename = Path(file_path).name
             local_path = TEMP_DIR / local_filename
 
@@ -824,6 +988,15 @@ def run_backfill(
 
 def main():
     parser = argparse.ArgumentParser(description="Heavy Worker ML analysis & auto genre classification")
+    parser.add_argument(
+        "--embedding-backfill",
+        action="store_true",
+        help=(
+            "Синхронизировать локальную (машины запуска) SQLite в Qdrant и обработать "
+            "очередь embedding один раз. Для восстановления серверного каталога "
+            "используйте reconcile_embedding_queue.py"
+        ),
+    )
     parser.add_argument("--genre-backfill", action="store_true", help="Запустить backfill авто-жанров для существующих треков")
     parser.add_argument("--retry-failed-genres", action="store_true", help="Повторно классифицировать треки с failed статусом")
     parser.add_argument("--loudness-backfill", action="store_true", help="Запустить backfill нормализации громкости для треков")
@@ -831,13 +1004,17 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Ограничение количества треков для backfill")
     parser.add_argument("--retry-qdrant-sync", action="store_true", help="Повторить доставку pending auto_genres из SQLite в Qdrant")
     parser.add_argument("--resync-sqlite", action="store_true", help="Синхронизировать auto_genres из Qdrant в SQLite")
+    parser.add_argument("--once", action="store_true", help="Обработать текущую очередь один раз и выйти")
     args = parser.parse_args()
 
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Подключаюсь к Qdrant по адресу {QDRANT_URL}...")
     try:
-        qdrant_client = QdrantClient(url=QDRANT_URL)
+        qdrant_client = QdrantClient(
+            url=QDRANT_URL,
+            timeout=WORKER_REQUEST_TIMEOUT_SEC,
+        )
     except Exception as e:
         logger.error(f"Не удалось подключиться к Qdrant: {e}")
         return
@@ -881,18 +1058,53 @@ def main():
 
     logger.info("Скрипт запущен в режиме постоянного мониторинга новых треков.")
     while True:
-        unprocessed_tracks = get_unprocessed_tracks(qdrant_client)
-        loudness_tracks = get_loudness_tracks(qdrant_client, limit=10)
+        try:
+            if args.embedding_backfill:
+                sync_ssh, sync_source = setup_audio_source()
+                try:
+                    sync_sqlite_tracks_to_qdrant(
+                        qdrant_client, limit=args.limit, source=sync_source,
+                    )
+                finally:
+                    sync_source.close()
+                    if sync_ssh:
+                        sync_ssh.close()
+            unprocessed_tracks = get_unprocessed_tracks(qdrant_client)
+            if args.embedding_backfill and args.limit:
+                unprocessed_tracks = unprocessed_tracks[:args.limit]
+            loudness_tracks = get_loudness_tracks(qdrant_client, limit=10)
+        except Exception as e:
+            # Qdrant may close an idle keep-alive connection. Do not leave the
+            # worker alive with a poisoned client: rebuild the pool next loop.
+            logger.error("Ошибка чтения очередей Qdrant: %s. Пересоздаю клиент.", e)
+            try:
+                qdrant_client.close()
+            except Exception:
+                pass
+            try:
+                qdrant_client = QdrantClient(
+                    url=QDRANT_URL,
+                    timeout=WORKER_REQUEST_TIMEOUT_SEC,
+                )
+            except Exception as reconnect_error:
+                logger.error("Не удалось пересоздать клиент Qdrant: %s", reconnect_error)
+            time.sleep(5)
+            continue
 
         if not unprocessed_tracks and not loudness_tracks:
+            if args.once or args.embedding_backfill:
+                logger.info("Очередь пуста, завершаю одноразовый запуск.")
+                return
             logger.debug("Нет треков для обработки. Ожидание 30 секунд...")
             time.sleep(30)
             continue
 
         try:
-            ssh, sftp = setup_sftp()
+            ssh, sftp = setup_audio_source()
         except Exception as e:
             logger.error("Завершение цикла из-за ошибки SSH. Повтор через 30с.")
+            if args.once or args.embedding_backfill:
+                raise RuntimeError("Одноразовая обработка остановлена: SFTP недоступен") from e
             time.sleep(30)
             continue
 
@@ -916,7 +1128,7 @@ def main():
                         if parsed_artist:
                             payload["artist"] = parsed_artist
 
-                    remote_path = f"{REMOTE_MUSIC_DIR}/{file_path}"
+                    remote_path = audio_source_path(file_path)
                     local_filename = Path(file_path).name
                     local_path = TEMP_DIR / local_filename
 
@@ -926,6 +1138,12 @@ def main():
                         sftp.get(remote_path, str(local_path))
                     except Exception as e:
                         logger.error(f"Не удалось скачать {remote_path}: {e}")
+                        if isinstance(e, FileNotFoundError):
+                            qdrant_client.set_payload(
+                                collection_name=COLLECTION_NAME,
+                                points=[point_id],
+                                payload={"embedding_status": "missing_file"},
+                            )
                         if local_path.exists():
                             try:
                                 os.remove(local_path)
@@ -965,11 +1183,16 @@ def main():
                         processed_any = True
 
         finally:
-            sftp.close()
-            ssh.close()
+            try:
+                sftp.close()
+            finally:
+                if ssh:
+                    ssh.close()
             logger.info("SFTP соединение закрыто.")
 
         logger.info("Пакет треков обработан. Проверка новых...")
+        if args.once or args.embedding_backfill:
+            return
         if not processed_any:
             time.sleep(10)
 

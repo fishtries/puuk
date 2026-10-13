@@ -1,24 +1,21 @@
 # Навыки для разработки Puuk
 
-Индекс помогает выбрать правильный навык. Активных навыков — 10, все
-подобраны под профиль проекта: персональный музыкальный плеер
-(FastAPI + Qdrant / aiogram / React 19 SPA).
+Активных skills — 5, подобраны под профиль проекта: персональный музыкальный плеер (FastAPI + Qdrant / aiogram / React Native Expo).
 
 ---
 
-## UI/UX — веб-клиент `app/web`
+## Проектные навыки
 
-### Основной навык
-**`puuk-ui/`** — стилизация, анимации, компоненты, темизация.
+### puuk-ui (iOS только)
+Стилизация, анимации (Reanimated), компоненты React Native, специфика iOS-клиента.
 Начни с `SKILL.md` (роутер), дальше по файлам:
-- `styling.md` — CSS Modules, токены, glassmorphism
-- `animations.md` — Framer Motion, кривые Emil Kowalski, reduced motion
-- `components.md` — React 19 + Zustand + TanStack Query паттерны
-- `theming.md` — динамический `--accent-color` под обложку
+- `styling.md` — стили, цвета, типографика
+- `animations.md` — Reanimated, springs, reduced motion
+- `components.md` — React Native + Expo паттерны
+- `theming.md` — динамическая тема под обложку
 
-### Поиск паттернов
-**`puuk-ux-lite/`** — локальный BM25-поиск по скоупленному датасету
-(13 стилей, media-палитры, музыкальная типографика, UX/react/web правила).
+### puuk-ux-lite
+Локальный BM25-поиск по скоупленному датасету (13 стилей, media-палитры, музыкальная типографика, UX правила).
 
 ```bash
 python3 .agents/skills/puuk-ux-lite/scripts/search.py "твой запрос" [--domain ...]
@@ -26,78 +23,71 @@ python3 .agents/skills/puuk-ux-lite/scripts/search.py "твой запрос" [-
 
 ---
 
-## Архитектура и качество кода
+## Книжные навыки
 
-### Повседневная разработка
-- **`clean-code/`** — читаемость, именование, функции, ошибки, тесты
+Загружать явно при необходимости. Структура: `SKILL.md` → `{name}.mini.md` (рабочая версия) → `{name}.md` (полная) → `{name}.nano.md` (шпаргалка).
 
-### Архитектурные решения
-- **`clean-architecture/`** — границы слоев, направление зависимостей
-  (AudioEngine без React; FastAPI без бизнес-логики)
-- **`a-philosophy-of-software-design/`** — сложность, глубина модулей, сокрытие информации
+### release-it
+**Когда:** SFTP-интеграция heavy_worker, стриминг, фоновые задачи, retry-логика, Qdrant-интеграция.
+**Не для:** обычных CRUD-операций и локальных изменений.
 
-### Рефакторинг
-- **`refactoring/`** — безопасное поведение-сохраняющее улучшение
-- **`refactoring-guru/`** — каталог code smells и техник рефакторинга
+### refactoring
+**Когда:** изменение структуры кода с сохранением поведения, подготовка к новой функции через перестройку существующего кода.
+**Не для:** новых функций (это не рефакторинг) и косметических правок стиля.
 
-### Специализированные
-- **`code-complete/`** — качество конструкции: routines, переменные, защитное программирование
-- **`release-it/`** — production-надежность: таймауты, ретраи, circuit breakers
-- **`the-pragmatic-programmer/`** — DRY, ортогональность, автоматизация
-
-Структура книжных навыков: `SKILL.md` → `{name}.mini.md` (рабочая версия)
-→ `{name}.md` (полная, если mini не хватает) → `{name}.nano.md` (шпаргалка).
-
----
-
----
-
-## Оркестрация дочерних агентов (Orca)
-
-Запуск воркеров через `orca orchestration` — см.
-[`docs/ORCHESTRATION.md`](../../docs/ORCHESTRATION.md): агент `--agent opencode`,
-ручная доставка промпта при зависании инжекта, восстановление
-`--dispatch-capability`. Официальный гайд — `orca skills get orchestration`.
+### a-philosophy-of-software-design
+**Когда:** проектирование публичного API модуля, декомпозиция крупного компонента, выбор абстракции при росте сложности.
+**Не для:** локальных правок, переименований, обычной реализации функций.
 
 ---
 
 ## Применение по компонентам проекта
 
-### `app/web/` (React SPA)
-| Задача | Навык |
-|---|---|
-| Новый компонент / стили / анимации / тема | `puuk-ui` |
-| «Как правильно сделать X в UI?» | `puuk-ux-lite` (поиск) |
-| Читаемость TS/React-кода | `clean-code.mini.md` |
-| Вынос логики из UI в engine/store | `clean-architecture.mini.md` |
-| Улучшение существующего компонента | `refactoring.mini.md` |
-
 ### `brain/` (FastAPI + SQLite + Qdrant)
-| Задача | Навык |
+| Задача | Skill |
 |---|---|
-| Роуты, сервисы, db.py | `clean-code` + `clean-architecture` |
-| Стриминг, сканер, фоновые задачи | `release-it` (таймауты, отказы) |
-| Рост сложности search/wave-логики | `a-philosophy-of-software-design` |
-| Переработка сканера/тегов | `refactoring` + `code-complete` |
+| Роуты, сервисы, репозитории | Общие знания модели, локальный стиль кода |
+| SFTP, стриминг, фоновые задачи, retry | `release-it` |
+| Рост сложности wave/search-логики, новые API | `a-philosophy-of-software-design` |
+| Переработка существующего модуля | `refactoring` |
 
 ### `tg_music_bot/` (aiogram)
-- Только `clean-code` — специфика aiogram важнее абстрактных паттернов.
+Только официальная документация aiogram — специфика фреймворка важнее абстрактных паттернов.
+
+### `app/ios/puuk-ios/` (Expo SDK 57)
+| Задача | Skill |
+|---|---|
+| Компоненты, стили, анимации | `puuk-ui` |
+| «Как правильно сделать X в UI?» | `puuk-ux-lite` (поиск) |
+| Улучшение существующего компонента | `refactoring` |
 
 ---
 
 ## Архив
 
-`.agents/skills-archive/` — 16 законсервированных навыков (см. README там):
-enterprise-паттерны (DDD, PoEAA, DDIA), дизайн-агентство (logo/CIP/баннеры/слайды/бренд),
-тяжелые аудит-инструменты (better-interface, legacy-code), полные
-UI-исходники (ui-ux-pro-max 3.7 MB, ui-styling, design-system, anti-ui-slop,
-improve-animations). Не загружаются автоматически; вернуть — просто скопировать
-папку обратно в `.agents/skills/`.
+`.agents/skills-archive/` — 15 законсервированных навыков:
+
+**Книжные (общие):**
+- `clean-code`, `code-complete`, `clean-architecture`, `the-pragmatic-programmer`, `refactoring-guru`
+
+**Enterprise-паттерны:**
+- `domain-driven-design`, `implementing-domain-driven-design`, `domain-driven-design-distilled`, `patterns-of-enterprise-application-architecture`, `designing-data-intensive-applications`
+
+**Дизайн-агентство:**
+- `design/`, `banner-design/`, `slides/`, `brand/`
+
+**UI-аудиты:**
+- `better-interface`, `working-effectively-with-legacy-code`
+
+**UI-исходники:**
+- `ui-ux-pro-max`, `ui-styling`, `design-system`, `anti-ui-slop`, `improve-animations`
+
+Вернуть skill — просто скопировать папку обратно в `.agents/skills/`. См. README в архиве.
 
 ---
 
-## Когда навыки НЕ нужны
+## Когда skills НЕ нужны
 
-- Специфика фреймворков (декораторы FastAPI, фильтры aiogram) — официальная документация.
-- Простые CRUD-операции и копирование существующих паттернов проекта — просто следуй стилю.
-- Инфраструктура (Docker, Nginx) и алгоритмы Qdrant — domain-specific знания.
+- Специфика фреймворков (FastAPI decorators, aiogram filters, Expo API) — официальная документация.
+- Простые задачи и копирование существующих паттернов проекта — следуй локальному стилю.
+- Инфраструктура (SSH, rsync, systemd) и алгоритмы Qdrant — domain-specific знания.

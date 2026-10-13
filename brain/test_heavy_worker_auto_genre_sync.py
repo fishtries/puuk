@@ -199,6 +199,52 @@ class TestHeavyWorkerAutoGenreSync(unittest.TestCase):
         self.assertEqual(track["artist"], "Artist")
         self.assertEqual(json.loads(track["auto_genres"])[0]["name"], "House")
 
+    def test_sqlite_only_track_is_added_to_embedding_queue(self):
+        client = Mock()
+        client.scroll.return_value = ([], None)
+
+        track_id = "9c200bc4-99d6-55a5-b95d-69ba3b788f29"
+        with patch.object(db, "get_all_tracks", return_value=[
+            {"id": "test_api_track_123", "file_path": "test.mp3"},
+            {"id": track_id, "file_path": "sync-test-track.mp3"},
+        ]):
+            added = heavy_worker.sync_sqlite_tracks_to_qdrant(client, limit=1, source=Mock())
+
+        self.assertEqual(added, 1)
+        points = client.upsert.call_args.kwargs["points"]
+        self.assertEqual(len(points), 1)
+        point = points[0]
+        self.assertEqual(point.id, track_id)
+        self.assertEqual(len(point.vector), 400)
+        self.assertEqual(point.payload["needs_embedding"], True)
+        self.assertEqual(point.payload["file_path"], "sync-test-track.mp3")
+
+    def test_deleted_audio_is_not_recreated_from_stale_sqlite(self):
+        client = Mock()
+        client.scroll.return_value = ([], None)
+        source = Mock()
+        source.stat.side_effect = FileNotFoundError("deleted")
+        with patch.object(db, "get_all_tracks", return_value=[{
+            "id": "9c200bc4-99d6-55a5-b95d-69ba3b788f29",
+            "file_path": "deleted.mp3",
+        }]):
+            self.assertEqual(heavy_worker.sync_sqlite_tracks_to_qdrant(client, source=source), 0)
+        client.upsert.assert_not_called()
+
+    def test_local_audio_source_resolves_only_inside_root(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as root:
+            audio = Path(root) / "Artist - Song.mp3"
+            audio.write_bytes(b"audio")
+            source = heavy_worker.LocalAudioSource(root)
+            target = Path(root) / "copy.mp3"
+            source.get("Artist - Song.mp3", str(target))
+            self.assertEqual(target.read_bytes(), b"audio")
+            with self.assertRaises(ValueError):
+                source.stat("../outside.mp3")
+
 
 if __name__ == "__main__":
     unittest.main()

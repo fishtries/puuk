@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -197,6 +198,55 @@ class TestScanLibraryGenre(unittest.TestCase):
         track = db.get_track(self.track_id)
         self.assertEqual(track["genre"], "Deep House")
         self.assertEqual(track["title"], "Renamed Title")
+
+
+class TestScanLibraryEmbeddingQueue(unittest.TestCase):
+    """scan_library доставляет новые треки в ML-очередь, не падая при сбое Qdrant."""
+
+    def setUp(self):
+        self.music_dir = tempfile.mkdtemp(prefix="puuk_scan_queue_")
+        self._old_music_dir = os.environ.get("MUSIC_DIR")
+        os.environ["MUSIC_DIR"] = self.music_dir
+
+    def tearDown(self):
+        if self._old_music_dir is None:
+            os.environ.pop("MUSIC_DIR", None)
+        else:
+            os.environ["MUSIC_DIR"] = self._old_music_dir
+        shutil.rmtree(self.music_dir, ignore_errors=True)
+
+    def test_scan_enqueues_missing_embeddings(self):
+        from services.library_service import scan_library
+
+        _make_mp3(os.path.join(self.music_dir, "q_song.mp3"), ["House"])
+        captured = {}
+
+        def fake_reconcile(client, **kwargs):
+            captured["called"] = True
+            return {"examined": 1, "existing": 0, "enqueued": 1, "would_enqueue": 1,
+                    "missing_file": 0, "invalid_id": 0, "failed": 0}
+
+        with patch.dict(os.environ, {"EMBEDDING_QUEUE_ENABLED": "true"}), \
+             patch("services.embedding_queue_service.get_qdrant_client", return_value=object()), \
+             patch("services.embedding_queue_service.reconcile_embedding_queue", side_effect=fake_reconcile):
+            result = scan_library()
+
+        self.assertTrue(captured.get("called"))
+        self.assertEqual(result["embedding_queue"]["enqueued"], 1)
+
+    def test_scan_survives_qdrant_outage(self):
+        from services.library_service import scan_library
+
+        _make_mp3(os.path.join(self.music_dir, "q_song2.mp3"), ["House"])
+
+        with patch.dict(os.environ, {"EMBEDDING_QUEUE_ENABLED": "true"}), \
+             patch("services.embedding_queue_service.get_qdrant_client", return_value=object()), \
+             patch("services.embedding_queue_service.reconcile_embedding_queue",
+                   side_effect=RuntimeError("qdrant down")):
+            result = scan_library()
+
+        self.assertEqual(result["tracks_scanned"], 1)
+        self.assertNotIn("embedding_queue", result)
 
 
 if __name__ == "__main__":

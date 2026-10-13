@@ -56,6 +56,7 @@ from repositories.tracks import (
     get_tracks_page,
     get_tracks_by_ids,
     get_catalog_tracks,
+    get_tracks_for_embedding_reconcile,
     get_track_artist_map,
     get_track,
     delete_track,
