@@ -192,13 +192,25 @@ class TestLoudnessIntegration(unittest.TestCase):
 
     def test_resync_loudness_from_qdrant_to_sqlite(self):
         """scan.py --resync-loudness: analyzed из Qdrant доезжает до SQLite сервера."""
+        import shutil
+        import tempfile
+        from pathlib import Path
         from types import SimpleNamespace
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
 
         import scan
 
+        root = tempfile.mkdtemp(prefix="puuk_lsync_it_")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        audio = Path(root) / "resync.mp3"
+        audio.write_bytes(b"resync-audio")
+        stat = audio.stat()
+
         track_id = "test-loudness-scan-resync-1"
-        db.add_or_update_track(track_id, "audio/resync.mp3", "Resync", None, "Artist")
+        db.add_or_update_track(
+            track_id, "resync.mp3", "Resync", None, "Artist",
+            file_size=stat.st_size, file_mtime_ns=stat.st_mtime_ns,
+        )
 
         analyzed_point = SimpleNamespace(
             id=track_id,
@@ -208,8 +220,8 @@ class TestLoudnessIntegration(unittest.TestCase):
                 "true_peak_db": -1.2,
                 "normalization_gain_db": 2.5,
                 "loudness_analysis_version": "r128-v1",
-                "loudness_file_size": 111,
-                "loudness_file_mtime_ns": 222,
+                "loudness_file_size": stat.st_size,
+                "loudness_file_mtime_ns": stat.st_mtime_ns,
             },
         )
         pending_point = SimpleNamespace(
@@ -219,7 +231,8 @@ class TestLoudnessIntegration(unittest.TestCase):
         client = Mock()
         client.scroll.return_value = ([analyzed_point, pending_point], None)
 
-        count = scan.resync_loudness_from_qdrant(client)
+        with patch("services.loudness_sync_service.get_effective_music_dir", return_value=root):
+            count = scan.resync_loudness_from_qdrant(client)
 
         self.assertEqual(count, 1)
         row = db.get_track(track_id)
@@ -227,15 +240,25 @@ class TestLoudnessIntegration(unittest.TestCase):
         self.assertEqual(row["normalization_gain_db"], 2.5)
         self.assertEqual(row["loudness_lufs"], -16.0)
         self.assertEqual(row["true_peak_db"], -1.2)
-        self.assertEqual(row["file_size"], 111)
-        self.assertEqual(row["file_mtime_ns"], 222)
+        self.assertEqual(row["file_size"], stat.st_size)
+        self.assertEqual(row["file_mtime_ns"], stat.st_mtime_ns)
         self.assertIsNone(db.get_track("test-loudness-scan-resync-pending"))
 
     def test_resync_loudness_creates_missing_track_row(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
         from types import SimpleNamespace
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
 
         import scan
+
+        root = tempfile.mkdtemp(prefix="puuk_lsync_it_")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        audio = Path(root) / "music" / "unknown track.mp3"
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"unknown-audio")
+        stat = audio.stat()
 
         track_id = "test-loudness-scan-resync-2"
         self.assertIsNone(db.get_track(track_id))
@@ -252,12 +275,15 @@ class TestLoudnessIntegration(unittest.TestCase):
                 "true_peak_db": -0.8,
                 "normalization_gain_db": 1.5,
                 "loudness_analysis_version": "r128-v1",
+                "loudness_file_size": stat.st_size,
+                "loudness_file_mtime_ns": stat.st_mtime_ns,
             },
         )
         client = Mock()
         client.scroll.return_value = ([point], None)
 
-        count = scan.resync_loudness_from_qdrant(client)
+        with patch("services.loudness_sync_service.get_effective_music_dir", return_value=root):
+            count = scan.resync_loudness_from_qdrant(client)
 
         self.assertEqual(count, 1)
         row = db.get_track(track_id)

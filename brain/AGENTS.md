@@ -45,7 +45,7 @@ ssh -p 59348 192.168.1.117 'sqlite3 /home/fish/apps/puuk/puuk/brain/puuk.db "SEL
 - **`db.py`** — фасад репозиториев + инициализация схемы
 - **`repositories/`** — доменные модули (tracks, albums, playlists, wave, auth, media_tickets, auto_genres, search)
 - **`routers/`** — FastAPI роутеры (tracks, albums, playlists, wave, auth, stream, cover, search, admin, library)
-- **`services/`** — бизнес-логика (library_service, scan, track_metadata_service, loudness, audio_genre_classifier, embedding_queue_service)
+- **`services/`** — бизнес-логика (library_service, scan, track_metadata_service, loudness, loudness_sync_service, audio_genre_classifier, embedding_queue_service)
 - **`scan.py`** — CLI-сканер музыкальной библиотеки (извлечение ID3, LRC, обложек)
 - **`heavy_worker.py`** — векторизация / жанры / LUFS. **Запускается локально через SFTP**, не на сервере.
 
@@ -62,6 +62,8 @@ python heavy_worker.py --mode genre     # автоматическая клас�
 ```
 
 Worker скачивает аудио в `./temp_audio/`, обрабатывает локально, результаты записывает в удалённую SQLite и Qdrant.
+
+Готовые loudness-результаты доставляются в серверную SQLite автоматически: периодическая задача API (`LOUDNESS_SYNC_ENABLED`, `LOUDNESS_SYNC_INTERVAL_SEC`, см. `services/loudness_sync_service.py`) забирает `analyzed`-записи из общего Qdrant, проверяя конечность метрик и идентичность реального файла на диске (size/mtime с учётом секундного разрешения SFTP; отсутствующие файлы и выход за пределы `MUSIC_DIR` отвергаются). Ручной вариант — `python scan.py --resync-loudness` (та же реализация).
 
 ## Ключевые правила
 

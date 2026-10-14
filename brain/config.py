@@ -16,6 +16,16 @@ WAVE_EXPLORE_RATIO = float(os.getenv("WAVE_EXPLORE_RATIO", "0.25"))
 # Тесты изолируют БД через PUUK_DB_PATH (см. test_db_path.py); по умолчанию — рабочая база.
 DB_PATH = os.getenv("PUUK_DB_PATH") or os.path.join(BASE_DIR, "puuk.db")
 
+# Доставка готовых loudness-результатов из общего Qdrant в серверный SQLite.
+# heavy_worker анализирует локально и пишет в Qdrant; серверный API читает свою
+# SQLite (deploy не синкает *.db), поэтому результаты нужно периодически
+# забирать обратно. Интервал, блокировка владельца и таймаут Qdrant настраиваются
+# отдельно от embedding-сверки (изоляция отказов: одна интеграция не валит другую).
+LOUDNESS_SYNC_ENABLED = os.getenv("LOUDNESS_SYNC_ENABLED", "true").lower() in ("true", "1", "yes")
+LOUDNESS_SYNC_INTERVAL_SEC = float(os.getenv("LOUDNESS_SYNC_INTERVAL_SEC", "300"))
+LOUDNESS_SYNC_LOCK_PATH = os.getenv("LOUDNESS_SYNC_LOCK", "/tmp/puuk_loudness_sync.lock")
+LOUDNESS_SYNC_QDRANT_TIMEOUT_SEC = float(os.getenv("LOUDNESS_SYNC_QDRANT_TIMEOUT_SEC", "15"))
+
 
 def get_base_url(request) -> str:
     """Resolve public base URL: explicit BASE_URL env wins, otherwise derive from request."""

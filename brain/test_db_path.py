@@ -21,6 +21,8 @@ os.environ.setdefault("PUUK_ADMIN_PASSWORD", "admin")
 # Интеграционные точки доставки очереди отключены; тесты сервиса инжектят fake-клиент.
 os.environ.setdefault("EMBEDDING_QUEUE_ENABLED", "false")
 os.environ.setdefault("EMBEDDING_RECONCILE_ENABLED", "false")
+# Периодическая доставка loudness из Qdrant тоже не должна стартовать в тестах.
+os.environ.setdefault("LOUDNESS_SYNC_ENABLED", "false")
 
 if 'config' in sys.modules:
     print("!!! CONFIG ALREADY LOADED at test_db_path import:", file=sys.stderr)
