@@ -40,10 +40,14 @@
 
 ## ux-source/
 
-- `ui-ux-pro-max/` — полный оригинал (3.7 MB dataset). Заменен на
-  `puuk-ux-lite/` (176 KB). Если lite-версии не хватает данных — скопируй
-  нужный CSV отсюда в `puuk-ux-lite/data/` и верни домен в `CSV_CONFIG`
-  (`scripts/core.py`) и в `_DOMAIN_KEYWORDS`.
+- `ui-ux-pro-max/` — полный оригинал UI/UX-справочника (3.7 MB dataset).
+- `puuk-ux-lite/` — прежний сокращённый BM25-справочник: данные и поисковые скрипты сохранены как исходный материал. В активных skills заменён на `puux-ux` с общими принципами веба и iOS. Рекомендации справочника не являются принятыми решениями Puuk; в нём есть GSAP, Next.js и другие примеры вне текущего стека.
+
+Для явного обращения к архивному поиску:
+
+```bash
+python3 .agents/skills-archive/ux-source/puuk-ux-lite/scripts/search.py "query" --domain ux -n 1
+```
 
 ## ui-source-material/
 
@@ -59,4 +63,3 @@
 
 Вернуть целиком, если: уйдешь от CSS Modules на Tailwind+shadcn (ui-styling),
 захочешь формальных аудитов анимаций с планами для субагентов (improve-animations).
-

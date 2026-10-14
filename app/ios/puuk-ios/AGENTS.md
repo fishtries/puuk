@@ -2,6 +2,8 @@
 
 React Native (Expo SDK 57). Читай версионную документацию при изменении Expo API, native-конфигурации или зависимостей: https://docs.expo.dev/versions/v57.0.0/
 
+Дизайн: [общие решения](../../../docs/design/DESIGN.md) и [реализация iOS](../../../docs/design/ios.md). Для визуальных изменений использовать `puuk-ui`.
+
 ## Проверки
 
 ```bash

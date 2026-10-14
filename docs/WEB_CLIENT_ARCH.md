@@ -1,6 +1,5 @@
-UI-навыки для этого клиента: [.agents/skills/puuk-ui/SKILL.md](../.agents/skills/puuk-ui/SKILL.md)
-(стили, анимации, компоненты, темизация) и поиск паттернов `puuk-ux-lite`
-(см. [.agents/skills/INDEX.md](../.agents/skills/INDEX.md)).
+Дизайн клиента: [общие решения Puuk](design/DESIGN.md) и [реализация веба](design/web.md).
+UI-skill: [puuk-ui](../.agents/skills/puuk-ui/SKILL.md). Этот документ описывает архитектуру; текущую компоновку проверять по `app/web/src/App.tsx`.
 
 # Архитектурная спецификация Puuk Web Client (`app/web`)
 

@@ -1,12 +1,13 @@
 # Puuk — Agent Instructions
 
-Персональная музыкальная экосистема: FastAPI backend, Telegram-бот загрузчик, iOS клиент на Expo.
+Персональная музыкальная экосистема: FastAPI backend, Telegram-бот загрузчик, веб и iOS клиент на Expo.
 
 ## Структура репозитория
 
 - **`brain/`** — FastAPI + SQLite (WAL) + Qdrant. Сканирование музыки (`mutagen`), стриминг, рекомендации («Моя Волна»), JWT auth.
 - **`tg_music_bot/`** — aiogram. Загрузка треков Spotify/YouTube, генерация одноразовых кодов авторизации.
 - **`app/ios/puuk-ios/`** — React Native (Expo SDK 57). Клиент для iOS.
+- **`app/web/`** — React + TypeScript. Веб-клиент.
 - **`docs/`** — Спецификации архитектуры.
 
 ## Архитектура окружения
@@ -24,6 +25,9 @@
 ## Skills
 
 Загружать по необходимости. Полный индекс: [.agents/skills/INDEX.md](.agents/skills/INDEX.md)
+
+- **`puuk-ui`** — оформление и движение веба/iOS; общий дизайн: [docs/design/DESIGN.md](docs/design/DESIGN.md).
+- **`puux-ux`** — общие принципы сценариев, обратной связи, состояний и доступности веба/iOS; для проектирования и разбора взаимодействий.
 
 - **`release-it`** — надежность production-систем: таймауты, retry, изоляция отказов (для SFTP, стриминга, фоновых задач, Qdrant-интеграции).
 - **`refactoring`** — безопасное изменение структуры кода с сохранением поведения.
