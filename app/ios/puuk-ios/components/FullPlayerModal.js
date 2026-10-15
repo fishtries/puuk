@@ -731,14 +731,6 @@ const FullPlayerModal = ({
     };
   });
 
-  const fullPlayerBackgroundStyle = useAnimatedStyle(() => ({
-    backgroundColor: bgColor.value,
-  }));
-
-  const playerLayerAnimatedStyle = useAnimatedStyle(() => ({
-    zIndex: interpolate(expandProgress.value, [0, 0.75], [1, 20], Extrapolation.CLAMP),
-  }));
-
   const ambientCoverAnimatedStyle = useAnimatedStyle(() => {
     return {
       opacity: interpolate(expandProgress.value, [0, 0.4], [0, 1], Extrapolation.CLAMP),
@@ -766,11 +758,17 @@ const FullPlayerModal = ({
 
   return (
     <Animated.View
-      style={[StyleSheet.absoluteFill, playerLayerAnimatedStyle]}
+      style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
       pointerEvents={isPlayerVisible ? 'auto' : 'none'}
     >
       <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        <Animated.View style={[styles.container, fullPlayerBackgroundStyle]} pointerEvents="auto">
+        <View style={styles.container} pointerEvents="auto">
+          {/* Base pitch black background */}
+          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000000' }} />
+
+          {/* Плавно меняющийся сплошной цветной фон */}
+          <Animated.View style={[StyleSheet.absoluteFill, animatedBgStyle]} />
+
           {/* Dynamic ambient cover art background for expanded player */}
           {activeTrack?.coverArt && (
             <Animated.View style={[StyleSheet.absoluteFill, ambientCoverAnimatedStyle]} pointerEvents="none">
@@ -977,7 +975,7 @@ const FullPlayerModal = ({
             </Animated.View>
 
           </Animated.View>
-        </Animated.View>
+        </View>
       </GestureHandlerRootView>
     </Animated.View>
   );

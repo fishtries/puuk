@@ -59,7 +59,7 @@ const MiniPlayerBar = ({
       style={[
         styles.miniPlayerContainer,
         bottomBarHeight ? { height: bottomBarHeight, paddingBottom: insets?.bottom || 0 } : null,
-        { backgroundColor: '#000000' },
+        hideMediaInfo ? { backgroundColor: 'transparent' } : null,
         miniPlayerAnimatedStyle,
       ]}
       pointerEvents={isPlayerVisible ? 'none' : 'auto'}
