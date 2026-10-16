@@ -45,7 +45,6 @@ const PlayerControls = ({
   bottomSwipeGesture,
   exitCompactMode,
   triggerExitCompactMode,
-  onAddToPlaylist,
   onToggleQueue,
   onToggleLyrics,
 }) => {
@@ -248,12 +247,6 @@ const PlayerControls = ({
             </Animated.View>
 
             <Animated.View layout={LinearTransition.springify()} style={isEffectivelyCompact ? styles.compactRightControls : styles.bottomControls}>
-              <Animated.View layout={LinearTransition.springify()}>
-                <TouchableOpacity onPress={() => onAddToPlaylist && onAddToPlaylist()} style={styles.compactBtn}>
-                  <Ionicons name="add-circle-outline" size={isEffectivelyCompact ? 26 : 26} color="#e5e5ea" />
-                </TouchableOpacity>
-              </Animated.View>
-
               <Animated.View layout={LinearTransition.springify()}>
                 <TouchableOpacity onPress={onToggleLyrics} style={styles.compactBtn}>
                   <Ionicons name={isLyricsView ? "text" : "text-outline"} size={isEffectivelyCompact ? 26 : 26} color={isLyricsView ? "#6C3AED" : "#e5e5ea"} />

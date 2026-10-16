@@ -420,7 +420,10 @@ function AppContent() {
         seekTo={(pos) => player.seekTo(pos)}
         upNextQueue={upNextQueue}
         playTrack={playTrack}
-        onAddToPlaylist={() => setTrackToManage(activeTrack)}
+        onAddToPlaylist={(track) => setTrackToAdd(track || activeTrack)}
+        onEditTrack={(track) => {
+          navigationRef.navigate('TrackEdit', { track: track || activeTrack });
+        }}
         onToggleLike={() => handleToggleLike(activeTrack)}
         isLiked={!!activeTrack?.is_liked}
         expandProgress={expandProgress}

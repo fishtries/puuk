@@ -5,11 +5,13 @@ import {
   TouchableOpacity,
   Dimensions,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import CoverImage from './CoverImage';
 import { authFetch } from '../utils/api';
 
@@ -30,6 +32,8 @@ import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
 import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
+import { MenuView } from '@react-native-menu/menu';
+import TrackLoadingBadge from './fullplayer/TrackLoadingBadge';
 import styles from './fullplayer/playerStyles';
 
 const { width, height } = Dimensions.get('window');
@@ -51,6 +55,7 @@ const FullPlayerModal = ({
   upNextQueue,
   playTrack,
   onAddToPlaylist,
+  onEditTrack,
   onToggleLike,
   isLiked,
   expandProgress: externalExpandProgress,
@@ -398,7 +403,7 @@ const FullPlayerModal = ({
   const fullCenterX = width / 2;
   const expandDeltaX = miniCenterX - fullCenterX;
 
-  const fullArtTopY = effectiveTopInset + 41; // safeArea paddingTop (effectiveTopInset + 6) + grabber 25 + marginTop 10
+  const fullArtTopY = effectiveTopInset + 71; // safeArea paddingTop (effectiveTopInset + 6) + grabber 19 + header 40 + marginTop 6
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
   const TARGET_DELTA_Y = (effectiveTopInset + 32) - fullArtCenterY;
 
@@ -756,6 +761,35 @@ const FullPlayerModal = ({
 
   const { displayTitle, displayArtist } = getTrackDetails(activeTrack);
 
+  const handleMenuAction = useCallback(({ nativeEvent }) => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+
+    if (nativeEvent.event === 'add_to_playlist') {
+      if (onAddToPlaylist) onAddToPlaylist(activeTrack);
+    } else if (nativeEvent.event === 'edit_track') {
+      if (onEditTrack) onEditTrack(activeTrack);
+    }
+  }, [activeTrack, onAddToPlaylist, onEditTrack]);
+
+  const menuActions = useMemo(() => [
+    {
+      id: 'add_to_playlist',
+      title: 'Add to Playlist',
+      image: Platform.select({ ios: 'plus.circle' }),
+    },
+    ...(onEditTrack
+      ? [
+          {
+            id: 'edit_track',
+            title: 'Edit Track',
+            image: Platform.select({ ios: 'pencil' }),
+          },
+        ]
+      : []),
+  ], [onEditTrack]);
+
   return (
     <Animated.View
       style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
@@ -856,8 +890,8 @@ const FullPlayerModal = ({
               >
                 <GestureDetector gesture={mainSwipeGesture}>
                   <Animated.View style={{ width: '100%', flex: 1, alignItems: 'center', backgroundColor: 'transparent' }}>
-                    {/* Top Grabber / Pull Trigger */}
-                    <Animated.View style={topGrabberAnimatedStyle}>
+                    {/* Top Grabber / Pull Trigger & Sub-header */}
+                    <Animated.View style={[{ width: '100%' }, topGrabberAnimatedStyle]}>
                       <TouchableOpacity
                         onPress={handleClose}
                         hitSlop={{ top: 15, bottom: 20, left: 40, right: 40 }}
@@ -866,6 +900,33 @@ const FullPlayerModal = ({
                       >
                         <View style={styles.topGrabberPill} />
                       </TouchableOpacity>
+
+                      <View style={styles.topHeaderRow}>
+                        <View style={{ flex: 1 }} />
+                        <View style={styles.topHeaderRight}>
+                          <TrackLoadingBadge
+                            isLoading={isLoading}
+                            isBufferingSlow={isBufferingSlow}
+                            networkStatus={networkStatus}
+                            nextTrackStatus={nextTrackStatus}
+                          />
+
+                          <MenuView
+                            title={displayTitle}
+                            onPressAction={handleMenuAction}
+                            actions={menuActions}
+                            shouldOpenOnLongPress={false}
+                          >
+                            <View
+                              style={styles.topMenuButton}
+                              accessibilityRole="button"
+                              accessibilityLabel="Track options"
+                            >
+                              <Ionicons name="ellipsis-horizontal" size={17} color="#ffffff" />
+                            </View>
+                          </MenuView>
+                        </View>
+                      </View>
                     </Animated.View>
 
                     <Animated.View style={[styles.artContainer, albumArtFlipStyle]}>
@@ -959,7 +1020,6 @@ const FullPlayerModal = ({
                 bottomSwipeGesture={bottomSwipeGesture}
                 exitCompactMode={triggerExitCompactMode}
                 triggerExitCompactMode={triggerExitCompactMode}
-                onAddToPlaylist={onAddToPlaylist}
                 onToggleQueue={toggleQueue}
                 onToggleLyrics={handleToggleLyrics}
               />
