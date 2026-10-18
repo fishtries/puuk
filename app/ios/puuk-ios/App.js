@@ -26,6 +26,7 @@ import FullPlayerModal from './components/FullPlayerModal';
 import MiniPlayerBar from './components/fullplayer/MiniPlayerBar';
 import { PLAYER_BACKGROUND_COLOR } from './components/fullplayer/playerBackground';
 import GlowTrackBoundary from './components/fullplayer/GlowTrackBoundary';
+import AppAuthGate from './components/AppAuthGate';
 import AddToPlaylistModal from './components/AddToPlaylistModal';
 import TrackContextMenuModal from './components/TrackContextMenuModal';
 import LoginModal from './components/LoginModal';
@@ -512,26 +513,16 @@ function AppContent() {
   }, [currentTrack]);
 
   if (isAuthChecking) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
-        <StatusBar style="light" />
-        <ActivityIndicator size="large" color="#FA243C" />
-      </View>
-    );
+    return <AppAuthGate isChecking={isAuthChecking} currentUser={currentUser} />;
   }
 
   if (!currentUser) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        <StatusBar style="light" />
-        <LoginModal
-          visible
-          mandatory
-          onClose={() => {}}
-          currentUser={currentUser}
-          onLoginSuccess={(u) => setCurrentUser(u)}
-        />
-      </View>
+      <AppAuthGate
+        isChecking={isAuthChecking}
+        currentUser={currentUser}
+        onLoginSuccess={(u) => setCurrentUser(u)}
+      />
     );
   }
 
