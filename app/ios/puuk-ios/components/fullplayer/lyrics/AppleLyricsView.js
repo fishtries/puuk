@@ -17,7 +17,7 @@ import Animated, {
   Easing,
   cancelAnimation,
 } from 'react-native-reanimated';
-import { GestureDetector } from 'react-native-gesture-handler';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 
 import AnimatedLyricLine from './AnimatedLyricLine';
 import { TopBlurOverlay, BottomBlurOverlay } from '../BlurOverlays';
@@ -26,6 +26,8 @@ import { computeActiveLyricIndex } from './lyricDepth';
 const createLyricsStyles = ({
   width,
   height,
+  insets,
+  isEffectivelyCompact,
 }) => ({
   appleLyricsContainer: {
     position: 'absolute',
@@ -51,12 +53,26 @@ const createLyricsStyles = ({
   },
   lyricsMiniTitle: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
+    letterSpacing: -0.25,
   },
   lyricsMiniArtist: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 12,
+    letterSpacing: -0.125,
+  },
+  syncedLyricsWrapper: {
+    flex: 1,
+    width: width,
+    height: height,
+    overflow: 'hidden',
+  },
+  syncedLyricsList: {
+    width: width,
+    paddingTop: (insets?.top || 47) + 115,
+    paddingBottom: isEffectivelyCompact ? ((insets?.bottom || 34) + 160) : ((insets?.bottom || 34) + 235),
+    paddingHorizontal: 30,
   },
   lyricsScrollView: {
     width: width,
@@ -149,9 +165,23 @@ const AppleLyricsView = ({
   isLyricsMountedRef.current = isLyricsMounted;
 
   const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
-  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
   const lyricsScrollRef = useRef(null);
+
+  // Wave motion states & refs matching web version (AppleLyricsStream.tsx)
+  const [baseTargetY, setBaseTargetY] = useState(0);
+  const [userScrollOffset, setUserScrollOffset] = useState(0);
+  const userScrollOffsetRef = useRef(0);
+  userScrollOffsetRef.current = userScrollOffset;
+
+  const [isManualScrolling, setIsManualScrolling] = useState(false);
+  const isManualScrollingRef = useRef(false);
+  isManualScrollingRef.current = isManualScrolling;
+
+  const [isInitialMount, setIsInitialMount] = useState(true);
+  const manualScrollTimeoutRef = useRef(null);
   const lyricLayouts = useRef({});
+  const heightRef = useRef(height);
+  heightRef.current = height;
 
   const [isLyricsCompact, setIsLyricsCompact] = useState(false);
   const isLyricsCompactRef = useRef(false);
@@ -209,7 +239,7 @@ const AppleLyricsView = ({
         isLyricsMountedRef.current = false;
       }
     }
-  }, [isLyricsView, isPlayerVisible]);
+  }, [isLyricsView, isPlayerVisible, lyricsTransition, lyricsRotation, setIsLyricsMounted]);
 
   const resetInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
@@ -225,9 +255,6 @@ const AppleLyricsView = ({
     resetInactivityTimer();
   }, [resetInactivityTimer]);
 
-  const exitCompactModeRef = useRef(exitCompactMode);
-  exitCompactModeRef.current = exitCompactMode;
-
   const onExitCompactModeRef = useRef(onExitCompactMode);
   onExitCompactModeRef.current = onExitCompactMode;
   useEffect(() => {
@@ -236,145 +263,52 @@ const AppleLyricsView = ({
     }
   }, [exitCompactMode]);
 
-  const currentTimeRef = useRef(currentTime);
-  currentTimeRef.current = currentTime;
-
-  const lyricsRef = useRef(lyrics);
-  lyricsRef.current = lyrics;
-
-  const isLyricsViewRef = useRef(isLyricsView);
-  isLyricsViewRef.current = isLyricsView;
-
-  const lastScrolledIndexRef = useRef(-1);
-  const lyricsInteractionTimerRef = useRef(null);
-  const isLyricsInteractingRef = useRef(false);
-  const lastInteractionTimeRef = useRef(0);
-  const isProgrammaticScrollRef = useRef(false);
-  const programmaticScrollTimeoutRef = useRef(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  const scrollToActiveLyric = useCallback((animated = true) => {
-    if (!isPlayerVisible || !isLyricsViewRef.current || !lyricsRef.current || lyricsRef.current.length === 0 || !lyricsScrollRef.current) return;
-    const index = computeActiveLyricIndex(lyricsRef.current, currentTimeRef.current);
-    const scrollIndex = index <= 0 ? 0 : index;
-    lastScrolledIndexRef.current = scrollIndex;
-    const targetY = lyricLayouts.current[scrollIndex];
-    const scrollY = Math.max(0, (targetY !== undefined ? targetY : scrollIndex * 80) - 240);
-
-    isProgrammaticScrollRef.current = true;
-    if (programmaticScrollTimeoutRef.current) {
-      clearTimeout(programmaticScrollTimeoutRef.current);
+  // Reset flags and scroll positions on track change
+  useEffect(() => {
+    if (manualScrollTimeoutRef.current) {
+      clearTimeout(manualScrollTimeoutRef.current);
     }
-    lyricsScrollRef.current.scrollTo({ y: scrollY, animated });
-    programmaticScrollTimeoutRef.current = setTimeout(() => {
-      isProgrammaticScrollRef.current = false;
-    }, 800);
-  }, [isPlayerVisible]);
-
-  const startLyricsInteractionTimer = useCallback(() => {
-    lastInteractionTimeRef.current = Date.now();
-    isLyricsInteractingRef.current = true;
-    setIsAutoScrollPaused(true);
-    if (lyricsInteractionTimerRef.current) {
-      clearTimeout(lyricsInteractionTimerRef.current);
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
     }
-    lyricsInteractionTimerRef.current = setTimeout(() => {
-      isLyricsInteractingRef.current = false;
-      setIsAutoScrollPaused(false);
-      scrollToActiveLyric(true);
-    }, 5000);
-  }, [scrollToActiveLyric]);
+    setIsManualScrolling(false);
+    isManualScrollingRef.current = false;
+    setUserScrollOffset(0);
+    userScrollOffsetRef.current = 0;
+    setBaseTargetY(0);
+    setIsInitialMount(true);
+    lyricLayouts.current = {};
+  }, [currentTrack?.id]);
 
-  const handleLyricsInteraction = useCallback(() => {
-    setIsAutoScrollPaused(true);
-    if (isLyricsCompactRef.current) {
-      exitCompactMode();
+  // Transition from initial snap mount to animated wave springs
+  useEffect(() => {
+    if (isInitialMount) {
+      const t = setTimeout(() => {
+        setIsInitialMount(false);
+      }, 250);
+      return () => clearTimeout(t);
     }
-    resetInactivityTimer();
-    startLyricsInteractionTimer();
-  }, [exitCompactMode, resetInactivityTimer, startLyricsInteractionTimer]);
+  }, [isInitialMount]);
 
-  const handleScroll = useCallback(() => {
-    if (isProgrammaticScrollRef.current) {
-      return;
-    }
-    setIsAutoScrollPaused(true);
-    handleLyricsInteraction();
-  }, [handleLyricsInteraction]);
-
-  const handleScrollBeginDrag = useCallback(() => {
-    isProgrammaticScrollRef.current = false;
-    setIsAutoScrollPaused(true);
-    handleLyricsInteraction();
-  }, [handleLyricsInteraction]);
-
-  const handleScrollEndDrag = useCallback((event) => {
-    const offsetY = event.nativeEvent?.contentOffset?.y ?? 0;
-    const velocityY = event.nativeEvent?.velocity?.y ?? 0;
-    if (offsetY < -45 || (offsetY < 0 && velocityY < -0.6)) {
-      if (onCloseRef.current) {
-        onCloseRef.current();
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (manualScrollTimeoutRef.current) {
+        clearTimeout(manualScrollTimeoutRef.current);
       }
-      return;
-    }
-    startLyricsInteractionTimer();
-  }, [startLyricsInteractionTimer]);
-
-  const handleMomentumScrollBegin = useCallback(() => {
-    if (isProgrammaticScrollRef.current) return;
-    if (lyricsInteractionTimerRef.current) {
-      clearTimeout(lyricsInteractionTimerRef.current);
-    }
-    isLyricsInteractingRef.current = true;
-    lastInteractionTimeRef.current = Date.now();
-    setIsAutoScrollPaused(true);
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+    };
   }, []);
 
-  const handleMomentumScrollEnd = useCallback(() => {
-    if (isProgrammaticScrollRef.current) return;
-    startLyricsInteractionTimer();
-  }, [startLyricsInteractionTimer]);
-
-  useEffect(() => {
-    resetInactivityTimer();
-    return () => {
-      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-      if (lyricsInteractionTimerRef.current) clearTimeout(lyricsInteractionTimerRef.current);
-      if (programmaticScrollTimeoutRef.current) clearTimeout(programmaticScrollTimeoutRef.current);
-    };
-  }, [isLyricsView, isLyricsCompact, resetInactivityTimer]);
-
-  useEffect(() => {
-    if (!isLyricsView) {
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-      }
-      setIsLyricsCompact(false);
-      if (lyricsInteractionTimerRef.current) {
-        clearTimeout(lyricsInteractionTimerRef.current);
-      }
-      isLyricsInteractingRef.current = false;
-      lastInteractionTimeRef.current = 0;
-      lastScrolledIndexRef.current = -1;
-      setIsAutoScrollPaused(false);
-    }
-  }, [isLyricsView]);
-
+  // Fetch track lyrics
   useEffect(() => {
     if (currentTrack?.id) {
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-      }
-      setIsLyricsCompact(false);
-      if (lyricsInteractionTimerRef.current) {
-        clearTimeout(lyricsInteractionTimerRef.current);
-      }
-      isLyricsInteractingRef.current = false;
-      lastInteractionTimeRef.current = 0;
-      setIsAutoScrollPaused(false);
       setIsLoadingLyrics(true);
-      lastScrolledIndexRef.current = -1;
       authFetch(`/api/tracks/${currentTrack.id}/lyrics`)
         .then(res => res.json())
         .then(data => {
@@ -395,54 +329,152 @@ const AppleLyricsView = ({
             setHasSyncedLyrics(false);
           }
         })
-        .catch(err => {
+        .catch(() => {
           setLyrics([]);
           setPlainLyricsText('');
           setHasSyncedLyrics(false);
         })
         .finally(() => setIsLoadingLyrics(false));
     }
-  }, [currentTrack]);
+  }, [currentTrack?.id]);
 
+  // Active lyric index computation
+  const activeIndex = useMemo(() => {
+    if (!hasSyncedLyrics || lyrics.length === 0) return -1;
+    return computeActiveLyricIndex(lyrics, currentTime);
+  }, [hasSyncedLyrics, lyrics, currentTime]);
+
+  const activeIndexRef = useRef(activeIndex);
+  activeIndexRef.current = activeIndex;
+
+  // Focal position calculation: optical center at 40% of viewport
   useEffect(() => {
-    if (!isPlayerVisible || !isLyricsView || !hasSyncedLyrics) {
-      lastScrolledIndexRef.current = -1;
+    if (activeIndex < 0 || !hasSyncedLyrics) {
+      setBaseTargetY(0);
       return;
     }
-    // Block autoscroll if user interacted within the last 5 seconds!
-    const timeSinceInteraction = Date.now() - lastInteractionTimeRef.current;
-    if (isLyricsInteractingRef.current || timeSinceInteraction < 5000 || isAutoScrollPaused) {
-      return;
-    }
-    if (lyrics.length > 0 && lyricsScrollRef.current) {
-      const index = computeActiveLyricIndex(lyrics, currentTime);
-      const scrollIndex = index <= 0 ? 0 : index;
-      if (scrollIndex !== lastScrolledIndexRef.current) {
-        const isFirst = lastScrolledIndexRef.current === -1;
-        lastScrolledIndexRef.current = scrollIndex;
-        const targetY = lyricLayouts.current[scrollIndex];
-        const scrollY = Math.max(0, (targetY !== undefined ? targetY : scrollIndex * 80) - 240);
 
-        isProgrammaticScrollRef.current = true;
-        if (programmaticScrollTimeoutRef.current) {
-          clearTimeout(programmaticScrollTimeoutRef.current);
-        }
-        lyricsScrollRef.current.scrollTo({ y: scrollY, animated: !isFirst });
-        programmaticScrollTimeoutRef.current = setTimeout(() => {
-          isProgrammaticScrollRef.current = false;
-        }, 800);
+    // Freeze autoscroll while user is manually scrolling
+    if (isManualScrolling) {
+      return;
+    }
+
+    const focalY = Math.max(160, height * 0.40);
+    const layout = lyricLayouts.current[activeIndex];
+    const lineTop = layout ? layout.y : (activeIndex * 80);
+    const lineHeight = layout ? layout.height : 44;
+    const newTarget = -(lineTop - focalY + lineHeight / 2);
+    setBaseTargetY((prev) => (Math.abs(prev - newTarget) > 0.5 ? newTarget : prev));
+  }, [activeIndex, isManualScrolling, height, hasSyncedLyrics]);
+
+  // Record line layout from children
+  const handleLineLayout = useCallback((index, y, lineHeight) => {
+    lyricLayouts.current[index] = { y, height: lineHeight };
+    if (index === activeIndexRef.current && !isManualScrollingRef.current) {
+      const focalY = Math.max(160, heightRef.current * 0.40);
+      const newTarget = -(y - focalY + (lineHeight || 44) / 2);
+      setBaseTargetY((prev) => (Math.abs(prev - newTarget) > 0.5 ? newTarget : prev));
+    }
+  }, []);
+
+  // Schedule resumption of autoscroll after exactly 3.0 seconds of manual inactivity
+  const scheduleManualScrollResume = useCallback(() => {
+    if (manualScrollTimeoutRef.current) {
+      clearTimeout(manualScrollTimeoutRef.current);
+    }
+    manualScrollTimeoutRef.current = setTimeout(() => {
+      setIsManualScrolling(false);
+      isManualScrollingRef.current = false;
+      setUserScrollOffset(0);
+      userScrollOffsetRef.current = 0;
+    }, 3000);
+  }, []);
+
+  // Handle line click: cancel manual scroll, reset offset, and seek
+  const handleLineClick = useCallback((time) => {
+    if (manualScrollTimeoutRef.current) {
+      clearTimeout(manualScrollTimeoutRef.current);
+    }
+    setIsManualScrolling(false);
+    isManualScrollingRef.current = false;
+    setUserScrollOffset(0);
+    userScrollOffsetRef.current = 0;
+    if (time !== null && seekTo) {
+      seekTo(time);
+    }
+    if (isLyricsCompactRef.current) {
+      exitCompactMode();
+    }
+    resetInactivityTimer();
+  }, [seekTo, exitCompactMode, resetInactivityTimer]);
+
+  // Manual drag gesture with traffic-jam parity
+  const dragStartYRef = useRef(0);
+
+  const handlePanBegin = useCallback(() => {
+    if (manualScrollTimeoutRef.current) {
+      clearTimeout(manualScrollTimeoutRef.current);
+    }
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+    }
+    if (isLyricsCompactRef.current) {
+      exitCompactMode();
+    }
+    dragStartYRef.current = userScrollOffsetRef.current;
+    setIsManualScrolling(true);
+    isManualScrollingRef.current = true;
+  }, [exitCompactMode]);
+
+  const handlePanUpdate = useCallback((translationY) => {
+    const next = dragStartYRef.current + translationY;
+    const clamped = Math.max(-4000, Math.min(4000, next));
+    setUserScrollOffset(clamped);
+    userScrollOffsetRef.current = clamped;
+    scheduleManualScrollResume();
+  }, [scheduleManualScrollResume]);
+
+  const handlePanEnd = useCallback((translationY, velocityY) => {
+    // If pulled down strongly when near top, close lyrics view
+    if ((dragStartYRef.current >= -20 && translationY > 60) || velocityY > 800) {
+      if (onCloseRef.current) {
+        onCloseRef.current();
+        return;
       }
     }
-  }, [currentTime, isLyricsView, lyrics, isAutoScrollPaused, hasSyncedLyrics]);
+    resetInactivityTimer();
+    scheduleManualScrollResume();
+  }, [resetInactivityTimer, scheduleManualScrollResume]);
+
+  const panGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activeOffsetY([-8, 8])
+      .failOffsetX([-25, 25])
+      .onBegin(() => {
+        'worklet';
+        runOnJS(handlePanBegin)();
+      })
+      .onUpdate((event) => {
+        'worklet';
+        runOnJS(handlePanUpdate)(event.translationY);
+      })
+      .onEnd((event) => {
+        'worklet';
+        runOnJS(handlePanEnd)(event.translationY, event.velocityY);
+      });
+  }, [handlePanBegin, handlePanUpdate, handlePanEnd]);
+
+  const computedTargetY = baseTargetY + userScrollOffset;
 
   const styles = useMemo(() => createLyricsStyles({
     width,
     height,
-  }), [width, height]);
+    insets,
+    isEffectivelyCompact,
+  }), [width, height, insets, isEffectivelyCompact]);
 
   return (
     <>
-      {/* Lyrics View (Full Screen, behind safeArea controls) */}
       {(isLyricsView || isLyricsMounted) && (
         <Animated.View
           style={[
@@ -458,10 +490,9 @@ const AppleLyricsView = ({
               zIndex: 5,
             }
           ]}
-          onTouchStart={handleLyricsInteraction}
-          onTouchMove={handleLyricsInteraction}
           pointerEvents={(!isPlayerVisible || isQueueVisible || !isLyricsView) ? 'none' : 'auto'}
         >
+          {/* Header */}
           <GestureDetector gesture={lyricsHeaderSwipeGesture}>
             <Animated.View
               style={[
@@ -507,94 +538,78 @@ const AppleLyricsView = ({
             </Animated.View>
           </GestureDetector>
 
-          <Animated.View style={[{ flex: 1, width: '100%' }, lyricsContentAnimatedStyle]}>
+          {/* Body */}
+          <Animated.View style={[{ flex: 1, width: '100%', overflow: 'hidden' }, lyricsContentAnimatedStyle]}>
             {isLoadingLyrics ? (
               <ActivityIndicator color="#fff" size="large" style={{ marginTop: 200 }} />
-            ) : (lyrics.length > 0 || (plainLyricsText && plainLyricsText.trim().length > 0)) ? (
+            ) : hasSyncedLyrics && lyrics.length > 0 ? (
+              /* Synced Lyrics with Staggered Traffic-Jam Wave Propagation */
+              <GestureDetector gesture={panGesture}>
+                <Animated.View style={styles.syncedLyricsWrapper}>
+                  <View style={styles.syncedLyricsList}>
+                    {lyrics.map((line, idx) => {
+                      const isActive = activeIndex >= 0 && idx === activeIndex;
+                      return (
+                        <AnimatedLyricLine
+                          key={idx}
+                          text={line.text}
+                          index={idx}
+                          activeIndex={activeIndex}
+                          targetY={computedTargetY}
+                          isActive={isActive}
+                          isInitial={isInitialMount}
+                          isManualScrolling={isManualScrolling}
+                          baseStyle={styles.lyricLine}
+                          onLayout={handleLineLayout}
+                          onPress={() => handleLineClick(line.time)}
+                        />
+                      );
+                    })}
+                  </View>
+                </Animated.View>
+              </GestureDetector>
+            ) : plainLyricsText && plainLyricsText.trim().length > 0 ? (
+              /* Plain Unsynced Lyrics fallback */
               <ScrollView
                 ref={lyricsScrollRef}
                 style={styles.lyricsScrollView}
                 showsVerticalScrollIndicator={false}
-                scrollEventThrottle={16}
-                onTouchStart={handleLyricsInteraction}
-                onScroll={handleScroll}
-                onScrollBeginDrag={handleScrollBeginDrag}
-                onScrollEndDrag={handleScrollEndDrag}
-                onMomentumScrollBegin={handleMomentumScrollBegin}
-                onMomentumScrollEnd={handleMomentumScrollEnd}
                 contentContainerStyle={{
                   paddingTop: insets.top + 115,
                   paddingBottom: isEffectivelyCompact ? ((insets.bottom || 34) + 160) : ((insets.bottom || 34) + 235),
                   paddingHorizontal: 30,
                 }}
               >
-                {!hasSyncedLyrics ? (
-                  <View style={styles.plainLyricsWrapper}>
-                    {(plainLyricsText || lyrics.map(l => l.text).join('\n'))
-                      .split('\n')
-                      .map((line, idx) => {
-                        const trimmed = line.trim();
-                        if (!trimmed) {
-                          return <View key={idx} style={styles.plainStanzaSpacer} />;
-                        }
-                        const isHeader = /^\[.+\]$/.test(trimmed);
-                        if (isHeader) {
-                          return (
-                            <Text key={idx} style={styles.plainSectionTitle}>
-                              {trimmed.replace(/^\[|\]$/g, '')}
-                            </Text>
-                          );
-                        }
+                <View style={styles.plainLyricsWrapper}>
+                  {(plainLyricsText || lyrics.map(l => l.text).join('\n'))
+                    .split('\n')
+                    .map((line, idx) => {
+                      const trimmed = line.trim();
+                      if (!trimmed) {
+                        return <View key={idx} style={styles.plainStanzaSpacer} />;
+                      }
+                      const isHeader = /^\[.+\]$/.test(trimmed);
+                      if (isHeader) {
                         return (
-                          <Text key={idx} style={styles.plainLyricText}>
-                            {trimmed}
+                          <Text key={idx} style={styles.plainSectionTitle}>
+                            {trimmed.replace(/^\[|\]$/g, '')}
                           </Text>
                         );
-                      })}
-                  </View>
-                ) : (
-                  (() => {
-                    const activeIndex = computeActiveLyricIndex(lyrics, currentTime);
-
-                    return lyrics.map((line, idx) => {
-                      const isActive = activeIndex >= 0 && idx === activeIndex;
-                      const distance = activeIndex === -2
-                        ? 0
-                        : activeIndex === -1
-                          ? (idx + 1)
-                          : Math.abs(idx - activeIndex);
-
+                      }
                       return (
-                        <AnimatedLyricLine
-                          key={idx}
-                          text={line.text}
-                          isActive={isActive}
-                          distance={distance}
-                          activeIndex={activeIndex}
-                          isAutoScrollPaused={isAutoScrollPaused}
-                          index={idx}
-                          baseStyle={styles.lyricLine}
-                          onLayout={(i, y) => {
-                            lyricLayouts.current[i] = y;
-                          }}
-                          onPressIn={handleLyricsInteraction}
-                          onPress={() => {
-                            handleLyricsInteraction();
-                            if (line.time !== null && seekTo) {
-                              seekTo(line.time);
-                            }
-                          }}
-                        />
+                        <Text key={idx} style={styles.plainLyricText}>
+                          {trimmed}
+                        </Text>
                       );
-                    });
-                  })()
-                )}
+                    })}
+                </View>
               </ScrollView>
             ) : (
               <Text style={styles.noLyricsText}>Lyrics not found</Text>
             )}
           </Animated.View>
 
+          {/* Top and Bottom Blur Vignettes */}
           <Animated.View style={[StyleSheet.absoluteFill, lyricsOverlaysAnimatedStyle]} pointerEvents="none">
             <TopBlurOverlay animatedBgStyle={animatedBgStyle} insets={insets} />
             <BottomBlurOverlay insets={insets} />

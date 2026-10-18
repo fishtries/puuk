@@ -5,385 +5,153 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withTiming,
-  withSequence,
   withDelay,
-  FadeInDown,
   Easing,
   interpolateColor,
 } from 'react-native-reanimated';
-import { getLyricTarget } from './lyricDepth';
+import { getProgressiveValues, getWaveSpring } from './lyricDepth';
 
+/**
+ * AnimatedLyricLine: Individual lyric line with staggered traffic-jam spring wave propagation.
+ * Lines follow one after another like cars in a traffic jam ("как машины в пробке").
+ *
+ * Direct parity with web implementation (LyricLineRow.tsx & lyricsDepth.ts):
+ * - Leading line (index === activeIndex) reacts immediately with delay = 0
+ * - Trailing lines (index > activeIndex) follow with traffic-jam reaction delay (130ms, 230ms, ...)
+ * - Ahead lines (index < activeIndex) follow with cascade pull upward (45ms, 100ms, ...)
+ * - When manual scrolling occurs (isManualScrolling = true), wave delay is disabled (0ms)
+ *   and all lines scroll synchronously as a single solid unit with full clarity.
+ */
 const AnimatedLyricLine = ({
   text,
-  isActive,
-  distance,
   index,
   activeIndex,
-  isAutoScrollPaused = false,
+  targetY = 0,
+  isActive = false,
+  isInitial = false,
+  isManualScrolling = false,
   baseStyle,
   onLayout,
   onPress,
-  onPressIn,
 }) => {
-  const initialRel = activeIndex === -2
-    ? 0
-    : activeIndex === -1
-      ? (index + 1)
-      : (index - activeIndex);
-  const normalTarget = activeIndex === -2
-    ? { scale: 1.0, opacity: 0.92, color: 1.0 }
-    : getLyricTarget(initialRel);
+  const progressive = isManualScrolling
+    ? isActive
+      ? { scale: 1.03, opacity: 1.0, blur: 0 }
+      : { scale: 1.0, opacity: 1.0, blur: 0 }
+    : getProgressiveValues(index, activeIndex);
 
-  const initialTarget = isAutoScrollPaused
-    ? (isActive ? { scale: 1.0, opacity: 1.0, color: 1.0 } : { scale: 1.0, opacity: 0.65, color: 0.45 })
-    : normalTarget;
+  const spring = getWaveSpring(index, activeIndex, isInitial, isManualScrolling);
+  const delayMs = Math.round((spring.delay || 0) * 1000);
+  const springStiffness = spring.stiffness;
+  const springDamping = spring.damping;
+  const springMass = spring.mass;
 
-  const waveY = useSharedValue(0);
-  const lineScale = useSharedValue(initialTarget.scale);
-  const lineOpacity = useSharedValue(initialTarget.opacity);
-  const colorProgress = useSharedValue(initialTarget.color);
-  const lastActiveIndex = useRef(-1);
-  const wasPausedRef = useRef(isAutoScrollPaused);
+  const targetYRef = useRef(targetY);
+  targetYRef.current = targetY;
+
+  const lineY = useSharedValue(targetY);
+  const lineScale = useSharedValue(progressive.scale);
+  const lineOpacity = useSharedValue(progressive.opacity);
+  const colorProgress = useSharedValue(
+    isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25)
+  );
 
   useEffect(() => {
-    if (activeIndex === -2) {
-      lastActiveIndex.current = -2;
-      waveY.value = 0;
-      lineScale.value = 1.0;
-      lineOpacity.value = 0.92;
-      colorProgress.value = 1.0;
+    // Initial mount or track reset: snap without animation
+    if (isInitial) {
+      lineY.value = targetY;
+      lineScale.value = progressive.scale;
+      lineOpacity.value = progressive.opacity;
+      colorProgress.value = isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25);
       return;
     }
 
-    if (isAutoScrollPaused) {
-      wasPausedRef.current = true;
-      lastActiveIndex.current = activeIndex;
-      waveY.value = withTiming(0, { duration: 150 });
-      if (isActive) {
-        lineScale.value = withTiming(1.0, { duration: 200, easing: Easing.out(Easing.cubic) });
-        lineOpacity.value = withTiming(1.0, { duration: 200, easing: Easing.out(Easing.cubic) });
-        colorProgress.value = withTiming(1.0, { duration: 200, easing: Easing.out(Easing.cubic) });
-      } else {
-        lineScale.value = withTiming(1.0, { duration: 200, easing: Easing.out(Easing.cubic) });
-        lineOpacity.value = withTiming(0.65, { duration: 200, easing: Easing.out(Easing.cubic) });
-        colorProgress.value = withTiming(0.45, { duration: 200, easing: Easing.out(Easing.cubic) });
-      }
+    // Manual scroll: synchronous spring with zero delay & full clarity
+    if (isManualScrolling) {
+      lineY.value = withSpring(targetY, {
+        stiffness: 260,
+        damping: 28,
+        mass: 0.55,
+      });
+      lineScale.value = withTiming(progressive.scale, { duration: 250 });
+      lineOpacity.value = withTiming(progressive.opacity, { duration: 250 });
+      colorProgress.value = withTiming(isActive ? 1.0 : 0.85, { duration: 200 });
       return;
     }
 
-    if (wasPausedRef.current) {
-      wasPausedRef.current = false;
-      lastActiveIndex.current = activeIndex;
-      const rel = activeIndex === -1 ? (index + 1) : (index - activeIndex);
-      const target = getLyricTarget(rel);
-      waveY.value = withTiming(0, { duration: 200 });
-      lineScale.value = withTiming(target.scale, { duration: 350, easing: Easing.out(Easing.cubic) });
-      lineOpacity.value = withTiming(target.opacity, { duration: 350, easing: Easing.out(Easing.cubic) });
-      colorProgress.value = withTiming(target.color, { duration: 350, easing: Easing.out(Easing.cubic) });
-      return;
+    // Staggered wave delay: "как машины в пробке"
+    if (delayMs > 0) {
+      lineY.value = withDelay(
+        delayMs,
+        withSpring(targetY, {
+          stiffness: springStiffness,
+          damping: springDamping,
+          mass: springMass,
+        })
+      );
+      lineScale.value = withDelay(
+        Math.round(delayMs * 0.6),
+        withTiming(progressive.scale, {
+          duration: 450,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+        })
+      );
+      lineOpacity.value = withDelay(
+        Math.round(delayMs * 0.6),
+        withTiming(progressive.opacity, {
+          duration: 450,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+        })
+      );
+      colorProgress.value = withDelay(
+        isActive ? 0 : Math.round(delayMs * 0.4),
+        withTiming(isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25), {
+          duration: isActive ? 200 : 350,
+          easing: Easing.out(Easing.cubic),
+        })
+      );
+    } else {
+      lineY.value = withSpring(targetY, {
+        stiffness: springStiffness,
+        damping: springDamping,
+        mass: springMass,
+      });
+      lineScale.value = withTiming(progressive.scale, {
+        duration: 450,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+      });
+      lineOpacity.value = withTiming(progressive.opacity, {
+        duration: 450,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+      });
+      colorProgress.value = withTiming(isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25), {
+        duration: isActive ? 200 : 350,
+        easing: Easing.out(Easing.cubic),
+      });
     }
-
-    if (activeIndex === -1) {
-      lastActiveIndex.current = -1;
-      const target = getLyricTarget(index + 1);
-      waveY.value = 0;
-      lineScale.value = target.scale;
-      lineOpacity.value = target.opacity;
-      colorProgress.value = target.color;
-      return;
-    }
-
-    const rel = index - activeIndex;
-
-    if (lastActiveIndex.current === -1) {
-      if (activeIndex === 0) {
-        // Transition from intro (-1) to first line (0)
-      } else {
-        lastActiveIndex.current = activeIndex;
-        const target = getLyricTarget(rel);
-        waveY.value = 0;
-        lineScale.value = target.scale;
-        lineOpacity.value = target.opacity;
-        colorProgress.value = target.color;
-        return;
-      }
-    }
-
-    if (lastActiveIndex.current !== activeIndex) {
-      const prevIdx = lastActiveIndex.current === -1 ? -1 : lastActiveIndex.current;
-      const diff = activeIndex - prevIdx;
-      const direction = diff > 0 ? 1 : -1;
-
-      if (direction > 0) {
-        if (diff === 1) {
-          if (rel === 0) {
-            waveY.value = withSequence(
-              withTiming(-12, { duration: 180, easing: Easing.out(Easing.cubic) }),
-              withSpring(0, { damping: 22, stiffness: 125, mass: 0.8 })
-            );
-            lineScale.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === -1) {
-            waveY.value = withSequence(
-              withTiming(-26, { duration: 160, easing: Easing.out(Easing.cubic) }),
-              withSpring(0, { damping: 20, stiffness: 115, mass: 0.8 })
-            );
-            lineScale.value = withTiming(0.96, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.60, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.58, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === -2) {
-            waveY.value = withSequence(
-              withTiming(-13, { duration: 170, easing: Easing.out(Easing.quad) }),
-              withSpring(0, { damping: 22, stiffness: 120, mass: 0.8 })
-            );
-            lineScale.value = withTiming(0.94, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.45, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.38, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === -3) {
-            waveY.value = withDelay(
-              40,
-              withSequence(
-                withTiming(-7, { duration: 180, easing: Easing.out(Easing.quad) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.8 })
-              )
-            );
-            lineScale.value = withTiming(0.92, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.32, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel < -3) {
-            const target = getLyricTarget(rel);
-            waveY.value = withSpring(0, { damping: 22, stiffness: 120 });
-            lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === 1) {
-            const d1 = 70;
-            waveY.value = withDelay(
-              d1,
-              withSequence(
-                withTiming(-8, { duration: 220, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d1, withTiming(0.96, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d1, withTiming(0.60, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d1, withTiming(0.58, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === 2) {
-            const d2 = 140;
-            waveY.value = withDelay(
-              d2,
-              withSequence(
-                withTiming(-5.5, { duration: 230, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d2, withTiming(0.94, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d2, withTiming(0.45, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d2, withTiming(0.38, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === 3) {
-            const d3 = 210;
-            waveY.value = withDelay(
-              d3,
-              withSequence(
-                withTiming(-3.8, { duration: 240, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d3, withTiming(0.92, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d3, withTiming(0.32, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d3, withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === 4) {
-            const d4 = 280;
-            waveY.value = withDelay(
-              d4,
-              withSequence(
-                withTiming(-2.4, { duration: 240, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d4, withTiming(0.91, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d4, withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d4, withTiming(0.12, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === 5) {
-            const d5 = 350;
-            waveY.value = withDelay(
-              d5,
-              withSequence(
-                withTiming(-1.5, { duration: 240, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d5, withTiming(0.90, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d5, withTiming(0.16, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d5, withTiming(0.06, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === 6) {
-            const d6 = 420;
-            waveY.value = withDelay(
-              d6,
-              withSequence(
-                withTiming(-0.8, { duration: 240, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d6, withTiming(0.89, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d6, withTiming(0.11, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d6, withTiming(0.02, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else {
-            const target = getLyricTarget(rel);
-            waveY.value = withSpring(0, { damping: 22, stiffness: 120 });
-            lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-          }
-        } else {
-          const target = getLyricTarget(rel);
-          waveY.value = withSpring(0, { damping: 24, stiffness: 130 });
-          lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-          lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-          colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-        }
-      } else {
-        if (diff === -1) {
-          if (rel === 0) {
-            waveY.value = withSequence(
-              withTiming(12, { duration: 180, easing: Easing.out(Easing.cubic) }),
-              withSpring(0, { damping: 22, stiffness: 125, mass: 0.8 })
-            );
-            lineScale.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(1.0, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === 1) {
-            waveY.value = withSequence(
-              withTiming(26, { duration: 160, easing: Easing.out(Easing.cubic) }),
-              withSpring(0, { damping: 20, stiffness: 115, mass: 0.8 })
-            );
-            lineScale.value = withTiming(0.96, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.60, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.58, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === 2) {
-            waveY.value = withSequence(
-              withTiming(13, { duration: 170, easing: Easing.quad }),
-              withSpring(0, { damping: 22, stiffness: 120, mass: 0.8 })
-            );
-            lineScale.value = withTiming(0.94, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.45, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.38, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === 3) {
-            waveY.value = withDelay(
-              40,
-              withSequence(
-                withTiming(7, { duration: 180, easing: Easing.quad }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.8 })
-              )
-            );
-            lineScale.value = withTiming(0.92, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(0.32, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel > 3) {
-            const target = getLyricTarget(rel);
-            waveY.value = withSpring(0, { damping: 22, stiffness: 120 });
-            lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-          } else if (rel === -1) {
-            const d1 = 70;
-            waveY.value = withDelay(
-              d1,
-              withSequence(
-                withTiming(8, { duration: 200, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d1, withTiming(0.96, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d1, withTiming(0.60, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d1, withTiming(0.58, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === -2) {
-            const d2 = 140;
-            waveY.value = withDelay(
-              d2,
-              withSequence(
-                withTiming(5.5, { duration: 210, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d2, withTiming(0.94, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d2, withTiming(0.45, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d2, withTiming(0.38, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === -3) {
-            const d3 = 210;
-            waveY.value = withDelay(
-              d3,
-              withSequence(
-                withTiming(3.8, { duration: 220, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d3, withTiming(0.92, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d3, withTiming(0.32, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d3, withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === -4) {
-            const d4 = 280;
-            waveY.value = withDelay(
-              d4,
-              withSequence(
-                withTiming(2.4, { duration: 220, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d4, withTiming(0.91, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d4, withTiming(0.22, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d4, withTiming(0.12, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === -5) {
-            const d5 = 350;
-            waveY.value = withDelay(
-              d5,
-              withSequence(
-                withTiming(1.5, { duration: 220, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d5, withTiming(0.90, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d5, withTiming(0.16, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d5, withTiming(0.06, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else if (rel === -6) {
-            const d6 = 420;
-            waveY.value = withDelay(
-              d6,
-              withSequence(
-                withTiming(0.8, { duration: 220, easing: Easing.out(Easing.cubic) }),
-                withSpring(0, { damping: 22, stiffness: 120, mass: 0.85 })
-              )
-            );
-            lineScale.value = withDelay(d6, withTiming(0.89, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            lineOpacity.value = withDelay(d6, withTiming(0.11, { duration: 280, easing: Easing.out(Easing.cubic) }));
-            colorProgress.value = withDelay(d6, withTiming(0.02, { duration: 280, easing: Easing.out(Easing.cubic) }));
-          } else {
-            const target = getLyricTarget(rel);
-            waveY.value = withSpring(0, { damping: 22, stiffness: 120 });
-            lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-            lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-            colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-          }
-        } else {
-          const target = getLyricTarget(rel);
-          waveY.value = withSpring(0, { damping: 24, stiffness: 130 });
-          lineScale.value = withTiming(target.scale, { duration: 280, easing: Easing.out(Easing.cubic) });
-          lineOpacity.value = withTiming(target.opacity, { duration: 280, easing: Easing.out(Easing.cubic) });
-          colorProgress.value = withTiming(target.color, { duration: 280, easing: Easing.out(Easing.cubic) });
-        }
-      }
-    }
-    lastActiveIndex.current = activeIndex;
-  }, [activeIndex, isAutoScrollPaused, isActive, index]);
+  }, [
+    targetY,
+    activeIndex,
+    isActive,
+    isInitial,
+    isManualScrolling,
+    index,
+    progressive.scale,
+    progressive.opacity,
+    delayMs,
+    springStiffness,
+    springDamping,
+    springMass,
+  ]);
 
   const animatedLineStyle = useAnimatedStyle(() => {
     return {
       opacity: lineOpacity.value,
       transform: [
-        { translateY: waveY.value },
+        { translateY: lineY.value },
         { scale: lineScale.value },
       ],
+      transformOrigin: 'left center',
     };
   });
 
@@ -400,12 +168,10 @@ const AnimatedLyricLine = ({
 
   return (
     <Animated.View
-      entering={FadeInDown.delay(Math.min(index * 40, 800)).duration(400)}
-      onLayout={(e) => onLayout && onLayout(index, e.nativeEvent.layout.y)}
+      onLayout={(e) => onLayout && onLayout(index, e.nativeEvent.layout.y, e.nativeEvent.layout.height)}
     >
       <Pressable
         onPress={onPress}
-        onPressIn={onPressIn}
         disabled={!onPress}
         style={({ pressed }) => [{ opacity: pressed ? 0.8 : 1 }]}
       >
