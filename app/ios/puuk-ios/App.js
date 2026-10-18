@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   View,
@@ -35,7 +35,7 @@ import { authFetch, checkAuth, addAuthListener, SERVER_URL, setServerUrl } from 
 import { loadSettings, getSavedLastTrack, setSavedLastTrack, getSettings, addSettingsListener } from './utils/settings';
 import defaultAudioCache from './utils/audioCache';
 
-const { height } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 function AppContent() {
   const insets = useSafeAreaInsets();
@@ -72,6 +72,9 @@ function AppContent() {
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
+    history,
+    previousTrack: controllerPrevTrack,
+    nextTrack: controllerNextTrack,
     playPreviousTrack,
     fetchNextTrack,
     togglePlayPause,
@@ -123,6 +126,44 @@ function AppContent() {
 
   const activeTrack = currentTrack;
   const displayTitle = activeTrack?.title || 'Puuk Music';
+
+  const nextTrack = useMemo(() => {
+    if (controllerNextTrack) return controllerNextTrack;
+    if (!activeTrack || !tracks || tracks.length === 0) return null;
+    const activeId = activeTrack.id ?? activeTrack.track_id;
+    const idx = tracks.findIndex((t) => (t.id ?? t.track_id) === activeId);
+    if (idx >= 0 && idx < tracks.length - 1) return tracks[idx + 1];
+    return null;
+  }, [controllerNextTrack, activeTrack, tracks]);
+
+  const previousTrack = useMemo(() => {
+    if (controllerPrevTrack) return controllerPrevTrack;
+    if (!activeTrack || !tracks || tracks.length === 0) return null;
+    const activeId = activeTrack.id ?? activeTrack.track_id;
+    const idx = tracks.findIndex((t) => (t.id ?? t.track_id) === activeId);
+    if (idx > 0) return tracks[idx - 1];
+    return null;
+  }, [controllerPrevTrack, activeTrack, tracks]);
+
+  const trackWidth = width - 100;
+  const slideDistance = trackWidth + 24;
+
+  const trackSwipeX = useSharedValue(0);
+  const isSwipingTrack = useSharedValue(false);
+  const hasPrevTrack = useSharedValue(false);
+  const hasNextTrack = useSharedValue(false);
+
+  useEffect(() => {
+    hasPrevTrack.value = Boolean(previousTrack);
+  }, [previousTrack]);
+
+  useEffect(() => {
+    hasNextTrack.value = Boolean(nextTrack);
+  }, [nextTrack]);
+
+  useLayoutEffect(() => {
+    trackSwipeX.value = 0;
+  }, [activeTrack?.id]);
 
   // Геометрия подложки плеера и карточки главных экранов
   const bottomBarHeight = 64 + (insets.bottom || 34);
@@ -264,10 +305,35 @@ function AppContent() {
     dismissPlayer();
   }, [triggerDismissHaptic, dismissPlayer]);
 
-  // Жест свайпа по мини-плееру: вверх — раскрыть, вниз — закрыть насовсем
+  const handleSwipeNextComplete = useCallback(() => {
+    isSwipingTrack.value = false;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    if (upNextQueue.length > 0) {
+      fetchNextTrack();
+    } else if (nextTrack) {
+      playTrack(nextTrack);
+    }
+  }, [fetchNextTrack, playTrack, upNextQueue.length, nextTrack, isSwipingTrack]);
+
+  const handleSwipePrevComplete = useCallback(() => {
+    isSwipingTrack.value = false;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    if (history && history.length > 0) {
+      playPreviousTrack({ force: true });
+    } else if (previousTrack) {
+      playTrack(previousTrack);
+    }
+  }, [playPreviousTrack, playTrack, history, previousTrack, isSwipingTrack]);
+
+  // Жесты мини-плеера: вертикальный управляет раскрытием, горизонтальный анимирует смену трека
   const miniPlayerSwipeGesture = useMemo(() => {
-    return Gesture.Pan()
+    const verticalGesture = Gesture.Pan()
       .activeOffsetY([-8, 8])
+      .failOffsetX([-20, 20])
       .onUpdate((event) => {
         'worklet';
         if (event.translationY < 0) {
@@ -307,7 +373,76 @@ function AppContent() {
           });
         }
       });
-  }, [height, handleExpand, handleDismiss]);
+
+    const horizontalGesture = Gesture.Pan()
+      .activeOffsetX([-12, 12])
+      .failOffsetY([-20, 20])
+      .onStart(() => {
+        'worklet';
+        isSwipingTrack.value = true;
+      })
+      .onUpdate((event) => {
+        'worklet';
+        const dx = event.translationX;
+        if (dx > 0 && !hasPrevTrack.value) {
+          trackSwipeX.value = dx * 0.25;
+        } else if (dx < 0 && !hasNextTrack.value) {
+          trackSwipeX.value = dx * 0.25;
+        } else {
+          trackSwipeX.value = dx;
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        const dx = event.translationX;
+        const vx = event.velocityX;
+        const threshold = slideDistance * 0.35;
+
+        if ((dx < -threshold || vx < -350) && hasNextTrack.value) {
+          trackSwipeX.value = withTiming(
+            -slideDistance,
+            { duration: 200, easing: Easing.bezier(0.25, 1, 0.5, 1) },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                runOnJS(handleSwipeNextComplete)();
+              }
+            }
+          );
+        } else if ((dx > threshold || vx > 350) && hasPrevTrack.value) {
+          trackSwipeX.value = withTiming(
+            slideDistance,
+            { duration: 200, easing: Easing.bezier(0.25, 1, 0.5, 1) },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                runOnJS(handleSwipePrevComplete)();
+              }
+            }
+          );
+        } else {
+          trackSwipeX.value = withSpring(
+            0,
+            { damping: 24, stiffness: 240 },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                isSwipingTrack.value = false;
+              }
+            }
+          );
+        }
+      });
+
+    return Gesture.Race(verticalGesture, horizontalGesture);
+  }, [
+    height,
+    slideDistance,
+    handleExpand,
+    handleDismiss,
+    handleSwipeNextComplete,
+    handleSwipePrevComplete,
+  ]);
 
   const handleMiniPlayPause = useCallback(() => {
     if (!currentTrack) {
@@ -419,6 +554,9 @@ function AppContent() {
         isLoading={isLoading}
         seekTo={(pos) => player.seekTo(pos)}
         upNextQueue={upNextQueue}
+        history={history}
+        previousTrack={previousTrack}
+        nextTrack={nextTrack}
         playTrack={playTrack}
         onAddToPlaylist={(track) => setTrackToAdd(track || activeTrack)}
         onEditTrack={(track) => {
@@ -503,11 +641,15 @@ function AppContent() {
           handleExpand={handleExpand}
           togglePlayPause={handleMiniPlayPause}
           fetchNextTrack={fetchNextTrack}
+          nextTrack={nextTrack}
+          previousTrack={previousTrack}
+          trackSwipeX={trackSwipeX}
           panGesture={miniPlayerSwipeGesture}
           bottomBarHeight={bottomBarHeight}
           insets={insets}
           expandProgress={expandProgress}
-          hideMediaInfo={true}
+          onToggleLike={() => handleToggleLike(activeTrack)}
+          isLiked={!!activeTrack?.is_liked}
         />
       </Animated.View>
 

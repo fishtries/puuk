@@ -3,8 +3,10 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   interpolate,
@@ -13,6 +15,8 @@ import Animated, {
 import { GestureDetector } from 'react-native-gesture-handler';
 import CoverImage from '../CoverImage';
 import defaultStyles from './playerStyles';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const MiniPlayerBar = ({
   styles: propStyles,
@@ -23,16 +27,59 @@ const MiniPlayerBar = ({
   handleExpand,
   togglePlayPause,
   fetchNextTrack,
+  nextTrack,
+  previousTrack,
+  trackSwipeX,
   miniPlayerAnimatedStyle,
   panGesture,
   bottomBarHeight,
   insets,
   expandProgress,
-  hideMediaInfo = false,
+  onToggleLike,
+  isLiked,
 }) => {
   const styles = propStyles || defaultStyles;
   const title = displayTitle || currentTrack?.title || 'Puuk Music';
   const artist = currentTrack?.artist || 'Select a track to start';
+  const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
+
+  // От левого края экрана (0px) до блока кнопок справа (~100px)
+  const trackWidth = SCREEN_WIDTH - 100;
+  const slideDistance = trackWidth + 24;
+
+  // Моментальное скрытие при старте разворачивания, чтобы не было кроссфейда с FullPlayerModal
+  const trackMediaVisibilityStyle = useAnimatedStyle(() => {
+    if (!expandProgress) return {};
+    const isExpandedOrExpanding = expandProgress.value > 0.005;
+    return {
+      opacity: isExpandedOrExpanding ? 0 : 1,
+    };
+  });
+
+  const currentTrackAnimatedStyle = useAnimatedStyle(() => {
+    const swipeX = trackSwipeX ? trackSwipeX.value : 0;
+    return {
+      transform: [{ translateX: swipeX }],
+    };
+  });
+
+  const nextTrackAnimatedStyle = useAnimatedStyle(() => {
+    if (!nextTrack || !trackSwipeX) return { display: 'none' };
+    const swipeX = trackSwipeX.value;
+    return {
+      transform: [{ translateX: slideDistance + swipeX }],
+      display: 'flex',
+    };
+  });
+
+  const prevTrackAnimatedStyle = useAnimatedStyle(() => {
+    if (!previousTrack || !trackSwipeX) return { display: 'none' };
+    const swipeX = trackSwipeX.value;
+    return {
+      transform: [{ translateX: -slideDistance + swipeX }],
+      display: 'flex',
+    };
+  });
 
   const miniButtonsAnimatedStyle = useAnimatedStyle(() => {
     if (!expandProgress) return {};
@@ -54,39 +101,126 @@ const MiniPlayerBar = ({
     };
   });
 
+  const renderTrackCard = (track, trackTitle, trackArtist, animatedStyle) => {
+    if (!track && !trackTitle) return null;
+    return (
+      <Animated.View
+        style={[
+          {
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: trackWidth,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingLeft: 16,
+          },
+          animatedStyle,
+        ]}
+        pointerEvents="none"
+      >
+        <CoverImage source={track?.coverArt} style={styles.miniPlayerImage} />
+        <View style={styles.miniPlayerInfo}>
+          <Text style={styles.miniPlayerTitle} numberOfLines={1}>
+            {trackTitle || track?.title || 'Puuk Music'}
+          </Text>
+          <Text style={styles.miniPlayerArtist} numberOfLines={1}>
+            {trackArtist || track?.artist || 'Select a track to start'}
+          </Text>
+        </View>
+      </Animated.View>
+    );
+  };
+
   const content = (
     <Animated.View
       style={[
         styles.miniPlayerContainer,
+        { paddingLeft: 0 },
         bottomBarHeight ? { height: bottomBarHeight, paddingBottom: insets?.bottom || 0 } : null,
-        hideMediaInfo ? { backgroundColor: 'transparent' } : null,
         miniPlayerAnimatedStyle,
       ]}
       pointerEvents={isPlayerVisible ? 'none' : 'auto'}
     >
       <TouchableOpacity
-        style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+        style={{ flex: 1, height: 44, overflow: 'hidden' }}
         onPress={handleExpand}
         activeOpacity={0.85}
       >
-        {!hideMediaInfo ? (
-          <>
-            <CoverImage source={currentTrack?.coverArt} style={styles.miniPlayerImage} />
-            <View style={styles.miniPlayerInfo}>
-              <Text style={styles.miniPlayerTitle} numberOfLines={1}>{title}</Text>
-              <Text style={styles.miniPlayerArtist} numberOfLines={1}>{artist}</Text>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={[styles.miniPlayerImage, { backgroundColor: 'transparent' }]} />
-            <View style={styles.miniPlayerInfo} />
-          </>
-        )}
+        <Animated.View style={[{ flex: 1, height: 44 }, trackMediaVisibilityStyle]}>
+          {/* Подготовленный предыдущий трек слева */}
+          {renderTrackCard(previousTrack, previousTrack?.title, previousTrack?.artist, prevTrackAnimatedStyle)}
+
+          {/* Текущий трек по центру */}
+          {renderTrackCard(currentTrack, title, artist, currentTrackAnimatedStyle)}
+
+          {/* Подготовленный следующий трек справа */}
+          {renderTrackCard(nextTrack, nextTrack?.title, nextTrack?.artist, nextTrackAnimatedStyle)}
+        </Animated.View>
+
+        {/* Мягкие градиенты по краям, сглаживающие границы при переключении */}
+        <LinearGradient
+          colors={['rgba(0, 0, 0, 0.95)', 'rgba(0, 0, 0, 0.45)', 'rgba(0, 0, 0, 0)']}
+          locations={[0, 0.4, 1]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 36,
+            zIndex: 5,
+          }}
+          pointerEvents="none"
+        />
+        <LinearGradient
+          colors={['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.55)', 'rgba(0, 0, 0, 0.95)']}
+          locations={[0, 0.5, 1]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 36,
+            zIndex: 5,
+          }}
+          pointerEvents="none"
+        />
       </TouchableOpacity>
 
-      <Animated.View style={[{ flexDirection: 'row', alignItems: 'center' }, miniButtonsAnimatedStyle]}>
+      <Animated.View
+        style={[
+          {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#000000',
+            zIndex: 10,
+          },
+          miniButtonsAnimatedStyle,
+        ]}
+      >
         <TouchableOpacity
+          testID="mini-like-button"
+          style={styles.miniPlayerButton}
+          onPress={(e) => {
+            e.stopPropagation();
+            onToggleLike && onToggleLike();
+          }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={trackIsLiked ? "heart" : "heart-outline"}
+            size={24}
+            color={trackIsLiked ? "#ff2d55" : "#ffffff"}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="mini-play-button"
           style={styles.miniPlayerButton}
           onPress={(e) => {
             e.stopPropagation();
@@ -96,17 +230,6 @@ const MiniPlayerBar = ({
           activeOpacity={0.7}
         >
           <Ionicons name={isPlaying ? "pause" : "play"} size={26} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.miniPlayerButton}
-          onPress={(e) => {
-            e.stopPropagation();
-            fetchNextTrack();
-          }}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="play-forward" size={26} color="#ffffff" />
         </TouchableOpacity>
       </Animated.View>
     </Animated.View>

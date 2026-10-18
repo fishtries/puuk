@@ -9,7 +9,7 @@ if (!fs.existsSync(iosDir)) {
   process.exit(0);
 }
 
-// 1. Patch MediaController.swift for lock screen next/previous track commands with background task support
+// 1. Patch MediaController.swift for lock screen controls, background task support, and immediate artwork updates
 function patchMediaController() {
   const targetFile = path.join(iosDir, 'MediaController.swift');
   if (!fs.existsSync(targetFile)) {
@@ -17,34 +17,39 @@ function patchMediaController() {
     return;
   }
   let content = fs.readFileSync(targetFile, 'utf8');
-  if (content.includes('nextTrackCommand.addTarget') && content.includes('beginBackgroundTaskIfNeeded')) {
+  let modified = false;
+
+  const isRemoteCommandsPatched = content.includes('nextTrackCommand.addTarget') && content.includes('beginBackgroundTaskIfNeeded');
+  const isArtworkPatched = content.includes('info.removeValue(forKey: MPMediaItemPropertyArtwork)') &&
+    content.includes('returnCacheDataElseLoad') &&
+    content.includes('player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl');
+
+  if (isRemoteCommandsPatched && isArtworkPatched) {
     console.log('[patch-expo-audio] MediaController.swift already patched.');
     return;
   }
 
-  // Handle re-patching if it was previously patched without beginBackgroundTaskIfNeeded
-  if (content.includes('nextTrackCommand.addTarget') && !content.includes('beginBackgroundTaskIfNeeded')) {
-    content = content.replace(
-      `      player.emit(event: "nextTrack")`,
-      `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "nextTrack")`
-    );
-    content = content.replace(
-      `      player.emit(event: "previousTrack")`,
-      `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "previousTrack")`
-    );
-    fs.writeFileSync(targetFile, content, 'utf8');
-    console.log('[patch-expo-audio] Successfully updated MediaController.swift with background task assertions.');
-    return;
-  }
-
-  const oldEnableTarget = `    remoteCommandCenter.playCommand.isEnabled = true
+  // A. Remote commands
+  if (!isRemoteCommandsPatched) {
+    if (content.includes('nextTrackCommand.addTarget') && !content.includes('beginBackgroundTaskIfNeeded')) {
+      content = content.replace(
+        `      player.emit(event: "nextTrack")`,
+        `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "nextTrack")`
+      );
+      content = content.replace(
+        `      player.emit(event: "previousTrack")`,
+        `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "previousTrack")`
+      );
+      modified = true;
+    } else {
+      const oldEnableTarget = `    remoteCommandCenter.playCommand.isEnabled = true
     remoteCommandCenter.pauseCommand.isEnabled = true
     remoteCommandCenter.togglePlayPauseCommand.isEnabled = true
     remoteCommandCenter.changePlaybackPositionCommand.isEnabled = !isLiveStream
     remoteCommandCenter.skipForwardCommand.isEnabled = options?.showSeekForward ?? false
     remoteCommandCenter.skipBackwardCommand.isEnabled = options?.showSeekBackward ?? false`;
 
-  const newEnableReplacement = `    remoteCommandCenter.nextTrackCommand.addTarget { [weak self] _ in
+      const newEnableReplacement = `    remoteCommandCenter.nextTrackCommand.addTarget { [weak self] _ in
       guard let player = self?.activePlayer else {
         return .commandFailed
       }
@@ -73,7 +78,7 @@ function patchMediaController() {
     remoteCommandCenter.nextTrackCommand.isEnabled = !showSeekForward
     remoteCommandCenter.previousTrackCommand.isEnabled = !showSeekBackward`;
 
-  const oldDisableTarget = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
+      const oldDisableTarget = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
     remoteCommandCenter.skipBackwardCommand.isEnabled = false
 
     // Remove event targets
@@ -84,7 +89,7 @@ function patchMediaController() {
     remoteCommandCenter.skipForwardCommand.removeTarget(self)
     remoteCommandCenter.skipBackwardCommand.removeTarget(self)`;
 
-  const newDisableReplacement = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
+      const newDisableReplacement = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
     remoteCommandCenter.skipBackwardCommand.isEnabled = false
     remoteCommandCenter.nextTrackCommand.isEnabled = false
     remoteCommandCenter.previousTrackCommand.isEnabled = false
@@ -99,15 +104,84 @@ function patchMediaController() {
     remoteCommandCenter.nextTrackCommand.removeTarget(self)
     remoteCommandCenter.previousTrackCommand.removeTarget(self)`;
 
-  if (!content.includes(oldEnableTarget) || !content.includes(oldDisableTarget)) {
-    console.error('[patch-expo-audio] ERROR: Target signatures not found in MediaController.swift.');
-    return;
+      if (content.includes(oldEnableTarget) && content.includes(oldDisableTarget)) {
+        content = content.replace(oldEnableTarget, newEnableReplacement);
+        content = content.replace(oldDisableTarget, newDisableReplacement);
+        modified = true;
+      } else {
+        console.error('[patch-expo-audio] ERROR: Remote command target signatures not found in MediaController.swift.');
+      }
+    }
   }
 
-  content = content.replace(oldEnableTarget, newEnableReplacement);
-  content = content.replace(oldDisableTarget, newDisableReplacement);
-  fs.writeFileSync(targetFile, content, 'utf8');
-  console.log('[patch-expo-audio] Successfully patched MediaController.swift for lock screen controls.');
+  // B. Immediate artwork clearing and cache policy
+  if (!isArtworkPatched) {
+    const oldArtworkReset = `    let nextArtworkItemIdentifier = player.ref.currentItem.map { ObjectIdentifier($0) }
+    if currentArtworkItemIdentifier != nextArtworkItemIdentifier {
+      resetArtworkState()
+      currentArtworkItemIdentifier = nextArtworkItemIdentifier
+    }`;
+
+    const newArtworkReset = `    let nextArtworkItemIdentifier = player.ref.currentItem.map { ObjectIdentifier($0) }
+    if currentArtworkItemIdentifier != nextArtworkItemIdentifier {
+      currentArtworkItemIdentifier = nextArtworkItemIdentifier
+      if player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl {
+        resetArtworkState()
+      }
+    }`;
+
+    const oldArtworkUrlChange = `    if currentArtworkUrl != artworkUrl {
+      currentArtworkUrl = artworkUrl
+      cachedArtwork = nil
+      artworkLoadToken = nil
+    }`;
+
+    const newArtworkUrlChange = `    if currentArtworkUrl != artworkUrl {
+      currentArtworkUrl = artworkUrl
+      cachedArtwork = nil
+      artworkLoadToken = nil
+      info.removeValue(forKey: MPMediaItemPropertyArtwork)
+    }`;
+
+    const oldArtworkGuard = `      guard self.activePlayer?.id == player.id,
+            self.currentArtworkUrl == artworkUrl,
+            self.currentArtworkItemIdentifier == currentItemIdentifier else {
+        return
+      }`;
+
+    const newArtworkGuard = `      guard self.activePlayer?.id == player.id,
+            self.currentArtworkUrl == artworkUrl else {
+        return
+      }`;
+
+    const oldLoadArtwork = `  private func loadArtworkFromURL(url: URL, completion: @escaping (MPMediaItemArtwork?) -> Void) {
+    URLSession.shared.dataTask(with: url) { data, _, error in`;
+
+    const newLoadArtwork = `  private func loadArtworkFromURL(url: URL, completion: @escaping (MPMediaItemArtwork?) -> Void) {
+    var request = URLRequest(url: url)
+    request.cachePolicy = .returnCacheDataElseLoad
+    URLSession.shared.dataTask(with: request) { data, _, error in`;
+
+    if (
+      content.includes(oldArtworkReset) &&
+      content.includes(oldArtworkUrlChange) &&
+      content.includes(oldArtworkGuard) &&
+      content.includes(oldLoadArtwork)
+    ) {
+      content = content.replace(oldArtworkReset, newArtworkReset);
+      content = content.replace(oldArtworkUrlChange, newArtworkUrlChange);
+      content = content.replace(oldArtworkGuard, newArtworkGuard);
+      content = content.replace(oldLoadArtwork, newLoadArtwork);
+      modified = true;
+    } else {
+      console.error('[patch-expo-audio] ERROR: Artwork target signatures not found in MediaController.swift.');
+    }
+  }
+
+  if (modified) {
+    fs.writeFileSync(targetFile, content, 'utf8');
+    console.log('[patch-expo-audio] Successfully patched MediaController.swift for lock screen controls and immediate artwork updates.');
+  }
 }
 
 // 2. Patch AudioPlayer.swift for background task assertions and IPC throttle

@@ -173,6 +173,8 @@ def ensure_track_from_file(file_path: str, track_id: Optional[str] = None) -> Op
             genre=meta.genre,
             file_size=meta.file_size,
             file_mtime_ns=meta.file_mtime_ns,
+            track_number=meta.track_number,
+            disc_number=meta.disc_number,
         )
         db.update_track_metadata_from_audio(track_id, meta, alb_id, preserve_empty_genre=True)
         return db.get_track(track_id)
@@ -269,6 +271,8 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None) -> Optiona
                 genre=(meta.genre if meta else None) or payload.get("genre"),
                 file_size=(meta.file_size if meta else None) or payload.get("file_size"),
                 file_mtime_ns=(meta.file_mtime_ns if meta else None) or payload.get("file_mtime_ns"),
+                track_number=meta.track_number if meta else None,
+                disc_number=meta.disc_number if meta else None,
             )
 
             if meta:

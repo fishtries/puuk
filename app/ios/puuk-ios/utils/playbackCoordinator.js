@@ -8,8 +8,14 @@
 
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
-import { resolveCoverUri } from '../components/CoverImage';
+import { resolveCoverUri, prefetchCover } from '../components/CoverImage';
 import { SERVER_URL, getCachedAuthToken, getAuthToken } from './api';
+import { getSettings } from './settings';
+import {
+  applyTrackNormalization,
+  computeEffectivePlayerVolume,
+  computeTrackNormalizationGainDb,
+} from './loudnessNormalization';
 
 // Native expo-audio preload is disabled because it registers an AVQueuePlayer in the native registry,
 // which triggers an NSInvalidArgumentException / HostFunction crash in unpatched iOS binaries.
@@ -113,7 +119,12 @@ export function areHeadersEqual(a, b) {
 }
 
 import { normalizeStreamUrl } from './streamUrl';
-export { normalizeStreamUrl };
+export {
+  normalizeStreamUrl,
+  applyTrackNormalization,
+  computeEffectivePlayerVolume,
+  computeTrackNormalizationGainDb,
+};
 
 export class PlaybackCoordinator {
   constructor(options = {}) {
@@ -290,6 +301,7 @@ export class PlaybackCoordinator {
     // 3. Идемпотентность play: если уже играет тот же трек, источник и заголовки не изменились
     if (!options.force && this.currentTrackId === trackIdStr && this.currentPlayUri === expectedUri && sameHeaders) {
       this._log('[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback');
+      this.applyVolumeNormalization(player, track, options);
       try {
         await player.play();
       } catch (playErr) {
@@ -314,6 +326,11 @@ export class PlaybackCoordinator {
 
     this.currentTrack = track;
     this.currentTrackId = trackIdStr;
+
+    // Немедленное синхронное обновление метаданных и обложки на экране блокировки/шторке,
+    // не дожидаясь окончания сетевой буферизации аудио и вызова player.play().
+    this.applyLockScreenMetadata(player, track, isCurrent);
+    this.applyVolumeNormalization(player, track, options);
 
     let isLocal = false;
     let playUri = null;
@@ -425,6 +442,8 @@ export class PlaybackCoordinator {
       playUri,
     });
 
+    this.applyVolumeNormalization(player, track, options);
+
     try {
       await player.play();
     } catch (playErr) {
@@ -524,6 +543,11 @@ export class PlaybackCoordinator {
       this.nextTrackStatus = TRACK_STATUS.IDLE;
     }
 
+    // Предзагружаем обложку следующего трека для мгновенного отображения при переключении
+    if (this.upNextQueue.length > 0 && this.upNextQueue[0]?.coverArt) {
+      prefetchCover(this.upNextQueue[0].coverArt);
+    }
+
     this._notifyState();
   }
 
@@ -554,6 +578,68 @@ export class PlaybackCoordinator {
         this._notifyState();
       }
     }
+  }
+
+  /**
+   * Немедленно применяет метаданные экрана блокировки (Now Playing Info) для трека.
+   * Синхронно устанавливает title, artist, albumTitle и artworkUrl (если токен уже закэширован в памяти).
+   * Если токен еще не был загружен в память, асинхронно дочитывает его и обновляет обложку.
+   */
+  applyLockScreenMetadata(player, track, isCurrent = null) {
+    if (!player || typeof player.setActiveForLockScreen !== 'function') return;
+    if (isCurrent && !isCurrent()) return;
+
+    try {
+      const token = getCachedAuthToken();
+      const artworkUrl = track?.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
+      player.setActiveForLockScreen(
+        true,
+        {
+          title: track?.title || 'Unknown Track',
+          artist: track?.artist || 'Unknown Artist',
+          albumTitle: track?.album || 'Puuk',
+          artworkUrl,
+        },
+        {
+          isLiveStream: false,
+          showSeekForward: false,
+          showSeekBackward: false,
+        }
+      );
+
+      if (!token) {
+        this.updateLockScreenMetadata(player, track, isCurrent).catch((err) => {
+          this._warn('[Coordinator] Async token lock screen update failed:', err?.message);
+        });
+      }
+    } catch (err) {
+      this._warn('[Coordinator] Failed to set immediate lock screen controls:', err?.message);
+    }
+  }
+
+  /**
+   * Применяет выравнивание громкости (нормализацию) к плееру.
+   *
+   * @param {Object} player
+   * @param {Object|null|undefined} [track]
+   * @param {Object} [options]
+   * @param {boolean} [options.soundCheck]
+   * @returns {number} Применённая громкость (0.0 - 1.0)
+   */
+  applyVolumeNormalization(player, track = this.currentTrack, options = {}) {
+    const isNormalizationEnabled = options.soundCheck !== undefined
+      ? Boolean(options.soundCheck)
+      : (typeof getSettings === 'function' ? Boolean(getSettings()?.soundCheck) : true);
+
+    const effectiveVolume = applyTrackNormalization(player, track, isNormalizationEnabled);
+    this._log('[Coordinator] Applied volume normalization:', {
+      trackId: track?.id ?? track?.track_id,
+      isNormalizationEnabled,
+      loudnessStatus: track?.loudness_status,
+      normalizationGainDb: track?.normalization_gain_db,
+      effectiveVolume,
+    });
+    return effectiveVolume;
   }
 
   /**

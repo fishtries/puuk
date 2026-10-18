@@ -93,7 +93,7 @@ def verify_and_repair_schema(cursor):
     где миграция могла быть частично применена или преждевременно
     отмечена в schema_migrations.
     """
-    # 1. Поля loudness в tracks
+    # 1. Поля loudness и порядка в tracks
     _ensure_columns(cursor, "tracks", {
         "loudness_lufs": "REAL",
         "true_peak_db": "REAL",
@@ -104,7 +104,8 @@ def verify_and_repair_schema(cursor):
         "loudness_file_size": "INTEGER",
         "loudness_file_mtime_ns": "INTEGER",
         "loudness_error": "TEXT",
-        "loudness_retry_count": "INTEGER DEFAULT 0"
+        "loudness_retry_count": "INTEGER DEFAULT 0",
+        "album_track_position": "INTEGER"
     })
 
     # 2. Поля альбомов
@@ -119,6 +120,7 @@ def verify_and_repair_schema(cursor):
 
     # 3. Индексы
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_loudness_status ON tracks(loudness_status);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracks_album_position ON tracks(album_id, album_track_position);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_title ON albums(title_normalized);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_albums_norm_artist ON albums(album_artist_normalized);")
 
@@ -231,7 +233,8 @@ def init_db():
         "auto_genre_model": "TEXT",
         "auto_genre_updated_at": "TIMESTAMP",
         "auto_genre_status": "TEXT",
-        "auto_genre_sync_pending": "INTEGER DEFAULT 0"
+        "auto_genre_sync_pending": "INTEGER DEFAULT 0",
+        "album_track_position": "INTEGER"
     })
 
     # Таблица журнала мутаций для надежного восстановления при сбоях (Recovery)

@@ -1,5 +1,6 @@
-import { isServerCoverUri, resolveCoverUri } from '../CoverImage';
+import { isServerCoverUri, resolveCoverUri, prefetchCover } from '../CoverImage';
 import { SERVER_URL } from '../../utils/api';
+import { Image } from 'react-native';
 
 describe('components/CoverImage utils', () => {
   describe('isServerCoverUri', () => {
@@ -51,6 +52,26 @@ describe('components/CoverImage utils', () => {
       const resolved = resolveCoverUri(external, 'secret_token');
       expect(resolved).toBe(external);
       expect(resolved).not.toContain('secret_token');
+    });
+  });
+
+  describe('prefetchCover', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('triggers Image.prefetch with resolved URL and token', () => {
+      const prefetchSpy = jest.spyOn(Image, 'prefetch').mockImplementation(() => Promise.resolve(true));
+      prefetchCover('/api/cover/track-123', 'token_abc');
+      expect(prefetchSpy).toHaveBeenCalledWith(`${SERVER_URL}/api/cover/track-123?token=token_abc`);
+    });
+
+    it('gracefully ignores empty or invalid inputs', () => {
+      const prefetchSpy = jest.spyOn(Image, 'prefetch').mockImplementation(() => Promise.resolve(true));
+      prefetchCover('');
+      prefetchCover(null);
+      prefetchCover(undefined);
+      expect(prefetchSpy).not.toHaveBeenCalled();
     });
   });
 });

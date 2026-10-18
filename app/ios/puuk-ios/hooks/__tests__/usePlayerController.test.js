@@ -3,6 +3,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 import usePlayerController, { normalizeTrackDto } from '../usePlayerController';
 import defaultPlaybackCoordinator from '../../utils/playbackCoordinator';
 import { authFetch } from '../../utils/api';
+import { updateSetting } from '../../utils/settings';
 
 const mockCoordinatorListeners = new Set();
 const mockAuthListeners = new Set();
@@ -288,6 +289,22 @@ describe('usePlayerController', () => {
       const dto = normalizeTrackDto({ track_id: 42, title: 'Track 42' });
       expect(dto.id).toBe(42);
       expect(dto.coverArt).toBe('https://puuk.app/api/cover/42');
+    });
+
+    test('preserves loudness normalization metrics and status', () => {
+      const dto = normalizeTrackDto({
+        id: 7,
+        title: 'Loud Track',
+        normalization_gain_db: -4.5,
+        loudness_status: 'analyzed',
+        loudness_lufs: -9.5,
+        true_peak_db: -0.5,
+      });
+
+      expect(dto.normalization_gain_db).toBe(-4.5);
+      expect(dto.loudness_status).toBe('analyzed');
+      expect(dto.loudness_lufs).toBe(-9.5);
+      expect(dto.true_peak_db).toBe(-0.5);
     });
   });
 
@@ -658,6 +675,118 @@ describe('usePlayerController', () => {
 
       expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 202 }));
       expect(controller.isPlayerVisible).toBe(false);
+    });
+
+    it('exposes previousTrack and nextTrack for prepared horizontal swipe', async () => {
+      const list = [
+        { id: 301, title: 'Track 1' },
+        { id: 302, title: 'Track 2' },
+        { id: 303, title: 'Track 3' },
+      ];
+
+      await act(async () => {
+        controller.playTrackList(list, 0);
+      });
+
+      expect(controller.previousTrack).toBeNull();
+      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 302 }));
+
+      await act(async () => {
+        await controller.fetchNextTrack();
+      });
+
+      expect(controller.currentTrack.id).toBe(302);
+      expect(controller.previousTrack).toEqual(expect.objectContaining({ id: 301 }));
+      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 303 }));
+
+      // Force playPreviousTrack even if seeking or forced
+      await act(async () => {
+        controller.playPreviousTrack({ force: true });
+      });
+
+      expect(controller.currentTrack.id).toBe(301);
+      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 302 }));
+    });
+  });
+
+  describe('Track loudness normalization & Sound Check reactivity', () => {
+    test('loadAndPlay passes soundCheck flag to defaultPlaybackCoordinator.play', async () => {
+      const track = {
+        id: 501,
+        title: 'Analyzed Track',
+        loudness_status: 'analyzed',
+        normalization_gain_db: -5.0,
+      };
+
+      await act(async () => {
+        controller.playTrack(track);
+      });
+
+      expect(defaultPlaybackCoordinator.play).toHaveBeenCalledWith(
+        mockPlayerInstance,
+        track,
+        expect.objectContaining({ soundCheck: true })
+      );
+    });
+
+    test('updating soundCheck setting immediately updates player volume for active track', async () => {
+      const track = {
+        id: 502,
+        title: 'Loud Track',
+        loudness_status: 'analyzed',
+        normalization_gain_db: -6.0,
+      };
+
+      await act(async () => {
+        controller.playTrack(track);
+      });
+
+      // Toggling soundCheck to false sets volume to 1.0
+      await act(async () => {
+        await updateSetting('soundCheck', false);
+      });
+
+      expect(mockPlayerInstance.volume).toBe(1.0);
+
+      // Toggling soundCheck back to true applies attenuation (~0.501)
+      await act(async () => {
+        await updateSetting('soundCheck', true);
+      });
+
+      expect(mockPlayerInstance.volume).toBeCloseTo(0.501187, 4);
+    });
+
+    test('refreshes track loudness asynchronously when track is pending', async () => {
+      const pendingTrack = {
+        id: 503,
+        title: 'Pending Track',
+        loudness_status: 'pending',
+        normalization_gain_db: null,
+      };
+
+      authFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/tracks/503')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: 503,
+              loudness_status: 'analyzed',
+              normalization_gain_db: -6.0,
+              loudness_lufs: -8.0,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => [] };
+      });
+
+      await act(async () => {
+        controller.playTrack(pendingTrack);
+      });
+
+      expect(mockPlayerInstance.volume).toBeCloseTo(0.501187, 4);
+      expect(controller.currentTrack.loudness_status).toBe('analyzed');
+      expect(controller.currentTrack.normalization_gain_db).toBe(-6.0);
     });
   });
 });

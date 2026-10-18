@@ -153,6 +153,7 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
         genre=None,
         track_number=None,
         disc_number=None,
+        album_track_position=None,
         comment=None,
         lyrics=None,
         cover_action=cover_action,

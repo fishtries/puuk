@@ -253,7 +253,8 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
     candidates = track_info.get('tracks', []) if track_info.get('is_spotify') else [track_info]
     indexed = 0
     real_files: list[dict] = []
-    for meta in candidates:
+    is_multi_track = is_playlist or len(candidates) > 1
+    for idx, meta in enumerate(candidates, start=1):
         try:
             title = meta.get('title') or 'Unknown Title'
             artist = meta.get('artist') or 'Unknown Artist'
@@ -282,6 +283,10 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
                     logging.warning(f"Error resolving album for {rel_path}: {ex}")
 
             track_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
+            track_num = meta.get('track_number')
+            disc_num = meta.get('disc_number')
+            pos = idx if is_multi_track else None
+
             db.add_or_update_track(
                 track_id=track_uuid,
                 file_path=rel_path,
@@ -290,6 +295,9 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
                 artist=artist,
                 added_by_user_id=puuk_user['id'],
                 duration=meta.get('duration'),
+                track_number=track_num,
+                disc_number=disc_num,
+                album_track_position=pos,
             )
             if not is_playlist:
                 db.add_favorite(puuk_user['id'], track_uuid)

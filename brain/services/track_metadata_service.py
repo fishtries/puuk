@@ -427,12 +427,14 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
                     )
 
             cover_inc = (cover_action in ("replace", "remove"))
+            album_track_pos = getattr(payload, "album_track_position", None)
             db.update_track_metadata_from_audio(
                 track_id=track_id,
                 meta=actual_meta,
                 album_id=album_id,
                 lyrics=actual_meta.lyrics,
-                cover_version_inc=cover_inc
+                cover_version_inc=cover_inc,
+                album_track_position=album_track_pos
             )
 
             # Update cover color

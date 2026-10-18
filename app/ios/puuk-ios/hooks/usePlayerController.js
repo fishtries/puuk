@@ -13,7 +13,12 @@ import {
   ApiError,
 } from '../utils/api';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
-import { clearSavedLastTrack } from '../utils/settings';
+import { clearSavedLastTrack, getSettings, addSettingsListener } from '../utils/settings';
+import {
+  applyTrackNormalization,
+  computeEffectivePlayerVolume,
+  computeTrackNormalizationGainDb,
+} from '../utils/loudnessNormalization';
 
 /**
  * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
@@ -32,6 +37,11 @@ export function normalizeTrackDto(source) {
     is_liked: !!source?.is_liked,
     coverArt: source?.coverArt || `${SERVER_URL}/api/cover/${id}`,
     cover_color: source?.cover_color,
+    normalization_gain_db: source?.normalization_gain_db ?? null,
+    loudness_status: source?.loudness_status || 'pending',
+    loudness_lufs: source?.loudness_lufs ?? null,
+    true_peak_db: source?.true_peak_db ?? null,
+    duration: source?.duration ?? 0,
   };
 }
 
@@ -111,6 +121,33 @@ export default function usePlayerController({ setTracks }) {
     keepAudioSessionActive: true,
   });
   const status = useAudioPlayerStatus(player);
+
+  const [soundCheck, setSoundCheck] = useState(() => {
+    try {
+      const s = getSettings();
+      return s?.soundCheck !== undefined ? Boolean(s.soundCheck) : true;
+    } catch {
+      return true;
+    }
+  });
+  const soundCheckRef = useRef(soundCheck);
+  useEffect(() => {
+    soundCheckRef.current = soundCheck;
+  }, [soundCheck]);
+
+  useEffect(() => {
+    const unsubscribe = addSettingsListener((newSettings) => {
+      if (newSettings && newSettings.soundCheck !== undefined) {
+        const next = Boolean(newSettings.soundCheck);
+        setSoundCheck(next);
+        soundCheckRef.current = next;
+        if (player && currentTrackRef.current) {
+          applyTrackNormalization(player, currentTrackRef.current, next);
+        }
+      }
+    });
+    return unsubscribe;
+  }, [player]);
 
   useEffect(() => {
     currentTrackRef.current = currentTrack;
@@ -415,6 +452,48 @@ export default function usePlayerController({ setTracks }) {
     setPlayerExpandToken(prev => prev + 1);
   }, []);
 
+  /** Фоновое обновление метаданных громкости (EBU R128), если трек еще pending */
+  const refreshTrackLoudness = useCallback(async (trackId) => {
+    if (trackId === undefined || trackId === null || trackId === '') return;
+    try {
+      const res = await authFetch(`/api/tracks/${encodeURIComponent(trackId)}`);
+      if (!res.ok) return;
+      const fresh = await res.json();
+      if (!fresh || fresh.loudness_status !== 'analyzed' || fresh.normalization_gain_db == null) return;
+
+      const patch = {
+        loudness_status: fresh.loudness_status,
+        normalization_gain_db: fresh.normalization_gain_db,
+        loudness_lufs: fresh.loudness_lufs ?? null,
+        true_peak_db: fresh.true_peak_db ?? null,
+      };
+
+      const trackIdStr = String(trackId);
+      const activeTrack = currentTrackRef.current;
+      const activeId = activeTrack?.id !== undefined && activeTrack?.id !== null
+        ? String(activeTrack.id)
+        : (activeTrack?.track_id ? String(activeTrack.track_id) : null);
+
+      if (activeId === trackIdStr) {
+        const updated = { ...activeTrack, ...patch };
+        currentTrackRef.current = updated;
+        if (player) {
+          applyTrackNormalization(player, updated, soundCheckRef.current);
+        }
+        setCurrentTrack(updated);
+      }
+
+      setUpNextQueue((prev) =>
+        prev.map((t) => {
+          const tId = t?.id !== undefined && t?.id !== null ? String(t.id) : (t?.track_id ? String(t.track_id) : null);
+          return tId === trackIdStr ? { ...t, ...patch } : t;
+        })
+      );
+    } catch {
+      // Метаданные громкости не критичны для непрерывности воспроизведения
+    }
+  }, [player]);
+
   /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback((track) => {
     const reportPlaybackError = (error) => {
@@ -427,21 +506,29 @@ export default function usePlayerController({ setTracks }) {
       });
     };
 
+    let playbackPromise;
     try {
       const cached = typeof getCachedAuthHeaders === 'function' ? getCachedAuthHeaders() : null;
-      const playbackPromise = defaultPlaybackCoordinator.play(player, track, {
+      playbackPromise = defaultPlaybackCoordinator.play(player, track, {
         headers: cached || undefined,
         getHeadersAsync: getAuthHeaders,
-      });
-      return Promise.resolve(playbackPromise).catch((error) => {
-        reportPlaybackError(error);
-        return { isLocal: false, uri: null, error };
+        soundCheck: soundCheckRef.current,
       });
     } catch (e) {
       reportPlaybackError(e);
       return Promise.resolve({ isLocal: false, uri: null, error: e });
     }
-  }, [player]);
+
+    if (track && track.loudness_status !== 'analyzed') {
+      const trackId = (track.id !== undefined && track.id !== null) ? track.id : track.track_id;
+      refreshTrackLoudness(trackId);
+    }
+
+    return Promise.resolve(playbackPromise).catch((error) => {
+      reportPlaybackError(error);
+      return { isLocal: false, uri: null, error };
+    });
+  }, [player, refreshTrackLoudness]);
 
   const fetchQueue = useCallback(async (trackId, signal, exclusions) => {
     const epoch = queueEpochRef.current;
@@ -461,8 +548,9 @@ export default function usePlayerController({ setTracks }) {
     }
   }, []);
 
-  const playPreviousTrack = useCallback(() => {
-    if (currentTime > 3) {
+  const playPreviousTrack = useCallback((options = {}) => {
+    const force = typeof options === 'boolean' ? options : !!options?.force;
+    if (!force && currentTime > 3) {
       player.seekTo(0);
       return;
     }
@@ -714,6 +802,9 @@ export default function usePlayerController({ setTracks }) {
     } catch (e) {
       console.warn('[usePlayerController] dismissPlayer lock screen error:', e);
     }
+    try {
+      applyTrackNormalization(player, null, false);
+    } catch (e) {}
     isWaveSessionRef.current = false;
     currentTrackRef.current = null;
     setCurrentTrack(null);
@@ -741,6 +832,9 @@ export default function usePlayerController({ setTracks }) {
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
+    history,
+    previousTrack: history.length > 0 ? history[history.length - 1] : null,
+    nextTrack: upNextQueue.length > 0 ? upNextQueue[0] : null,
     playPreviousTrack,
     fetchNextTrack,
     togglePlayPause,
@@ -749,6 +843,8 @@ export default function usePlayerController({ setTracks }) {
     handleToggleLike,
     startWave,
     dismissPlayer,
+    soundCheck,
+    isSoundCheckEnabled: soundCheck,
     // Network UX & Cache state (Agent 5 & 6)
     networkStatus: networkUX.networkStatus,
     nextTrackStatus: networkUX.nextTrackStatus,

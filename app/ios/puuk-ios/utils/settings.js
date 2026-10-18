@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS = {
   accentColor: '#FFDAB9',
   audioQuality: 'high', // 'high' (320k) | 'medium' (256k) | 'low' (128k)
   hapticsEnabled: true,
-  soundCheck: false,
+  soundCheck: true,
   crossfade: false,
   serverUrl: DEFAULT_SERVER_URL,
 };

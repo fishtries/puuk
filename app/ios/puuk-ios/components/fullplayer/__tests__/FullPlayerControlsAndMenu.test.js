@@ -54,15 +54,21 @@ jest.mock('react-native-gesture-handler', () => {
     GestureHandlerRootView: ({ children }) => <View>{children}</View>,
     Gesture: {
       Simultaneous: () => ({}),
-      Pan: () => ({
-        activeOffsetY: () => ({
-          onUpdate: () => ({
-            onEnd: () => ({
-              onFinalize: () => ({}),
-            }),
-          }),
-        }),
-      }),
+      Race: (...gestures) => gestures,
+      Pan: () => {
+        const gesture = {
+          enabled: () => gesture,
+          activeOffsetY: () => gesture,
+          activeOffsetX: () => gesture,
+          failOffsetX: () => gesture,
+          failOffsetY: () => gesture,
+          onStart: () => gesture,
+          onUpdate: () => gesture,
+          onEnd: () => gesture,
+          onFinalize: () => gesture,
+        };
+        return gesture;
+      },
     },
   };
 });

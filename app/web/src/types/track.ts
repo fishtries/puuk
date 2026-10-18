@@ -25,6 +25,7 @@ export interface Track {
   auto_genre_updated_at?: string | null;
   track_number?: string;
   disc_number?: string;
+  album_track_position?: number | null;
   comment?: string;
   file_size?: number;
   file_mtime_ns?: number;
@@ -50,6 +51,7 @@ export interface TrackEditPayloadDTO {
   genre?: string | null;
   track_number?: string | null;
   disc_number?: string | null;
+  album_track_position?: number | null;
   comment?: string | null;
   lyrics?: string | null;
   cover_action?: 'keep' | 'replace' | 'remove';

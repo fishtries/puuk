@@ -44,7 +44,8 @@ def scan_library():
 
                 db.add_or_update_track(
                     track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
-                    duration=meta.duration, genre=meta.genre
+                    duration=meta.duration, genre=meta.genre,
+                    track_number=meta.track_number, disc_number=meta.disc_number,
                 )
                 # Режим сканера: пустой жанр в файле не затирает жанр в БД (например,
                 # выставленный вручную через редактор тегов).

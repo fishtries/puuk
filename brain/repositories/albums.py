@@ -21,15 +21,22 @@ VARIOUS_ARTISTS = "Various Artists"
 # Sentinel, отличающий «не менять поле» от «очистить поле (None)».
 UNCHANGED = object()
 
-# Детерминированный порядок треков альбома: диск → номер → название → id.
-# TEXT-значения вида "7/16" CAST до целого разбирает по ведущим цифрам.
+# Детерминированный порядок треков альбома:
+# 1. явная позиция от источника (album_track_position);
+# 2. диск (disc_number);
+# 3. номер трека (track_number, включая ведущие цифры "7/16" и алфавитно-цифровые вроде "A1");
+# 4. порядок добавления (rowid, стабильный fallback вместо алфавитного по названию);
+# 5. id трека (детерминированный tie-breaker).
 TRACKS_ORDER_SQL = """
     ORDER BY
+        CASE WHEN t.album_track_position IS NULL THEN 1 ELSE 0 END,
+        t.album_track_position,
         CASE WHEN t.disc_number IS NULL OR t.disc_number = '' THEN 1 ELSE 0 END,
         CAST(t.disc_number AS INTEGER),
         CASE WHEN t.track_number IS NULL OR t.track_number = '' THEN 1 ELSE 0 END,
         CAST(t.track_number AS INTEGER),
-        t.title COLLATE NOCASE,
+        t.track_number,
+        t.rowid,
         t.id
 """
 

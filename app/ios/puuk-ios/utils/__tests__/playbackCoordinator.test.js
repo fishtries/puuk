@@ -605,6 +605,58 @@ describe('PlaybackCoordinator', () => {
     });
   });
 
+  describe('Immediate lock screen metadata on track transition', () => {
+    test('play() applies lock screen metadata immediately before replace() resolves', async () => {
+      let resolveReplace;
+      mockPlayer.replace.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveReplace = resolve;
+      }));
+
+      const track = {
+        id: 999,
+        title: 'Instant Metadata Song',
+        artist: 'Instant Artist',
+        album: 'Instant Album',
+        coverArt: 'https://puuk.app/api/cover/999',
+      };
+
+      const playPromise = coordinator.play(mockPlayer, track);
+
+      // Metadata MUST already be applied even while replace is still pending!
+      expect(mockPlayer.setActiveForLockScreen).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          title: 'Instant Metadata Song',
+          artist: 'Instant Artist',
+          albumTitle: 'Instant Album',
+          artworkUrl: expect.stringContaining('/api/cover/999'),
+        }),
+        expect.any(Object)
+      );
+
+      // Now resolve replace and complete playback
+      resolveReplace();
+      await playPromise;
+
+      expect(mockPlayer.play).toHaveBeenCalled();
+    });
+
+    test('updateQueue() prefetches cover art for the upcoming track in queue', () => {
+      const CoverImage = require('../../components/CoverImage');
+      const prefetchSpy = jest.spyOn(CoverImage, 'prefetchCover').mockImplementation(() => {});
+
+      const current = { id: 1, title: 'Current' };
+      const upNext = [
+        { id: 2, title: 'Next Track', coverArt: 'https://puuk.app/api/cover/2' },
+      ];
+
+      coordinator.updateQueue(current, upNext);
+
+      expect(prefetchSpy).toHaveBeenCalledWith('https://puuk.app/api/cover/2');
+      prefetchSpy.mockRestore();
+    });
+  });
+
   describe('normalizeStreamUrl', () => {
     test('builds standard url when stream_url is missing', () => {
       const url = normalizeStreamUrl({ id: 42 }, 'https://web.puuk.fun');
@@ -646,6 +698,71 @@ describe('PlaybackCoordinator', () => {
       expect(httpUrl).toBe('http://192.168.1.50:8000/api/stream/123');
       expect(httpUrl.startsWith('http://')).toBe(true);
       expect(httpUrl.includes('http:/1')).toBe(false);
+    });
+  });
+
+  describe('Track Loudness Normalization in play()', () => {
+    test('sets player.volume to attenuated level when track is analyzed with negative gain', async () => {
+      const track = {
+        id: 10,
+        title: 'Loud Track',
+        stream_url: 'https://puuk.app/api/stream/10',
+        loudness_status: 'analyzed',
+        normalization_gain_db: -6.0,
+      };
+
+      await coordinator.play(mockPlayer, track, { soundCheck: true });
+
+      expect(mockPlayer.volume).toBeCloseTo(0.501187, 4);
+    });
+
+    test('sets player.volume to 1.0 when soundCheck is disabled', async () => {
+      const track = {
+        id: 11,
+        title: 'Loud Track with Sound Check Off',
+        stream_url: 'https://puuk.app/api/stream/11',
+        loudness_status: 'analyzed',
+        normalization_gain_db: -6.0,
+      };
+
+      await coordinator.play(mockPlayer, track, { soundCheck: false });
+
+      expect(mockPlayer.volume).toBe(1.0);
+    });
+
+    test('sets player.volume to 1.0 when track loudness is pending', async () => {
+      const track = {
+        id: 12,
+        title: 'Pending Loudness Track',
+        stream_url: 'https://puuk.app/api/stream/12',
+        loudness_status: 'pending',
+        normalization_gain_db: null,
+      };
+
+      await coordinator.play(mockPlayer, track, { soundCheck: true });
+
+      expect(mockPlayer.volume).toBe(1.0);
+    });
+
+    test('re-applies player.volume during idempotent playback resume', async () => {
+      const track = {
+        id: 13,
+        title: 'Idempotent Track',
+        stream_url: 'https://puuk.app/api/stream/13',
+        loudness_status: 'analyzed',
+        normalization_gain_db: -4.0,
+      };
+
+      await coordinator.play(mockPlayer, track, { soundCheck: true });
+      const firstVol = mockPlayer.volume;
+      expect(firstVol).toBeCloseTo(0.630957, 4);
+
+      // Simulate player volume getting reset externally
+      mockPlayer.volume = 1.0;
+
+      // Resume idempotent play
+      await coordinator.play(mockPlayer, track, { soundCheck: true });
+      expect(mockPlayer.volume).toBeCloseTo(0.630957, 4);
     });
   });
 });

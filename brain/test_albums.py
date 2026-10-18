@@ -91,6 +91,132 @@ class AlbumRepositoryTest(unittest.TestCase):
         indexes = {r["name"]: r for r in db.get_connection().execute("PRAGMA index_list(albums)").fetchall()}
         self.assertEqual(indexes["idx_albums_identity"]["unique"], 1)
 
+    def test_track_order_prioritizes_track_number_over_title(self):
+        aid = db.resolve_album("Track Order Priority Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, title, trk in [
+            ("t_zulu", "Zulu Track", "3"),
+            ("t_alpha", "Alpha Track", "1"),
+            ("t_middle", "Middle Track", "2"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", title, aid, "Artist", trk),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["t_alpha", "t_middle", "t_zulu"])
+        self.assertEqual([t["title"] for t in tracks], ["Alpha Track", "Middle Track", "Zulu Track"])
+
+    def test_track_order_multi_disc(self):
+        aid = db.resolve_album("Multi Disc Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, disc, trk in [
+            ("d1_t2", "1", "2"),
+            ("d2_t1", "2", "1"),
+            ("d1_t1", "1", "1"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, disc_number, track_number) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", f"Title {tid}", aid, "Artist", disc, trk),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["d1_t1", "d1_t2", "d2_t1"])
+
+    def test_track_order_fractional_numbers(self):
+        aid = db.resolve_album("Fractional Track Numbers", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, trk in [
+            ("frac_10", "10/16"),
+            ("frac_2", "2/16"),
+            ("frac_7", "7/16"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", f"Title {tid}", aid, "Artist", trk),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["frac_2", "frac_7", "frac_10"])
+
+    def test_track_order_no_alphabetical_fallback_preserves_insertion_order(self):
+        aid = db.resolve_album("No Track Numbers Album", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        # Добавляем треки без номеров: Zulu добавлен первым, Alpha вторым, Middle третьим.
+        # Они НЕ должны сортироваться по названию (Alpha, Middle, Zulu).
+        for tid, title in [
+            ("no_num_z", "Zulu Opening"),
+            ("no_num_a", "Alpha Ballad"),
+            ("no_num_m", "Middle Groove"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", title, aid, "Artist"),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["no_num_z", "no_num_a", "no_num_m"])
+        self.assertEqual([t["title"] for t in tracks], ["Zulu Opening", "Alpha Ballad", "Middle Groove"])
+
+    def test_track_order_album_track_position_prioritized(self):
+        aid = db.resolve_album("Source Position Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, title, trk, pos in [
+            ("pos_3", "Song Three", "99", 3),
+            ("pos_1", "Song One", "50", 1),
+            ("pos_2", "Song Two", "10", 2),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number, album_track_position) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", title, aid, "Artist", trk, pos),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["pos_1", "pos_2", "pos_3"])
+        self.assertEqual([t["album_track_position"] for t in tracks], [1, 2, 3])
+
+    def test_track_order_alphanumeric_vinyl_sides(self):
+        aid = db.resolve_album("Vinyl Sides Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, trk in [
+            ("vin_b2", "B2"),
+            ("vin_a1", "A1"),
+            ("vin_b1", "B1"),
+            ("vin_a2", "A2"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", f"Track {trk}", aid, "Artist", trk),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["vin_a1", "vin_a2", "vin_b1", "vin_b2"])
+
 
 class AlbumApiTest(unittest.TestCase):
     """API-тесты альбомов: каталог, detail, PATCH релиза, merge, RBAC, перенос трека."""
@@ -168,6 +294,31 @@ class AlbumApiTest(unittest.TestCase):
 
         missing = self.client.get("/api/albums/999999", headers=self.user_headers)
         self.assertEqual(missing.status_code, 404)
+
+    def test_detail_preserves_track_numbers_and_source_order(self):
+        aid = db.resolve_album("Detail Order Album", album_artist="Detail Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, title, trk in [
+            ("api_ord_z", "Zulu API Song", "3"),
+            ("api_ord_a", "Alpha API Song", "1"),
+            ("api_ord_m", "Middle API Song", "2"),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", title, aid, "Detail Artist", trk),
+            )
+        conn.commit()
+        conn.close()
+
+        resp = self.client.get(f"/api/albums/{aid}", headers=self.user_headers)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        tracks = body["tracks"]
+        self.assertEqual([t["id"] for t in tracks], ["api_ord_a", "api_ord_m", "api_ord_z"])
+        self.assertEqual([t["title"] for t in tracks], ["Alpha API Song", "Middle API Song", "Zulu API Song"])
+        self.assertEqual([t["track_number"] for t in tracks], ["1", "2", "3"])
 
     def test_patch_album_writes_all_track_files(self):
         aid = db.resolve_album("Album Edit", album_artist="Edit Artist", year="2000")

@@ -12,6 +12,7 @@ import {
   Alert,
   ActionSheetIOS,
   ScrollView,
+  Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -398,7 +399,26 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
                   </View>
                 </View>
 
-                {/* ── 3. Network & Storage Section ── */}
+                {/* ── 3. Audio & Playback Section ── */}
+                <Text style={styles.sectionHeader}>{t('sectionAudio', lang).toUpperCase()}</Text>
+                <View style={styles.groupCard}>
+                  {/* Sound Check / Normalization */}
+                  <View style={styles.rowItem}>
+                    <View style={[styles.rowIconBox, { backgroundColor: '#34C759' }]}>
+                      <Ionicons name="volume-medium" size={18} color="#fff" />
+                    </View>
+                    <Text style={styles.rowLabel}>{t('soundCheck', lang)}</Text>
+                    <Switch
+                      value={Boolean(settings.soundCheck)}
+                      onValueChange={(val) => updateSetting('soundCheck', val)}
+                      trackColor={{ false: '#39393d', true: accent }}
+                      thumbColor="#fff"
+                      ios_backgroundColor="#39393d"
+                    />
+                  </View>
+                </View>
+
+                {/* ── 4. Network & Storage Section ── */}
                 <Text style={styles.sectionHeader}>{t('sectionNetwork', lang).toUpperCase()}</Text>
                 <View style={styles.groupCard}>
                   {/* Server URL */}
@@ -408,7 +428,7 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
                     </View>
                     <Text style={styles.rowLabel}>{t('serverUrl', lang)}</Text>
                     <Text style={[styles.rowValue, { maxWidth: 140 }]} numberOfLines={1}>
-                      {settings.serverUrl.replace(/^https?:\/\//, '')}
+                      {(settings.serverUrl || '').replace(/^https?:\/\//, '')}
                     </Text>
                     <Ionicons name="chevron-forward" size={16} color="#636366" />
                   </TouchableOpacity>

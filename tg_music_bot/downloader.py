@@ -216,6 +216,8 @@ def _build_tracks(changed_files: list, songs: list) -> list:
             'artist': metadata.get('artist', ''),
             'album': metadata.get('album', ''),
             'album_artist': metadata.get('album_artist', ''),
+            'track_number': metadata.get('track_number', ''),
+            'disc_number': metadata.get('disc_number', ''),
             'duration': metadata.get('duration', 0),
             'has_cover': metadata.get('has_cover', False),
             'has_lyrics': metadata.get('has_lyrics', False),

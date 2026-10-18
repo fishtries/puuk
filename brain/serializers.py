@@ -42,6 +42,7 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "genre": r.get("genre"),
         "track_number": r.get("track_number"),
         "disc_number": r.get("disc_number"),
+        "album_track_position": r.get("album_track_position"),
         "comment": r.get("comment"),
         "lyrics": (r.get("lyrics") or "") if include_lyrics else "",
         "duration": r.get("duration") or 0.0,

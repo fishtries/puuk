@@ -52,6 +52,19 @@ export const resolveCoverUri = (rawUri, token = null) => {
   return targetUri;
 };
 
+/**
+ * Выполняет фоновую предзагрузку обложки в нативный кэш изображений.
+ */
+export const prefetchCover = (rawUri, token = null) => {
+  if (!rawUri || typeof rawUri !== 'string') return;
+  try {
+    const resolved = resolveCoverUri(rawUri, token || getCachedAuthToken());
+    if (resolved && typeof Image?.prefetch === 'function') {
+      Image.prefetch(resolved).catch(() => {});
+    }
+  } catch {}
+};
+
 export default function CoverImage({
   source,
   style,
@@ -105,8 +118,11 @@ export default function CoverImage({
     }
   }
 
+  const imageKey = typeof source === 'number' ? `res_${source}` : (rawUri || 'default');
+
   return (
     <Image
+      key={imageKey}
       source={imageSource}
       defaultSource={defaultSource}
       onError={(e) => {

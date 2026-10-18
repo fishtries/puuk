@@ -36,4 +36,18 @@ describe('lock screen media controls patch', () => {
     expect(content).toContain('remoteCommandCenter.nextTrackCommand.removeTarget(self)');
     expect(content).toContain('remoteCommandCenter.previousTrackCommand.removeTarget(self)');
   });
+
+  test('MediaController.swift clears previous artwork immediately and uses cache policy', () => {
+    expect(fs.existsSync(mediaControllerPath)).toBe(true);
+    const content = fs.readFileSync(mediaControllerPath, 'utf8');
+
+    // Immediately removes previous artwork when artworkUrl changes
+    expect(content).toContain('info.removeValue(forKey: MPMediaItemPropertyArtwork)');
+
+    // Uses cache-first policy for artwork loading
+    expect(content).toContain('request.cachePolicy = .returnCacheDataElseLoad');
+
+    // Preserves in-flight/cached artwork across AVPlayer currentItem transitions
+    expect(content).toContain('if player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl');
+  });
 });

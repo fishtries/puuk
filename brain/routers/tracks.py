@@ -48,6 +48,7 @@ class TrackEditPayload(BaseModel):
     genre: Optional[str] = None
     track_number: Optional[str] = None
     disc_number: Optional[str] = None
+    album_track_position: Optional[int] = None
     comment: Optional[str] = None
     lyrics: Optional[str] = None
 

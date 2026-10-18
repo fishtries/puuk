@@ -217,6 +217,9 @@ def add_or_update_track(
     genre=None,
     file_size=None,
     file_mtime_ns=None,
+    track_number=None,
+    disc_number=None,
+    album_track_position=None,
 ):
     genre_value = _clean_genre(genre)
     conn = get_connection()
@@ -230,14 +233,17 @@ def add_or_update_track(
                 genre = COALESCE(?, genre),
                 cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration),
                 file_size = COALESCE(?, file_size),
-                file_mtime_ns = COALESCE(?, file_mtime_ns)
+                file_mtime_ns = COALESCE(?, file_mtime_ns),
+                track_number = COALESCE(?, track_number),
+                disc_number = COALESCE(?, disc_number),
+                album_track_position = COALESCE(?, album_track_position)
             WHERE id = ?
-        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, file_size, file_mtime_ns, track_id))
+        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, file_size, file_mtime_ns, track_number, disc_number, album_track_position, track_id))
     else:
         cursor.execute("""
-            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns))
+            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns, track_number, disc_number, album_track_position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns, track_number, disc_number, album_track_position))
     bump_catalog_version(conn)
     conn.commit()
     conn.close()
@@ -341,7 +347,7 @@ def update_track_metadata(track_id, title, artist, album_id, lyrics):
     conn.commit()
     conn.close()
 
-def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False):
+def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Optional[int] = None):
     """
     Обновляет запись трека в SQLite фактическими данными, прочитанными из файла на диске.
 
@@ -378,7 +384,8 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
             channels = ?,
             format = ?,
             file_size = ?,
-            file_mtime_ns = ?
+            file_mtime_ns = ?,
+            album_track_position = COALESCE(?, album_track_position)
             {cover_inc_sql}
         WHERE id = ?
     """, (
@@ -399,6 +406,7 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
         meta.format,
         meta.file_size,
         meta.file_mtime_ns,
+        album_track_position,
         track_id
     ))
     bump_catalog_version(conn)

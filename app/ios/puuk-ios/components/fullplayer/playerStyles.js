@@ -93,14 +93,16 @@ const styles = StyleSheet.create({
   },
   titleText: {
     color: '#ffffff',
-    fontSize: 24,
+    fontSize: 25,
     fontWeight: 'bold',
     marginBottom: 4,
+    letterSpacing: -0.2,
   },
   artistText: {
-    color: '#e5e5ea',
-    fontSize: 18,
-    opacity: 0.8,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 19,
+    fontWeight: '400',
+    letterSpacing: 0.36,
   },
   progressContainer: {
     width: '100%',
@@ -222,18 +224,22 @@ const styles = StyleSheet.create({
   },
   miniPlayerInfo: {
     flex: 1,
-    paddingHorizontal: 12,
+    paddingLeft: 12,
+    paddingRight: 10,
     justifyContent: 'center',
   },
   miniPlayerTitle: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: '#ffffff',
+    marginBottom: 2,
+    letterSpacing: -0.25,
   },
   miniPlayerArtist: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
-    marginTop: 2,
+    fontWeight: '400',
+    color: 'rgba(255, 255, 255, 0.7)',
+    letterSpacing: -0.125,
   },
 
   miniPlayerButton: {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import CoverImage from './CoverImage';
+import CoverImage, { prefetchCover } from './CoverImage';
 import { authFetch } from '../utils/api';
 
 import Animated, {
@@ -25,6 +25,7 @@ import Animated, {
   Extrapolation,
   Easing,
   cancelAnimation,
+  ReduceMotion,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -53,6 +54,9 @@ const FullPlayerModal = ({
   isLoading,
   seekTo,
   upNextQueue,
+  history,
+  previousTrack,
+  nextTrack,
   playTrack,
   onAddToPlaylist,
   onEditTrack,
@@ -257,9 +261,22 @@ const FullPlayerModal = ({
     }
   }, [externalExpandProgress]);
 
+  const isClosingShared = useSharedValue(false);
+
+  useEffect(() => {
+    if (isPlayerVisible) {
+      isClosingShared.value = false;
+    }
+  }, [isPlayerVisible]);
+
   const createSwipeDownGesture = () => {
     return Gesture.Pan()
-      .activeOffsetY(6)
+      .activeOffsetY(8)
+      .failOffsetX([-20, 20])
+      .onStart(() => {
+        'worklet';
+        isClosingShared.value = false;
+      })
       .onUpdate((event) => {
         'worklet';
         if (event.translationY >= 0) {
@@ -270,30 +287,316 @@ const FullPlayerModal = ({
       .onEnd((event) => {
         'worklet';
         if (event.translationY > 35 || event.velocityY > 200) {
+          isClosingShared.value = true;
           expandProgress.value = withTiming(0, {
             duration: 250,
             easing: Easing.bezier(0.25, 1, 0.5, 1),
           });
           runOnJS(handleClose)();
         } else {
+          isClosingShared.value = false;
           expandProgress.value = withSpring(1, {
             damping: 28,
             stiffness: 220,
             mass: 0.8,
+            reduceMotion: ReduceMotion.System,
           });
         }
       })
       .onFinalize((event, success) => {
         'worklet';
+        if (isClosingShared.value) return;
         if (!success && expandProgress.value < 0.99 && expandProgress.value > 0.01) {
           expandProgress.value = withSpring(1, {
             damping: 28,
             stiffness: 220,
             mass: 0.8,
+            reduceMotion: ReduceMotion.System,
           });
         }
       });
   };
+
+  const effectiveNextTrack = useMemo(() => {
+    const curId = currentTrack?.id ?? currentTrack?.track_id;
+    if (nextTrack && (nextTrack.id ?? nextTrack.track_id) !== curId) {
+      return nextTrack;
+    }
+    if (upNextQueue && upNextQueue.length > 0) {
+      const candidate = upNextQueue[0];
+      if ((candidate?.id ?? candidate?.track_id) !== curId) {
+        return candidate;
+      }
+    }
+    return null;
+  }, [nextTrack, upNextQueue, currentTrack]);
+
+  const effectivePrevTrack = useMemo(() => {
+    const curId = currentTrack?.id ?? currentTrack?.track_id;
+    if (previousTrack && (previousTrack.id ?? previousTrack.track_id) !== curId) {
+      return previousTrack;
+    }
+    if (history && history.length > 0) {
+      const candidate = history[history.length - 1];
+      if ((candidate?.id ?? candidate?.track_id) !== curId) {
+        return candidate;
+      }
+    }
+    return null;
+  }, [previousTrack, history, currentTrack]);
+
+  const hasNextShared = useSharedValue(false);
+  const hasPrevShared = useSharedValue(false);
+
+  useEffect(() => {
+    hasNextShared.value = Boolean(effectiveNextTrack);
+  }, [effectiveNextTrack]);
+
+  useEffect(() => {
+    hasPrevShared.value = Boolean(effectivePrevTrack);
+  }, [effectivePrevTrack]);
+
+  useEffect(() => {
+    if (effectiveNextTrack?.coverArt) {
+      prefetchCover(effectiveNextTrack.coverArt);
+    }
+    if (effectivePrevTrack?.coverArt) {
+      prefetchCover(effectivePrevTrack.coverArt);
+    }
+  }, [effectiveNextTrack?.coverArt, effectivePrevTrack?.coverArt]);
+
+  const albumSwipeX = useSharedValue(0);
+  const isSwipingAlbum = useSharedValue(false);
+  const isTransitioningShared = useSharedValue(false);
+  const transitionDirection = useSharedValue(0);
+  const fallbackTimeoutRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current);
+      fallbackTimeoutRef.current = null;
+    }
+
+    if (transitionDirection.value === 1) {
+      // Swiped to NEXT: old track exited left (-width).
+      // New track enters from the RIGHT (+width * 0.45) and springs into 0.
+      albumSwipeX.value = width * 0.45;
+      albumSwipeX.value = withSpring(0, {
+        damping: 28,
+        stiffness: 220,
+        mass: 0.8,
+        reduceMotion: ReduceMotion.System,
+      });
+    } else if (transitionDirection.value === -1) {
+      // Swiped to PREV: old track exited right (+width).
+      // New track enters from the LEFT (-width * 0.45) and springs into 0.
+      albumSwipeX.value = -width * 0.45;
+      albumSwipeX.value = withSpring(0, {
+        damping: 28,
+        stiffness: 220,
+        mass: 0.8,
+        reduceMotion: ReduceMotion.System,
+      });
+    } else {
+      albumSwipeX.value = 0;
+    }
+
+    transitionDirection.value = 0;
+    isTransitioningShared.value = false;
+    isSwipingAlbum.value = false;
+  }, [currentTrack?.id, width]);
+
+  useEffect(() => {
+    return () => {
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const triggerSwipeHaptic = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  }, []);
+
+  const handleSwipeNextComplete = useCallback(() => {
+    if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current);
+    }
+    const timer = setTimeout(() => {
+      if (transitionDirection.value !== 0) {
+        albumSwipeX.value = withSpring(0, {
+          damping: 28,
+          stiffness: 220,
+          mass: 0.8,
+          reduceMotion: ReduceMotion.System,
+        });
+        transitionDirection.value = 0;
+        isTransitioningShared.value = false;
+        isSwipingAlbum.value = false;
+      }
+    }, 800);
+    if (typeof timer?.unref === 'function') {
+      timer.unref();
+    }
+    fallbackTimeoutRef.current = timer;
+
+    if (upNextQueue && upNextQueue.length > 0) {
+      fetchNextTrack?.();
+    } else if (effectiveNextTrack) {
+      if (playTrack) {
+        playTrack(effectiveNextTrack);
+      } else {
+        fetchNextTrack?.();
+      }
+    } else {
+      fetchNextTrack?.();
+    }
+  }, [fetchNextTrack, playTrack, upNextQueue, effectiveNextTrack]);
+
+  const handleSwipePrevComplete = useCallback(() => {
+    if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current);
+    }
+    const timer = setTimeout(() => {
+      if (transitionDirection.value !== 0) {
+        albumSwipeX.value = withSpring(0, {
+          damping: 28,
+          stiffness: 220,
+          mass: 0.8,
+          reduceMotion: ReduceMotion.System,
+        });
+        transitionDirection.value = 0;
+        isTransitioningShared.value = false;
+        isSwipingAlbum.value = false;
+      }
+    }, 800);
+    if (typeof timer?.unref === 'function') {
+      timer.unref();
+    }
+    fallbackTimeoutRef.current = timer;
+
+    if (history && history.length > 0) {
+      playPreviousTrack?.({ force: true });
+    } else if (effectivePrevTrack) {
+      if (playTrack) {
+        playTrack(effectivePrevTrack);
+      } else {
+        playPreviousTrack?.({ force: true });
+      }
+    } else {
+      playPreviousTrack?.({ force: true });
+    }
+  }, [playPreviousTrack, playTrack, history, effectivePrevTrack]);
+
+  const albumHorizontalGesture = useMemo(() => {
+    return Gesture.Pan()
+      .enabled(Boolean(isPlayerVisible && !isLyricsView && !isQueueVisible))
+      .activeOffsetX([-12, 12])
+      .failOffsetY([-20, 20])
+      .onStart(() => {
+        'worklet';
+        if (isTransitioningShared.value) return;
+        isSwipingAlbum.value = true;
+      })
+      .onUpdate((event) => {
+        'worklet';
+        if (isTransitioningShared.value) return;
+        const dx = event.translationX;
+        if (dx > 0 && !hasPrevShared.value) {
+          albumSwipeX.value = dx * 0.25;
+        } else if (dx < 0 && !hasNextShared.value) {
+          albumSwipeX.value = dx * 0.25;
+        } else {
+          albumSwipeX.value = dx;
+        }
+      })
+      .onEnd((event) => {
+        'worklet';
+        if (isTransitioningShared.value) return;
+        const dx = event.translationX;
+        const vx = event.velocityX;
+        const threshold = width * 0.28;
+
+        if ((dx < -threshold || vx < -350) && hasNextShared.value) {
+          isTransitioningShared.value = true;
+          transitionDirection.value = 1;
+          runOnJS(triggerSwipeHaptic)();
+          albumSwipeX.value = withSpring(
+            -width * 1.05,
+            {
+              damping: 28,
+              stiffness: 220,
+              mass: 0.8,
+              velocity: vx,
+              reduceMotion: ReduceMotion.System,
+            },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                runOnJS(handleSwipeNextComplete)();
+              }
+            }
+          );
+        } else if ((dx > threshold || vx > 350) && hasPrevShared.value) {
+          isTransitioningShared.value = true;
+          transitionDirection.value = -1;
+          runOnJS(triggerSwipeHaptic)();
+          albumSwipeX.value = withSpring(
+            width * 1.05,
+            {
+              damping: 28,
+              stiffness: 220,
+              mass: 0.8,
+              velocity: vx,
+              reduceMotion: ReduceMotion.System,
+            },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                runOnJS(handleSwipePrevComplete)();
+              }
+            }
+          );
+        } else {
+          albumSwipeX.value = withSpring(
+            0,
+            {
+              damping: 28,
+              stiffness: 220,
+              mass: 0.8,
+              velocity: vx,
+              reduceMotion: ReduceMotion.System,
+            },
+            (finished) => {
+              'worklet';
+              if (finished) {
+                isSwipingAlbum.value = false;
+              }
+            }
+          );
+        }
+      })
+      .onFinalize(() => {
+        'worklet';
+        if (!isTransitioningShared.value && albumSwipeX.value !== 0) {
+          albumSwipeX.value = withSpring(0, {
+            damping: 28,
+            stiffness: 220,
+            mass: 0.8,
+            reduceMotion: ReduceMotion.System,
+          });
+          isSwipingAlbum.value = false;
+        }
+      });
+  }, [
+    isPlayerVisible,
+    isLyricsView,
+    isQueueVisible,
+    width,
+    triggerSwipeHaptic,
+    handleSwipeNextComplete,
+    handleSwipePrevComplete,
+  ]);
 
   const mainSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const bottomSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
@@ -412,7 +715,7 @@ const FullPlayerModal = ({
   const expandDeltaY = miniArtCenterY - fullArtCenterY;
 
   const fullTextTopY = fullArtTopY + BIG_ART_SIZE + 20;
-  const fullTextCenterY = fullTextTopY + 23;
+  const fullTextCenterY = fullTextTopY + 27;
   const miniTextCenterY = height - effectiveBottomBarHeight + 32;
   const expandDeltaTextX = 72 - 30; // 42
   const expandDeltaTextY = miniTextCenterY - fullTextCenterY;
@@ -458,8 +761,27 @@ const FullPlayerModal = ({
       Extrapolation.CLAMP
     );
 
-    const scale = expandScale * lyricsScale;
-    const translateX = expandTranslateX + lyricsTranslateX;
+    const swipeScale = interpolate(
+      Math.abs(albumSwipeX.value),
+      [0, width],
+      [1, 0.92],
+      Extrapolation.CLAMP
+    );
+    const swipeOpacity = interpolate(
+      Math.abs(albumSwipeX.value),
+      [0, width * 0.75],
+      [1, 0.75],
+      Extrapolation.CLAMP
+    );
+    const swipeTranslateX = albumSwipeX.value * interpolate(
+      expandProgress.value,
+      [0.9, 1],
+      [0, 1],
+      Extrapolation.CLAMP
+    ) * (1 - lyricsTransition.value);
+
+    const scale = expandScale * lyricsScale * (expandProgress.value > 0.9 ? swipeScale : 1);
+    const translateX = expandTranslateX + lyricsTranslateX + swipeTranslateX;
     const translateY = expandTranslateY + lyricsTranslateY;
 
     const dismissY = ((dismissDragY ? dismissDragY.value : 0) +
@@ -505,8 +827,15 @@ const FullPlayerModal = ({
       Extrapolation.CLAMP
     );
 
+    const expandOpacity = interpolate(
+      expandProgress.value,
+      [0, 0.005],
+      [0, 1],
+      Extrapolation.CLAMP
+    );
+
     return {
-      opacity: expandProgress.value > 0.1 ? 1 : dismissOpacity,
+      opacity: expandOpacity * dismissOpacity * (expandProgress.value > 0.9 ? swipeOpacity : 1),
       shadowOpacity,
       shadowRadius,
       elevation,
@@ -566,7 +895,7 @@ const FullPlayerModal = ({
     const expandScale = interpolate(
       expandProgress.value,
       [0, 1],
-      [0.65, 1],
+      [15 / 24, 1],
       Extrapolation.CLAMP
     );
 
@@ -603,8 +932,15 @@ const FullPlayerModal = ({
       Extrapolation.CLAMP
     );
 
+    const expandOpacity = interpolate(
+      expandProgress.value,
+      [0, 0.005],
+      [0, 1],
+      Extrapolation.CLAMP
+    );
+
     return {
-      opacity: lyricsOpacity * (expandProgress.value > 0.1 ? 1 : dismissOpacity),
+      opacity: lyricsOpacity * expandOpacity * dismissOpacity,
       transform: [
         { translateX: expandTranslateX },
         { translateY: expandTranslateY + lyricsTranslateY + dismissY },
@@ -929,22 +1265,29 @@ const FullPlayerModal = ({
                       </View>
                     </Animated.View>
 
-                    <Animated.View style={[styles.artContainer, albumArtFlipStyle]}>
-                      <Animated.View style={[{ width: '100%', height: '100%', overflow: 'hidden' }, albumArtRadiusStyle]}>
-                        <CoverImage
-                          source={activeTrack?.coverArt}
-                          style={{ width: '100%', height: '100%' }}
-                        />
-                        <Animated.View
-                          style={[
-                            StyleSheet.absoluteFillObject,
-                            { backgroundColor: '#000' },
-                            albumArtSheenStyle,
-                          ]}
-                          pointerEvents="none"
-                        />
+                    <GestureDetector gesture={albumHorizontalGesture}>
+                      <Animated.View
+                        style={[styles.artContainer, albumArtFlipStyle]}
+                        accessibilityRole="image"
+                        accessibilityLabel={displayTitle ? `${displayTitle} by ${displayArtist}, album cover` : 'Album cover'}
+                        accessibilityHint="Swipe left for next track, swipe right for previous track, swipe down to close"
+                      >
+                        <Animated.View style={[{ width: '100%', height: '100%', overflow: 'hidden' }, albumArtRadiusStyle]}>
+                          <CoverImage
+                            source={activeTrack?.coverArt}
+                            style={{ width: '100%', height: '100%' }}
+                          />
+                          <Animated.View
+                            style={[
+                              StyleSheet.absoluteFillObject,
+                              { backgroundColor: '#000' },
+                              albumArtSheenStyle,
+                            ]}
+                            pointerEvents="none"
+                          />
+                        </Animated.View>
                       </Animated.View>
-                    </Animated.View>
+                    </GestureDetector>
 
                     <Animated.View style={[styles.trackInfoContainer, trackInfoAnimatedStyle]}>
                       <View style={styles.titleRow}>

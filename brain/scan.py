@@ -195,6 +195,7 @@ def main():
                                 point_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
                                 duration=meta.duration, genre=meta.genre,
                                 file_size=file_size, file_mtime_ns=file_mtime_ns,
+                                track_number=meta.track_number, disc_number=meta.disc_number,
                             )
                             db.update_track_metadata_from_audio(point_id, meta, album_id, preserve_empty_genre=True)
                         db.reset_track_loudness_pending(point_id, file_size=file_size, file_mtime_ns=file_mtime_ns)
@@ -259,6 +260,13 @@ def main():
                                 file_size=metadata.get('file_size'),
                                 file_mtime_ns=metadata.get('file_mtime_ns'),
                             )
+                            try:
+                                from metadata import read_audio_metadata
+                                file_meta = read_audio_metadata(file_path)
+                                if file_meta:
+                                    db.update_track_metadata_from_audio(point_id, file_meta, album_id, preserve_empty_genre=True)
+                            except Exception as meta_read_err:
+                                logger.warning(f"Не удалось прочитать расширенные теги для {file_path.name}: {meta_read_err}")
                             logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title_} - {artist_}")
                     except Exception as db_err:
                         logger.warning(f"Не удалось обновить SQLite для {metadata['file_path']}: {db_err}")
