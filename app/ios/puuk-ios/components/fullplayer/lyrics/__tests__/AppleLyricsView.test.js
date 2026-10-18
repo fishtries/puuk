@@ -16,11 +16,6 @@ jest.mock('../../../../utils/api', () => ({
   authFetch: jest.fn(),
 }));
 
-jest.mock('../../BlurOverlays', () => ({
-  TopBlurOverlay: 'TopBlurOverlay',
-  BottomBlurOverlay: 'BottomBlurOverlay',
-}));
-
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
   return {
@@ -97,12 +92,10 @@ describe('AppleLyricsView', () => {
     contentAnimatedStyle: {},
     lyricsTransition: { value: 1 },
     lyricsRotation: { value: 360 },
-    animatedBgStyle: {},
     lyricsViewAnimatedStyle: {},
     lyricsMiniHeaderAnimatedStyle: {},
     lyricsMiniTextAnimatedStyle: {},
     lyricsMiniHeartAnimatedStyle: {},
-    lyricsOverlaysAnimatedStyle: {},
     lyricsContentAnimatedStyle: {},
     setIsLyricsView: jest.fn(),
     setIsLyricsMounted: jest.fn(),

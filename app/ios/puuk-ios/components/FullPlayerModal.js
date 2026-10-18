@@ -9,11 +9,8 @@ import {
 } from 'react-native';
 import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import CoverImage, { prefetchCover } from './CoverImage';
-import { authFetch } from '../utils/api';
 
 import Animated, {
   useSharedValue,
@@ -78,7 +75,6 @@ const FullPlayerModal = ({
   const insets = propInsets || initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
   const effectiveBottomBarHeight = bottomBarHeight || (64 + (insets.bottom || 34));
   const effectiveTopInset = insets?.top || 47;
-  const bgColor = useSharedValue('#4c2e4f');
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSliding, setIsSliding] = useState(false);
   const queueTransition = useSharedValue(0);
@@ -170,41 +166,6 @@ const FullPlayerModal = ({
       lyricsRotation.value = 0;
     }
   }, [playerExpandToken, externalExpandProgress]);
-
-  useEffect(() => {
-    if (!currentTrack || currentTrack.id === 'placeholder') return;
-
-    if (currentTrack.cover_color) {
-      bgColor.value = currentTrack.cover_color;
-    }
-
-    const trackId = currentTrack.id;
-    if (trackId) {
-      authFetch(`/api/color/${encodeURIComponent(trackId)}`)
-        .then(r => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        })
-        .then(data => {
-          if (data?.color) {
-            bgColor.value = data.color;
-          }
-        })
-        .catch(err => {
-          if (currentTrack?.coverArt && currentTrack.coverArt.includes('/api/cover/')) {
-            const colorUrl = currentTrack.coverArt.replace('/api/cover/', '/api/color/');
-            authFetch(colorUrl)
-              .then(r => r.ok && r.json())
-              .then(data => {
-                if (data?.color) {
-                  bgColor.value = data.color;
-                }
-              })
-              .catch(() => {});
-          }
-        });
-    }
-  }, [currentTrack?.id, currentTrack?.cover_color, currentTrack?.coverArt]);
 
   // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт)
   useEffect(() => {
@@ -602,13 +563,6 @@ const FullPlayerModal = ({
   const bottomSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const lyricsHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const queueHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
-
-  const gradientOverlayAnimatedStyle = useAnimatedStyle(() => {
-    const gradOpacity = interpolate(expandProgress.value, [0.08, 0.4], [0, 1], Extrapolation.CLAMP);
-    return {
-      opacity: gradOpacity,
-    };
-  });
 
   const playerControlsAnimatedStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
@@ -1055,29 +1009,6 @@ const FullPlayerModal = ({
     };
   });
 
-  const lyricsOverlaysAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      lyricsTransition.value,
-      [0.2, 0.85],
-      [0, 1],
-      Extrapolation.CLAMP
-    );
-    return { opacity };
-  });
-
-  const animatedBgStyle = useAnimatedStyle(() => {
-    return {
-      backgroundColor: bgColor.value,
-      opacity: interpolate(expandProgress.value, [0, 0.5], [0, 1], Extrapolation.CLAMP),
-    };
-  });
-
-  const ambientCoverAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      opacity: interpolate(expandProgress.value, [0, 0.4], [0, 1], Extrapolation.CLAMP),
-    };
-  });
-
   const fallbackTrack = useMemo(() => ({
     id: 'placeholder',
     title: 'Puuk Music',
@@ -1133,39 +1064,6 @@ const FullPlayerModal = ({
     >
       <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
         <View style={styles.container} pointerEvents="auto">
-          {/* Base pitch black background */}
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: '#000000' }} />
-
-          {/* Плавно меняющийся сплошной цветной фон */}
-          <Animated.View style={[StyleSheet.absoluteFill, animatedBgStyle]} />
-
-          {/* Dynamic ambient cover art background for expanded player */}
-          {activeTrack?.coverArt && (
-            <Animated.View style={[StyleSheet.absoluteFill, ambientCoverAnimatedStyle]} pointerEvents="none">
-              <CoverImage
-                source={activeTrack.coverArt}
-                style={[StyleSheet.absoluteFill, { transform: [{ scale: 1.4 }] }]}
-                blurRadius={40}
-                resizeMode="cover"
-              />
-              <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-              <LinearGradient
-                colors={['rgba(0,0,0,0.2)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.85)']}
-                locations={[0, 0.45, 1]}
-                style={StyleSheet.absoluteFill}
-              />
-            </Animated.View>
-          )}
-
-          {!activeTrack?.coverArt && (
-            <Animated.View style={[StyleSheet.absoluteFill, gradientOverlayAnimatedStyle]} pointerEvents="none">
-              <LinearGradient
-                colors={['#120d1400', '#120d14']}
-                style={StyleSheet.absoluteFill}
-              />
-            </Animated.View>
-          )}
-
           <AppleLyricsView
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
@@ -1184,12 +1082,10 @@ const FullPlayerModal = ({
             contentAnimatedStyle={lyricsModalContentAnimatedStyle}
             lyricsTransition={lyricsTransition}
             lyricsRotation={lyricsRotation}
-            animatedBgStyle={animatedBgStyle}
             lyricsViewAnimatedStyle={lyricsViewAnimatedStyle}
             lyricsMiniHeaderAnimatedStyle={lyricsMiniHeaderAnimatedStyle}
             lyricsMiniTextAnimatedStyle={lyricsMiniTextAnimatedStyle}
             lyricsMiniHeartAnimatedStyle={lyricsMiniHeartAnimatedStyle}
-            lyricsOverlaysAnimatedStyle={lyricsOverlaysAnimatedStyle}
             lyricsContentAnimatedStyle={lyricsContentAnimatedStyle}
             setIsLyricsView={setIsLyricsView}
             setIsLyricsMounted={setIsLyricsMounted}

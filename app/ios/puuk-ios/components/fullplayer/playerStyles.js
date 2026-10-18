@@ -5,7 +5,7 @@ const { width, height } = Dimensions.get('window');
 const styles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000000',
+    backgroundColor: 'transparent',
   },
   safeArea: {
     alignItems: 'center',
@@ -209,7 +209,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: 64,
-    backgroundColor: '#000000',
+    backgroundColor: 'transparent',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,

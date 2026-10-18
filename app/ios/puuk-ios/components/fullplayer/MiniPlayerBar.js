@@ -6,7 +6,6 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   interpolate,
@@ -159,37 +158,6 @@ const MiniPlayerBar = ({
           {renderTrackCard(nextTrack, nextTrack?.title, nextTrack?.artist, nextTrackAnimatedStyle)}
         </Animated.View>
 
-        {/* Мягкие градиенты по краям, сглаживающие границы при переключении */}
-        <LinearGradient
-          colors={['rgba(0, 0, 0, 0.95)', 'rgba(0, 0, 0, 0.45)', 'rgba(0, 0, 0, 0)']}
-          locations={[0, 0.4, 1]}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 36,
-            zIndex: 5,
-          }}
-          pointerEvents="none"
-        />
-        <LinearGradient
-          colors={['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.55)', 'rgba(0, 0, 0, 0.95)']}
-          locations={[0, 0.5, 1]}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={{
-            position: 'absolute',
-            right: 0,
-            top: 0,
-            bottom: 0,
-            width: 36,
-            zIndex: 5,
-          }}
-          pointerEvents="none"
-        />
       </TouchableOpacity>
 
       <Animated.View
@@ -197,7 +165,7 @@ const MiniPlayerBar = ({
           {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: '#000000',
+            backgroundColor: 'transparent',
             zIndex: 10,
           },
           miniButtonsAnimatedStyle,

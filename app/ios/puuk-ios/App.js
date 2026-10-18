@@ -24,6 +24,7 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 
 import FullPlayerModal from './components/FullPlayerModal';
 import MiniPlayerBar from './components/fullplayer/MiniPlayerBar';
+import { PLAYER_BACKGROUND_COLOR } from './components/fullplayer/playerBackground';
 import GlowTrackBoundary from './components/fullplayer/GlowTrackBoundary';
 import AddToPlaylistModal from './components/AddToPlaylistModal';
 import TrackContextMenuModal from './components/TrackContextMenuModal';
@@ -535,7 +536,7 @@ function AppContent() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#000' }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: PLAYER_BACKGROUND_COLOR }}>
       <StatusBar style="light" />
 
       {/* СЛОЙ 0 (ПОДЛОЖКА): Плеер на весь экран под карточкой */}

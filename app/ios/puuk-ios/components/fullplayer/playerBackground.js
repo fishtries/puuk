@@ -1,0 +1,1 @@
+export const PLAYER_BACKGROUND_COLOR = '#FFC0CB';

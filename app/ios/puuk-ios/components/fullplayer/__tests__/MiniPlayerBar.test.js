@@ -6,10 +6,6 @@ jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
 }));
 
-jest.mock('expo-linear-gradient', () => ({
-  LinearGradient: 'LinearGradient',
-}));
-
 jest.mock('../../CoverImage', () => 'CoverImage');
 
 jest.mock('react-native-gesture-handler', () => {

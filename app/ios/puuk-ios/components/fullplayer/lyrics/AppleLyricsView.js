@@ -20,7 +20,6 @@ import Animated, {
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 
 import AnimatedLyricLine from './AnimatedLyricLine';
-import { TopBlurOverlay, BottomBlurOverlay } from '../BlurOverlays';
 import { computeActiveLyricIndex } from './lyricDepth';
 
 const createLyricsStyles = ({
@@ -144,12 +143,10 @@ const AppleLyricsView = ({
   contentAnimatedStyle,
   lyricsTransition,
   lyricsRotation,
-  animatedBgStyle,
   lyricsViewAnimatedStyle,
   lyricsMiniHeaderAnimatedStyle,
   lyricsMiniTextAnimatedStyle,
   lyricsMiniHeartAnimatedStyle,
-  lyricsOverlaysAnimatedStyle,
   lyricsContentAnimatedStyle,
   setIsLyricsView,
   setIsLyricsMounted,
@@ -609,11 +606,6 @@ const AppleLyricsView = ({
             )}
           </Animated.View>
 
-          {/* Top and Bottom Blur Vignettes */}
-          <Animated.View style={[StyleSheet.absoluteFill, lyricsOverlaysAnimatedStyle]} pointerEvents="none">
-            <TopBlurOverlay animatedBgStyle={animatedBgStyle} insets={insets} />
-            <BottomBlurOverlay insets={insets} />
-          </Animated.View>
         </Animated.View>
       )}
     </>

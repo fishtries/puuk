@@ -9,21 +9,9 @@ jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
 }));
 
-jest.mock('expo-linear-gradient', () => ({
-  LinearGradient: 'LinearGradient',
-}));
-
-jest.mock('expo-blur', () => ({
-  BlurView: 'BlurView',
-}));
-
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(),
   ImpactFeedbackStyle: { Light: 'light' },
-}));
-
-jest.mock('../../../utils/api', () => ({
-  authFetch: jest.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
 }));
 
 jest.mock('../../CoverImage', () => 'CoverImage');

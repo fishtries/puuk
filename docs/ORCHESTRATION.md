@@ -75,8 +75,8 @@ orca orchestration worker-start \
 ```bash
 orca orchestration run-create --objective '<общая цель>' --json
 orca terminal create \
-  --worktree current --title 'junior-deepseek' \
-  --command 'opencode --model nyxos-deepseek/deepseek-v4.1-flash --agent build' \
+  --worktree current --title 'junior-gemini' \
+  --command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build' \
   --json
 orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
 orca orchestration worker-start \

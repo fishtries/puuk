@@ -29,7 +29,7 @@ Orca нужна, когда требуется координировать от
 ---
 description: Выполняет небольшие самостоятельные задачи с явными критериями приёмки
 mode: subagent
-model: nyxos-deepseek/deepseek-v4.1-flash
+model: antigravity-manager/gemini-3.8-flash
 permission:
   task: deny
 ---
@@ -52,7 +52,7 @@ permission:
     "junior": {
       "description": "Выполняет небольшие задачи с явными критериями приёмки",
       "mode": "subagent",
-      "model": "nyxos-deepseek/deepseek-v4.1-flash",
+      "model": "antigravity-manager/gemini-3.8-flash",
       "permission": { "task": "deny" },
       "prompt": "Выполни только назначенную задачу. Верни файлы, проверки, результаты и блокеры."
     }
@@ -77,7 +77,7 @@ permission:
 
 Или попросить основного агента: «Передай эту задачу subagent junior, дождись результата и проверь его». Основной агент вызывает `task` с `subagent_type: "junior"`.
 
-В доступной этой сессии схеме `task` есть `description`, `prompt`, `subagent_type`, `task_id`, `command`; **поля `model` нет**. Поэтому фраза «запусти general на DeepSeek» без настройки `general.model` не является надёжным способом выбора модели. Сначала нужен именованный агент с нужной конфигурацией. В текущей сессии объявлены только `general` и `explore`; документ не добавляет `junior` в работающий процесс.
+В доступной этой сессии схеме `task` есть `description`, `prompt`, `subagent_type`, `task_id`, `command`; **поля `model` нет**. Поэтому фраза «запусти general на Gemini» без настройки `general.model` не является надёжным способом выбора модели. Сначала нужен именованный агент с нужной конфигурацией. В текущей сессии объявлены только `general` и `explore`; документ не добавляет `junior` в работающий процесс.
 
 При продолжении используйте возвращённый `task_id`. Новый вызов без него начинает отдельный контекст; задание должно содержать необходимые сведения, а не предполагать знание всей беседы координатора. Дочерняя сессия не создаёт отдельный Git checkout: при параллельных правках нужны непересекающиеся области владения.
 
@@ -142,7 +142,7 @@ subtask: true
 
 ```bash
 opencode run \
-  --model nyxos-deepseek/deepseek-v4.1-flash \
+  --model antigravity-manager/gemini-3.8-flash \
   --agent build \
   --format json \
   --title 'junior: bounded task' \
@@ -205,8 +205,8 @@ orca orchestration worker-start \
 orca orchestration run-create --objective '<общая цель>' --json
 orca terminal create \
   --worktree current \
-  --title 'junior-deepseek' \
-  --command 'opencode --model nyxos-deepseek/deepseek-v4.1-flash --agent build' \
+  --title 'junior-gemini' \
+  --command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build' \
   --json
 orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
 orca orchestration worker-start \
@@ -304,7 +304,7 @@ orca orchestration check --ack <delivery-id> --json
 - `orca --version` и `orca status --json`: 1.4.220, runtime ready/reachable.
 - `opencode models`: подтверждены приведённые локальные ID моделей.
 - `opencode agent list`: пользовательских `junior`/`reviewer` сейчас нет; встроены в том числе `general` и `explore`.
-- Через временный `OPENCODE_CONFIG_CONTENT` и `opencode debug agent junior` проверено, что JSON-определение с `mode: subagent`, `model: nyxos-deepseek/deepseek-v4.1-flash`, `permission.task: deny` принимается. Resolved model: `providerID: nyxos-deepseek`, `modelID: deepseek-v4.1-flash`.
+- Через временный `OPENCODE_CONFIG_CONTENT` и `opencode debug agent junior` проверялось, что JSON-определение с `mode: subagent`, `model: antigravity-manager/gemini-3.8-flash`, `permission.task: deny` принимается. Перед использованием проверьте модель в локальном `opencode models` и фактически разрешённую модель через `opencode debug agent junior`.
 - Прочитаны актуальная JSON Schema и справка `run`, `debug`, `export`, `worker-start`, `worker-show`, `dispatch`, `task-create`, `send`.
 - Загружены version-matched guides Orca и references `coordinator-loop`, `low-level-topology`, `recovery-and-cleanup`, `messaging-and-gates`.
 
