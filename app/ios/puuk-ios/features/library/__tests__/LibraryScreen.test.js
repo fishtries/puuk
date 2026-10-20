@@ -2,15 +2,15 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { DeviceEventEmitter, RefreshControl, ActivityIndicator } from 'react-native';
 import LibraryScreen from '../LibraryScreen';
-import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog } from '../../utils/apiCache';
-import { authFetch } from '../../utils/api';
+import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog } from '../../../shared/api/apiCache';
+import { authFetch } from '../../../shared/api/api';
 
-jest.mock('../../utils/api', () => ({
+jest.mock('../../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
   authFetch: jest.fn(),
 }));
 
-jest.mock('../../utils/apiCache', () => ({
+jest.mock('../../../shared/api/apiCache', () => ({
   fetchCatalogWithCache: jest.fn(),
   setCachedCatalog: jest.fn().mockResolvedValue({}),
   removeCachedCatalog: jest.fn().mockResolvedValue(undefined),
@@ -21,12 +21,12 @@ jest.mock('../../utils/apiCache', () => ({
   },
 }));
 
-jest.mock('../../utils/settings', () => ({
+jest.mock('../../../shared/storage/settings', () => ({
   getSettings: jest.fn(() => ({ accentColor: '#FFDAB9' })),
   addSettingsListener: jest.fn(() => () => {}),
 }));
 
-jest.mock('../CoverImage', () => 'CoverImage');
+jest.mock('../../../shared/media/CoverImage', () => 'CoverImage');
 
 jest.mock('react-native-reanimated', () => {
   const { View } = require('react-native');

@@ -2,9 +2,9 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { Switch, Text } from 'react-native';
 import LoginModal from '../LoginModal';
-import { getSettings, updateSetting, addSettingsListener, t } from '../../utils/settings';
+import { getSettings, updateSetting, addSettingsListener, t } from '../../../shared/storage/settings';
 
-jest.mock('../../utils/api', () => ({
+jest.mock('../../../shared/api/api', () => ({
   loginWithCode: jest.fn(),
   loginWithPassword: jest.fn(),
   logout: jest.fn(),

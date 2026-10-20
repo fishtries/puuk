@@ -22,11 +22,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
-import AppHeader from '../components/AppHeader';
-import HomeScreen from '../components/HomeScreen';
-import SearchScreen from '../components/SearchScreen';
-import LibraryScreen from '../components/LibraryScreen';
-import { getSettings, addSettingsListener } from '../utils/settings';
+import AppHeader from '../shared/components/AppHeader';
+import HomeScreen from '../features/catalog/HomeScreen';
+import SearchScreen from '../features/search/SearchScreen';
+import LibraryScreen from '../features/library/LibraryScreen';
+import { getSettings, addSettingsListener } from '../shared/storage/settings';
 
 const Tab = createBottomTabNavigator();
 

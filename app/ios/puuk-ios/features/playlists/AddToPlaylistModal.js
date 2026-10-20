@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { authFetch } from '../utils/api';
+import { authFetch } from '../../shared/api/api';
 
 export default function AddToPlaylistModal({ visible, track, onClose }) {
   const [playlists, setPlaylists] = useState([]);

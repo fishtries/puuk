@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { DeviceEventEmitter } from 'react-native';
-import { DEFAULT_SERVER_URL } from './api';
+import { DEFAULT_SERVER_URL } from '../api/api';
 
 const SETTINGS_KEY = 'puuk_app_settings';
 

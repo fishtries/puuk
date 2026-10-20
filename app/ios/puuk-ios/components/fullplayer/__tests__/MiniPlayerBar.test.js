@@ -6,7 +6,7 @@ jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
 }));
 
-jest.mock('../../CoverImage', () => 'CoverImage');
+jest.mock('../../../shared/media/CoverImage', () => 'CoverImage');
 
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');

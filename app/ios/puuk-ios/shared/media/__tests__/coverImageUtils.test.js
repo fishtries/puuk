@@ -1,5 +1,5 @@
 import { isServerCoverUri, resolveCoverUri, prefetchCover } from '../CoverImage';
-import { SERVER_URL } from '../../utils/api';
+import { SERVER_URL } from '../../api/api';
 import { Image } from 'react-native';
 
 describe('components/CoverImage utils', () => {

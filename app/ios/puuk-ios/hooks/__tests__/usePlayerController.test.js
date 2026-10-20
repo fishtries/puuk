@@ -2,8 +2,8 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import usePlayerController, { normalizeTrackDto } from '../usePlayerController';
 import defaultPlaybackCoordinator from '../../utils/playbackCoordinator';
-import { authFetch } from '../../utils/api';
-import { updateSetting } from '../../utils/settings';
+import { authFetch } from '../../shared/api/api';
+import { updateSetting } from '../../shared/storage/settings';
 
 const mockCoordinatorListeners = new Set();
 const mockAuthListeners = new Set();
@@ -58,7 +58,7 @@ jest.mock('expo-audio', () => ({
   preload: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../utils/api', () => ({
+jest.mock('../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
   authFetch: jest.fn(),
   getAuthHeaders: jest.fn().mockResolvedValue({ Authorization: 'Bearer mock_token' }),
@@ -87,7 +87,7 @@ jest.mock('../../utils/api', () => ({
   },
 }));
 
-jest.mock('../../components/CoverImage', () => ({
+jest.mock('../../shared/media/CoverImage', () => ({
   resolveCoverUri: jest.fn((uri) => uri),
 }));
 

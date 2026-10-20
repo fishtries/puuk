@@ -12,15 +12,15 @@ import {
   DeviceEventEmitter,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import CoverImage from './CoverImage';
+import CoverImage from '../../shared/media/CoverImage';
 import Animated, {
   FadeIn,
   FadeInDown,
   FadeInRight,
   LinearTransition,
 } from 'react-native-reanimated';
-import { authFetch, SERVER_URL } from '../utils/api';
-import { getSettings, addSettingsListener } from '../utils/settings';
+import { authFetch, SERVER_URL } from '../../shared/api/api';
+import { getSettings, addSettingsListener } from '../../shared/storage/settings';
 
 const { width } = Dimensions.get('window');
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);

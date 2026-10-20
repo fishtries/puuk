@@ -11,9 +11,9 @@ import {
   isRetryableStatus,
   isNetworkError,
   ApiError,
-} from '../utils/api';
+} from '../shared/api/api';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
-import { clearSavedLastTrack, getSettings, addSettingsListener } from '../utils/settings';
+import { clearSavedLastTrack, getSettings, addSettingsListener } from '../shared/storage/settings';
 import {
   applyTrackNormalization,
   computeEffectivePlayerVolume,

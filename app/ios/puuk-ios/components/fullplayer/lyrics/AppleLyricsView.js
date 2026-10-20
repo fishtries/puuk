@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { parseLrc, isLrcSynced, extractPlainLyrics } from '../../../utils/lrcParser';
-import { authFetch } from '../../../utils/api';
+import { authFetch } from '../../../shared/api/api';
 
 import Animated, {
   withTiming,

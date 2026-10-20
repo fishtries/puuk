@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { SERVER_URL } from '../utils/api';
+import { SERVER_URL } from '../../../shared/api/api';
 import {
   fetchTracksPage,
   mergeTracks,
   TRACKS_PAGE_SIZE,
-} from '../utils/apiCache';
+} from '../../../shared/api/apiCache';
 
 /**
  * Хук для пагинированной загрузки каталога треков со Stale-While-Revalidate кэшированием страниц.

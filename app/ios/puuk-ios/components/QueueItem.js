@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, View, Text, StyleSheet, Easing, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import CoverImage from './CoverImage';
+import CoverImage from '../shared/media/CoverImage';
 
 const QueueItem = ({ item, index, isVisible, shouldAnimate, onPress }) => {
   const anim = useRef(new Animated.Value(0)).current;

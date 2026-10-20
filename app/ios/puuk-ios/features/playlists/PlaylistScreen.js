@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { authFetch, SERVER_URL } from '../utils/api';
-import { getSettings, addSettingsListener } from '../utils/settings';
-import CoverImage from './CoverImage';
+import { authFetch, SERVER_URL } from '../../shared/api/api';
+import { getSettings, addSettingsListener } from '../../shared/storage/settings';
+import CoverImage from '../../shared/media/CoverImage';
 
 export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
   const { playlistId, playlistName } = route.params;

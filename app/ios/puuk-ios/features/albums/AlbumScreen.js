@@ -3,8 +3,8 @@ import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity }
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import CoverImage from './CoverImage';
-import { authFetch } from '../utils/api';
+import CoverImage from '../../shared/media/CoverImage';
+import { authFetch } from '../../shared/api/api';
 
 export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEllipsis }) {
   const { albumId, albumTitle, coverArt } = route.params;

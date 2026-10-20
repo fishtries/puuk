@@ -13,9 +13,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import CoverImage from './CoverImage';
-import { authFetch, SERVER_URL, parseApiErrorMessage } from '../utils/api';
-import { getSettings, addSettingsListener } from '../utils/settings';
+import CoverImage from '../../shared/media/CoverImage';
+import { authFetch, SERVER_URL, parseApiErrorMessage } from '../../shared/api/api';
+import { getSettings, addSettingsListener } from '../../shared/storage/settings';
 import styles from './trackEditScreenStyles';
 
 export default function TrackEditScreen({ route, navigation }) {

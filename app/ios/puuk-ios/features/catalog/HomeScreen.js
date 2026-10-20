@@ -14,8 +14,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import CoverImage from './CoverImage';
-import AppHeader from './AppHeader';
+import CoverImage from '../../shared/media/CoverImage';
+import AppHeader from '../../shared/components/AppHeader';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -30,8 +30,8 @@ import Animated, {
   FadeInRight,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { authFetch, SERVER_URL } from '../utils/api';
-import { fetchCatalogWithCache, removeCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
+import { authFetch, SERVER_URL } from '../../shared/api/api';
+import { fetchCatalogWithCache, removeCachedCatalog, DEFAULT_TTL_MS } from '../../shared/api/apiCache';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 

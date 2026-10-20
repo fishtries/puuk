@@ -1,6 +1,6 @@
 # Stage 2: App Composition Report
 
-**Status: implementation ready; acceptance pending manual device checks.**
+**Status: accepted after user-reported device checks.**
 
 ## Changes
 
@@ -18,12 +18,14 @@
 - `git diff --check`: passed.
 - `npm run format:check -- App.js components/AppAuthGate.js`: reports existing `App.js` formatting mismatch. Only the new `components/AppAuthGate.js` was formatted to avoid whole-file formatting churn.
 
-## Manual Checks Remaining
+## Manual Device Checks
 
-- Not yet completed: verify startup loading screen and signed-out login gate on device.
-- Not yet completed: verify startup restoration, main navigation, global modals, and mini-player/full-player layer order.
-- Physical iPhone check remains required for player appearance, gestures, animations, background playback, and lock-screen controls; this extraction does not change player mounting or audio ownership.
+- User confirmed all listed checks on an iPhone 11 Pro running iOS 18.6.2.
+- Startup loading, signed-out login gate, startup restoration, main navigation, global modals, and mini-player/full-player layer order: confirmed.
+- Player appearance, gestures, animations, controls, and playback states: confirmed in Expo Go.
+- Background playback and lock-screen/Control Center controls: confirmed in Expo Go.
+- Evidence is user-reported; no video or automated device-test artifact was provided.
 
 ## Open Concerns
 
-- No known functional concerns. Expo export and automated tests do not replace the listed device checks.
+- No known functional concerns reported. The device checks were performed in Expo Go; no standalone IPA/device build was reported.

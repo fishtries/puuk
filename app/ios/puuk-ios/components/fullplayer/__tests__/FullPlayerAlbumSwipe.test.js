@@ -2,7 +2,7 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import FullPlayerModal from '../../FullPlayerModal';
 import * as Haptics from 'expo-haptics';
-import * as CoverImageModule from '../../CoverImage';
+import * as CoverImageModule from '../../../shared/media/CoverImage';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -13,7 +13,7 @@ jest.mock('expo-haptics', () => ({
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' },
 }));
 
-jest.mock('../../CoverImage', () => {
+jest.mock('../../../shared/media/CoverImage', () => {
   const React = require('react');
   const { View } = require('react-native');
   const MockCover = (props) => <View testID="cover-image" {...props} />;

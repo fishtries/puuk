@@ -12,7 +12,7 @@ import Animated, {
   Extrapolation,
 } from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
-import CoverImage from '../CoverImage';
+import CoverImage from '../../shared/media/CoverImage';
 import defaultStyles from './playerStyles';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');

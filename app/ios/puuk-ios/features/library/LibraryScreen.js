@@ -18,10 +18,10 @@ import Animated, {
   LinearTransition
 } from 'react-native-reanimated';
 
-import CoverImage from './CoverImage';
-import { authFetch, SERVER_URL } from '../utils/api';
-import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog, DEFAULT_TTL_MS } from '../utils/apiCache';
-import { getSettings, addSettingsListener } from '../utils/settings';
+import CoverImage from '../../shared/media/CoverImage';
+import { authFetch, SERVER_URL } from '../../shared/api/api';
+import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog, DEFAULT_TTL_MS } from '../../shared/api/apiCache';
+import { getSettings, addSettingsListener } from '../../shared/storage/settings';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 

@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { getSettings, addSettingsListener } from '../utils/settings';
+import { getSettings, addSettingsListener } from '../storage/settings';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,

@@ -17,13 +17,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { loginWithCode, loginWithPassword, logout, setServerUrl } from '../utils/api';
+import { loginWithCode, loginWithPassword, logout, setServerUrl } from '../../shared/api/api';
 import {
   getSettings,
   updateSetting,
   addSettingsListener,
   t,
-} from '../utils/settings';
+} from '../../shared/storage/settings';
 import styles from './loginModalStyles';
 
 const ACCENT_COLORS = [

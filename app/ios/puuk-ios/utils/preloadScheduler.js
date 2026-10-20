@@ -11,7 +11,7 @@
 
 import defaultAudioCache from './audioCache';
 import { getCurrentNetworkPolicy, subscribeNetworkPolicy, SAFE_NETWORK_POLICY } from './networkPolicy';
-import { SERVER_URL } from './api';
+import { SERVER_URL } from '../shared/api/api';
 import { normalizeStreamUrl } from './streamUrl';
 
 export const TRACK_STATUS = {

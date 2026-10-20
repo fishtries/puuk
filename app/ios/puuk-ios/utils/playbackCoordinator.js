@@ -8,9 +8,9 @@
 
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
-import { resolveCoverUri, prefetchCover } from '../components/CoverImage';
-import { SERVER_URL, getCachedAuthToken, getAuthToken } from './api';
-import { getSettings } from './settings';
+import { resolveCoverUri, prefetchCover } from '../shared/media/CoverImage';
+import { SERVER_URL, getCachedAuthToken, getAuthToken } from '../shared/api/api';
+import { getSettings } from '../shared/storage/settings';
 import {
   applyTrackNormalization,
   computeEffectivePlayerVolume,

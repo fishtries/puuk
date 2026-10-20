@@ -10,7 +10,7 @@ import {
 import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import CoverImage, { prefetchCover } from './CoverImage';
+import CoverImage, { prefetchCover } from '../shared/media/CoverImage';
 
 import Animated, {
   useSharedValue,

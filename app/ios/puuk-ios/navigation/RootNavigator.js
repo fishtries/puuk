@@ -2,10 +2,10 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import MainTabsScreen from './MainTabs';
-import AlbumScreen from '../components/AlbumScreen';
-import AlbumEditScreen from '../components/AlbumEditScreen';
-import PlaylistScreen from '../components/PlaylistScreen';
-import TrackEditScreen from '../components/TrackEditScreen';
+import AlbumScreen from '../features/albums/AlbumScreen';
+import AlbumEditScreen from '../features/albums/AlbumEditScreen';
+import PlaylistScreen from '../features/playlists/PlaylistScreen';
+import TrackEditScreen from '../features/library/TrackEditScreen';
 
 const Stack = createNativeStackNavigator();
 

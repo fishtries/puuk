@@ -1,14 +1,14 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import useTracksPagination from '../useTracksPagination';
-import { fetchTracksPage, TRACKS_PAGE_SIZE } from '../../utils/apiCache';
+import { fetchTracksPage, TRACKS_PAGE_SIZE } from '../../../../shared/api/apiCache';
 
-jest.mock('../../utils/api', () => ({
+jest.mock('../../../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
 }));
 
-jest.mock('../../utils/apiCache', () => {
-  const actual = jest.requireActual('../../utils/apiCache');
+jest.mock('../../../../shared/api/apiCache', () => {
+  const actual = jest.requireActual('../../../../shared/api/apiCache');
   return {
     ...actual,
     fetchTracksPage: jest.fn(),

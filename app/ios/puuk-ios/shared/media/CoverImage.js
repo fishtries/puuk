@@ -5,9 +5,9 @@ import {
   getCachedAuthHeaders,
   getCachedAuthToken,
   SERVER_URL,
-} from '../utils/api';
+} from '../api/api';
 
-const DEFAULT_COVER = require('../assets/default_cover.jpg');
+const DEFAULT_COVER = require('../../assets/default_cover.jpg');
 
 /**
  * Проверяет, является ли URI обложкой нашего сервера:

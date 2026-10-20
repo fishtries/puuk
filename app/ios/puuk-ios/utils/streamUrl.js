@@ -1,4 +1,4 @@
-import { SERVER_URL } from './api';
+import { SERVER_URL } from '../shared/api/api';
 
 /**
  * Нормализует stream URL для воспроизведения и загрузки:

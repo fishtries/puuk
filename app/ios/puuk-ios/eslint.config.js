@@ -4,8 +4,10 @@ module.exports = [
     files: [
       'App.js',
       'components/**/*.js',
+      'features/**/*.js',
       'hooks/**/*.js',
       'navigation/**/*.js',
+      'shared/**/*.js',
       'utils/**/*.js',
     ],
     languageOptions: {

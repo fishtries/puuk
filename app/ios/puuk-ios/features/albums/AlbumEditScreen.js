@@ -14,8 +14,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import CoverImage from './CoverImage';
-import { authFetch, parseApiErrorMessage } from '../utils/api';
+import CoverImage from '../../shared/media/CoverImage';
+import { authFetch, parseApiErrorMessage } from '../../shared/api/api';
 
 export default function AlbumEditScreen({ route, navigation }) {
   const { albumId, album: initialAlbum } = route.params;

@@ -2,7 +2,7 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import AppleLyricsView from '../AppleLyricsView';
 import AnimatedLyricLine from '../AnimatedLyricLine';
-import { authFetch } from '../../../../utils/api';
+import { authFetch } from '../../../../shared/api/api';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -12,7 +12,7 @@ jest.mock('expo-blur', () => ({
   BlurView: 'BlurView',
 }));
 
-jest.mock('../../../../utils/api', () => ({
+jest.mock('../../../../shared/api/api', () => ({
   authFetch: jest.fn(),
 }));
 

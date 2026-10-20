@@ -642,7 +642,7 @@ describe('PlaybackCoordinator', () => {
     });
 
     test('updateQueue() prefetches cover art for the upcoming track in queue', () => {
-      const CoverImage = require('../../components/CoverImage');
+      const CoverImage = require('../../shared/media/CoverImage');
       const prefetchSpy = jest.spyOn(CoverImage, 'prefetchCover').mockImplementation(() => {});
 
       const current = { id: 1, title: 'Current' };

@@ -14,7 +14,7 @@ jest.mock('expo-haptics', () => ({
   ImpactFeedbackStyle: { Light: 'light' },
 }));
 
-jest.mock('../../CoverImage', () => 'CoverImage');
+jest.mock('../../../shared/media/CoverImage', () => 'CoverImage');
 jest.mock('../lyrics/AppleLyricsView', () => 'AppleLyricsView');
 jest.mock('../QueuePanel', () => 'QueuePanel');
 jest.mock('../PlayerControls', () => 'PlayerControls');
