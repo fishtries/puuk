@@ -13,7 +13,9 @@ jest.mock('../../utils/playbackCoordinator', () => {
   return {
     __esModule: true,
     default: {
-      play: jest.fn().mockResolvedValue({ isLocal: false, uri: 'mock://stream' }),
+      play: jest
+        .fn()
+        .mockResolvedValue({ isLocal: false, uri: 'mock://stream' }),
       updateQueue: jest.fn(),
       handleBufferingStatus: jest.fn(),
       subscribe: jest.fn((listener) => {
@@ -61,7 +63,9 @@ jest.mock('expo-audio', () => ({
 jest.mock('../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
   authFetch: jest.fn(),
-  getAuthHeaders: jest.fn().mockResolvedValue({ Authorization: 'Bearer mock_token' }),
+  getAuthHeaders: jest
+    .fn()
+    .mockResolvedValue({ Authorization: 'Bearer mock_token' }),
   getCachedAuthHeaders: jest.fn(() => ({ Authorization: 'Bearer mock_token' })),
   getCachedAuthToken: jest.fn(() => 'mock_token'),
   getCachedUser: jest.fn(() => ({ id: 1, username: 'tester' })),
@@ -70,14 +74,24 @@ jest.mock('../../shared/api/api', () => ({
     mockAuthListeners.add(cb);
     return () => mockAuthListeners.delete(cb);
   }),
-  isRetryableStatus: (status) => status === 408 || status === 429 || (typeof status === 'number' && status >= 500 && status <= 599),
+  isRetryableStatus: (status) =>
+    status === 408 ||
+    status === 429 ||
+    (typeof status === 'number' && status >= 500 && status <= 599),
   isNetworkError: (err) => {
     if (!err) return false;
     const msg = (err.message || '').toLowerCase();
-    return msg.includes('network') || msg.includes('timeout') || msg.includes('failed to fetch');
+    return (
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('failed to fetch')
+    );
   },
   ApiError: class ApiError extends Error {
-    constructor(message, { type = 'unknown', status = null, code = null } = {}) {
+    constructor(
+      message,
+      { type = 'unknown', status = null, code = null } = {},
+    ) {
       super(message);
       this.name = 'ApiError';
       this.type = type;
@@ -151,7 +165,11 @@ describe('usePlayerController', () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ id: 999, title: 'Wave Song', artist: 'Wave Artist' }),
+          json: async () => ({
+            id: 999,
+            title: 'Wave Song',
+            artist: 'Wave Artist',
+          }),
         };
       }
       if (url.includes('/api/wave/queue')) {
@@ -179,7 +197,7 @@ describe('usePlayerController', () => {
 
   test('race condition: late wave queue response does not pollute manual playlist', async () => {
     let waveQueueResolve;
-    const waveQueuePromise = new Promise(resolve => {
+    const waveQueuePromise = new Promise((resolve) => {
       waveQueueResolve = resolve;
     });
 
@@ -217,7 +235,7 @@ describe('usePlayerController', () => {
     });
 
     expect(controller.currentTrack.id).toBe(201);
-    expect(controller.upNextQueue.map(t => t.id)).toEqual([202]);
+    expect(controller.upNextQueue.map((t) => t.id)).toEqual([202]);
 
     // 3. Late wave response finally arrives
     await act(async () => {
@@ -225,7 +243,7 @@ describe('usePlayerController', () => {
     });
 
     // The manual queue must NOT be polluted with Stale Wave Rec!
-    expect(controller.upNextQueue.map(t => t.id)).toEqual([202]);
+    expect(controller.upNextQueue.map((t) => t.id)).toEqual([202]);
   });
 
   test('fetchNextTrack sends wave feedback with skip when track not finished', async () => {
@@ -251,7 +269,7 @@ describe('usePlayerController', () => {
           track_id: 10,
           event_type: 'skip',
         }),
-      })
+      }),
     );
   });
 
@@ -275,7 +293,7 @@ describe('usePlayerController', () => {
 
     // Only one transition happened: currentTrack is T2, T3 remains in queue
     expect(controller.currentTrack.id).toBe(2);
-    expect(controller.upNextQueue.map(t => t.id)).toEqual([3]);
+    expect(controller.upNextQueue.map((t) => t.id)).toEqual([3]);
   });
 
   describe('normalizeTrackDto', () => {
@@ -306,6 +324,34 @@ describe('usePlayerController', () => {
       expect(dto.loudness_lufs).toBe(-9.5);
       expect(dto.true_peak_db).toBe(-0.5);
     });
+
+    test('preserves extra metadata and aliases legacy IDs without stripping', () => {
+      const raw = {
+        track_id: 'legacy-wave-77',
+        title: 'Legacy Wave',
+        artist: 'Wave Artist',
+        album: 'Space Age',
+        year: 1978,
+        genre: 'Disco',
+        custom_meta: { source: 'vinyl' },
+      };
+      const dto = normalizeTrackDto(raw);
+      expect(dto.id).toBe('legacy-wave-77');
+      expect(dto.track_id).toBe('legacy-wave-77');
+      expect(dto.title).toBe('Legacy Wave');
+      expect(dto.artist).toBe('Wave Artist');
+      expect(dto.album).toBe('Space Age');
+      expect(dto.year).toBe(1978);
+      expect(dto.genre).toBe('Disco');
+      expect(dto.custom_meta).toEqual({ source: 'vinyl' });
+      expect(dto.coverArt).toBe('https://puuk.app/api/cover/legacy-wave-77');
+    });
+
+    test('keeps player-specific artist default when source metadata is missing', () => {
+      const dto = normalizeTrackDto({ id: 'missing-artist' });
+      expect(dto.title).toBe('Unknown Track');
+      expect(dto.artist).toBe('My Wave');
+    });
   });
 
   describe('Playback initiation order and history deduplication', () => {
@@ -313,7 +359,9 @@ describe('usePlayerController', () => {
       const originalError = console.error;
       console.error = jest.fn();
       defaultPlaybackCoordinator.play.mockRejectedValueOnce(
-        Object.assign(new Error('Remote replace failed'), { type: 'remote_replace_error' })
+        Object.assign(new Error('Remote replace failed'), {
+          type: 'remote_replace_error',
+        }),
       );
 
       await act(async () => {
@@ -324,7 +372,7 @@ describe('usePlayerController', () => {
 
       expect(console.error).toHaveBeenCalledWith(
         '[usePlayerController] loadAndPlay error:',
-        expect.objectContaining({ type: 'remote_replace_error', trackId: 404 })
+        expect.objectContaining({ type: 'remote_replace_error', trackId: 404 }),
       );
       console.error = originalError;
     });
@@ -340,12 +388,12 @@ describe('usePlayerController', () => {
       expect(defaultPlaybackCoordinator.play).toHaveBeenCalledWith(
         expect.anything(),
         track,
-        expect.objectContaining({ headers: expect.any(Object) })
+        expect.objectContaining({ headers: expect.any(Object) }),
       );
 
       // History was sent once
-      const historyCallsFirst = authFetch.mock.calls.filter(
-        c => c[0].includes('/api/tracks/88/history')
+      const historyCallsFirst = authFetch.mock.calls.filter((c) =>
+        c[0].includes('/api/tracks/88/history'),
       );
       expect(historyCallsFirst.length).toBe(1);
 
@@ -354,23 +402,29 @@ describe('usePlayerController', () => {
         controller.playTrack(track);
       });
 
-      const historyCallsSecond = authFetch.mock.calls.filter(
-        c => c[0].includes('/api/tracks/88/history')
+      const historyCallsSecond = authFetch.mock.calls.filter((c) =>
+        c[0].includes('/api/tracks/88/history'),
       );
       expect(historyCallsSecond.length).toBe(1);
     });
 
     test('execution order contract: coordinator.play is called strictly before fetchQueue and history/telemetry', async () => {
       const events = [];
-      defaultPlaybackCoordinator.play.mockImplementation(async (player, track) => {
-        events.push(`coordinator.play:${track?.id}`);
-        return { isLocal: false, uri: 'mock://stream' };
-      });
+      defaultPlaybackCoordinator.play.mockImplementation(
+        async (player, track) => {
+          events.push(`coordinator.play:${track?.id}`);
+          return { isLocal: false, uri: 'mock://stream' };
+        },
+      );
       authFetch.mockImplementation(async (url) => {
         const path = url.split('?')[0];
         events.push(`authFetch:${path}`);
         if (path.includes('/api/wave/queue')) {
-          return { ok: true, status: 200, json: async () => [{ id: 99, title: 'Next In Wave' }] };
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [{ id: 99, title: 'Next In Wave' }],
+          };
         }
         return { ok: true, status: 200, json: async () => ({}) };
       });
@@ -384,8 +438,12 @@ describe('usePlayerController', () => {
       expect(events[0]).toBe('coordinator.play:77');
       expect(events).toContain('authFetch:/api/wave/queue');
       expect(events).toContain('authFetch:/api/tracks/77/history');
-      expect(events.indexOf('coordinator.play:77')).toBeLessThan(events.indexOf('authFetch:/api/wave/queue'));
-      expect(events.indexOf('coordinator.play:77')).toBeLessThan(events.indexOf('authFetch:/api/tracks/77/history'));
+      expect(events.indexOf('coordinator.play:77')).toBeLessThan(
+        events.indexOf('authFetch:/api/wave/queue'),
+      );
+      expect(events.indexOf('coordinator.play:77')).toBeLessThan(
+        events.indexOf('authFetch:/api/tracks/77/history'),
+      );
 
       // Also verify order in fetchNextTrack: coordinator.play must precede feedback and history
       events.length = 0;
@@ -396,8 +454,12 @@ describe('usePlayerController', () => {
       expect(events[0]).toBe('coordinator.play:99');
       expect(events).toContain('authFetch:/api/wave/feedback');
       expect(events).toContain('authFetch:/api/tracks/99/history');
-      expect(events.indexOf('coordinator.play:99')).toBeLessThan(events.indexOf('authFetch:/api/wave/feedback'));
-      expect(events.indexOf('coordinator.play:99')).toBeLessThan(events.indexOf('authFetch:/api/tracks/99/history'));
+      expect(events.indexOf('coordinator.play:99')).toBeLessThan(
+        events.indexOf('authFetch:/api/wave/feedback'),
+      );
+      expect(events.indexOf('coordinator.play:99')).toBeLessThan(
+        events.indexOf('authFetch:/api/tracks/99/history'),
+      );
     });
 
     test('history dedup incorporates user and resets when user changes via addAuthListener', async () => {
@@ -407,14 +469,20 @@ describe('usePlayerController', () => {
         controller.playTrack(track);
       });
 
-      const callsUser1 = authFetch.mock.calls.filter(c => c[0].includes('/api/tracks/101/history'));
+      const callsUser1 = authFetch.mock.calls.filter((c) =>
+        c[0].includes('/api/tracks/101/history'),
+      );
       expect(callsUser1.length).toBe(1);
 
       // Replay in same user session is deduplicated
       await act(async () => {
         controller.playTrack(track);
       });
-      expect(authFetch.mock.calls.filter(c => c[0].includes('/api/tracks/101/history')).length).toBe(1);
+      expect(
+        authFetch.mock.calls.filter((c) =>
+          c[0].includes('/api/tracks/101/history'),
+        ).length,
+      ).toBe(1);
 
       // Switch user via auth listener callback
       await act(async () => {
@@ -427,7 +495,11 @@ describe('usePlayerController', () => {
       await act(async () => {
         controller.playTrack(track);
       });
-      expect(authFetch.mock.calls.filter(c => c[0].includes('/api/tracks/101/history')).length).toBe(2);
+      expect(
+        authFetch.mock.calls.filter((c) =>
+          c[0].includes('/api/tracks/101/history'),
+        ).length,
+      ).toBe(2);
     });
 
     test('loadAndPlay passes getHeadersAsync and invokes coordinator.play synchronously without blocking', async () => {
@@ -442,7 +514,7 @@ describe('usePlayerController', () => {
         expect.objectContaining({
           headers: expect.any(Object),
           getHeadersAsync: expect.any(Function),
-        })
+        }),
       );
     });
 
@@ -473,12 +545,18 @@ describe('usePlayerController', () => {
 
       // The background event failed and was logged
       expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining('[usePlayerController] Background event failed (/api/wave/feedback):'),
-        expect.any(String)
+        expect.stringContaining(
+          '[usePlayerController] Background event failed (/api/wave/feedback):',
+        ),
+        expect.any(String),
       );
 
       // Now network recovers: mock authFetch succeeds
-      authFetch.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+      authFetch.mockImplementation(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      }));
 
       // Notify good network status to coordinator listeners
       await act(async () => {
@@ -488,8 +566,8 @@ describe('usePlayerController', () => {
       });
 
       // Flushed retry succeeded
-      const retriedFeedbackCalls = authFetch.mock.calls.filter(
-        c => c[0].includes('/api/wave/feedback')
+      const retriedFeedbackCalls = authFetch.mock.calls.filter((c) =>
+        c[0].includes('/api/wave/feedback'),
       );
       expect(retriedFeedbackCalls.length).toBeGreaterThanOrEqual(2);
 
@@ -548,7 +626,9 @@ describe('usePlayerController', () => {
         if (url.includes('/api/wave/feedback')) {
           feedbackAttempts += 1;
           if (feedbackAttempts === 1) throw new Error('Network timeout');
-          return new Promise((resolve) => { resolveRetry = resolve; });
+          return new Promise((resolve) => {
+            resolveRetry = resolve;
+          });
         }
         return { ok: true, status: 200, json: async () => ({}) };
       });
@@ -594,7 +674,11 @@ describe('usePlayerController', () => {
       authFetch.mockImplementation(async (url) => {
         if (url.includes('/api/wave/feedback')) {
           attempts += 1;
-          return { ok: false, status: 400, json: async () => ({ error: 'Bad Request' }) };
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: 'Bad Request' }),
+          };
         }
         return { ok: true, status: 200, json: async () => ({}) };
       });
@@ -639,7 +723,9 @@ describe('usePlayerController', () => {
         controller.playTrackList(list, 0);
       });
 
-      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 101 }));
+      expect(controller.currentTrack).toEqual(
+        expect.objectContaining({ id: 101 }),
+      );
       expect(controller.upNextQueue).toHaveLength(1);
 
       await act(async () => {
@@ -647,11 +733,16 @@ describe('usePlayerController', () => {
       });
 
       expect(controller.player.pause).toHaveBeenCalled();
-      expect(controller.player.setActiveForLockScreen).toHaveBeenCalledWith(false);
+      expect(controller.player.setActiveForLockScreen).toHaveBeenCalledWith(
+        false,
+      );
       expect(controller.currentTrack).toBeNull();
       expect(controller.upNextQueue).toEqual([]);
       expect(controller.isPlayerVisible).toBe(false);
-      expect(defaultPlaybackCoordinator.updateQueue).toHaveBeenCalledWith(null, []);
+      expect(defaultPlaybackCoordinator.updateQueue).toHaveBeenCalledWith(
+        null,
+        [],
+      );
     });
 
     it('keeps player in compact mode (isPlayerVisible remains false) when playing tracks', async () => {
@@ -666,14 +757,18 @@ describe('usePlayerController', () => {
         controller.playTrackList(list, 0);
       });
 
-      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 201 }));
+      expect(controller.currentTrack).toEqual(
+        expect.objectContaining({ id: 201 }),
+      );
       expect(controller.isPlayerVisible).toBe(false);
 
       await act(async () => {
         controller.playTrack(list[1]);
       });
 
-      expect(controller.currentTrack).toEqual(expect.objectContaining({ id: 202 }));
+      expect(controller.currentTrack).toEqual(
+        expect.objectContaining({ id: 202 }),
+      );
       expect(controller.isPlayerVisible).toBe(false);
     });
 
@@ -689,15 +784,21 @@ describe('usePlayerController', () => {
       });
 
       expect(controller.previousTrack).toBeNull();
-      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 302 }));
+      expect(controller.nextTrack).toEqual(
+        expect.objectContaining({ id: 302 }),
+      );
 
       await act(async () => {
         await controller.fetchNextTrack();
       });
 
       expect(controller.currentTrack.id).toBe(302);
-      expect(controller.previousTrack).toEqual(expect.objectContaining({ id: 301 }));
-      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 303 }));
+      expect(controller.previousTrack).toEqual(
+        expect.objectContaining({ id: 301 }),
+      );
+      expect(controller.nextTrack).toEqual(
+        expect.objectContaining({ id: 303 }),
+      );
 
       // Force playPreviousTrack even if seeking or forced
       await act(async () => {
@@ -705,7 +806,9 @@ describe('usePlayerController', () => {
       });
 
       expect(controller.currentTrack.id).toBe(301);
-      expect(controller.nextTrack).toEqual(expect.objectContaining({ id: 302 }));
+      expect(controller.nextTrack).toEqual(
+        expect.objectContaining({ id: 302 }),
+      );
     });
   });
 
@@ -725,7 +828,7 @@ describe('usePlayerController', () => {
       expect(defaultPlaybackCoordinator.play).toHaveBeenCalledWith(
         mockPlayerInstance,
         track,
-        expect.objectContaining({ soundCheck: true })
+        expect.objectContaining({ soundCheck: true }),
       );
     });
 
@@ -787,6 +890,93 @@ describe('usePlayerController', () => {
       expect(mockPlayerInstance.volume).toBeCloseTo(0.501187, 4);
       expect(controller.currentTrack.loudness_status).toBe('analyzed');
       expect(controller.currentTrack.normalization_gain_db).toBe(-6.0);
+    });
+
+    test('loudness refresh with numeric ID 0 correctly updates currentTrack and queue', async () => {
+      const zeroTrack = {
+        id: 0,
+        title: 'Zero Pending Track',
+        loudness_status: 'pending',
+        normalization_gain_db: null,
+      };
+
+      authFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/tracks/0')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: 0,
+              loudness_status: 'analyzed',
+              normalization_gain_db: -4.0,
+              loudness_lufs: -10.0,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => [] };
+      });
+
+      await act(async () => {
+        controller.playTrack(zeroTrack);
+      });
+
+      expect(controller.currentTrack.id).toBe(0);
+      expect(controller.currentTrack.loudness_status).toBe('analyzed');
+      expect(controller.currentTrack.normalization_gain_db).toBe(-4.0);
+    });
+
+    test('queue fetching deduplicates across id and track_id forms including 0 and ignores invalid items', async () => {
+      authFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/wave/queue')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { track_id: 'q-existing', title: 'Updated Existing' },
+              { id: 0, title: 'Zero Track Q' },
+              null,
+              {},
+              { id: '' },
+              { track_id: 'q-new', title: 'New Track Q' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => [] };
+      });
+
+      await act(async () => {
+        controller.playTrack({ id: 'current-playing', title: 'Playing' });
+      });
+
+      // Initially set up existing queue with 'q-existing' using id
+      await act(async () => {
+        controller.playTrackList(
+          [
+            { id: 'track-start' },
+            { id: 'q-existing', title: 'Initial Existing' },
+          ],
+          0,
+        );
+      });
+
+      // Now trigger wave queue fetch for recommendations
+      await act(async () => {
+        controller.playTrack({ id: 'wave-start', title: 'Wave Start' });
+      });
+
+      // Wait for fetchQueue promise resolution
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const queueIds = controller.upNextQueue.map((t) => t.id);
+      expect(queueIds).toContain('q-existing');
+      expect(queueIds).toContain(0);
+      expect(queueIds).toContain('q-new');
+      expect(queueIds).not.toContain(null);
+      expect(queueIds).not.toContain(undefined);
+      expect(queueIds).not.toContain('');
     });
   });
 });

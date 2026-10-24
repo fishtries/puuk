@@ -1,15 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  StyleSheet
+  StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { parseLrc, isLrcSynced, extractPlainLyrics } from '../../../utils/lrcParser';
+import {
+  parseLrc,
+  isLrcSynced,
+  extractPlainLyrics,
+} from '../../../utils/lrcParser';
 import { authFetch } from '../../../shared/api/api';
+import { getTrackId } from '../../../shared/domain/trackAdapter';
 
 import Animated, {
   withTiming,
@@ -21,6 +32,7 @@ import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 
 import AnimatedLyricLine from './AnimatedLyricLine';
 import { computeActiveLyricIndex } from './lyricDepth';
+import { parsePlainLyrics } from './plainLyrics';
 
 const createLyricsStyles = ({
   width,
@@ -70,7 +82,9 @@ const createLyricsStyles = ({
   syncedLyricsList: {
     width: width,
     paddingTop: (insets?.top || 47) + 115,
-    paddingBottom: isEffectivelyCompact ? ((insets?.bottom || 34) + 160) : ((insets?.bottom || 34) + 235),
+    paddingBottom: isEffectivelyCompact
+      ? (insets?.bottom || 34) + 160
+      : (insets?.bottom || 34) + 235,
     paddingHorizontal: 30,
   },
   lyricsScrollView: {
@@ -122,7 +136,7 @@ const createLyricsStyles = ({
   },
   plainStanzaSpacer: {
     height: 18,
-  }
+  },
 });
 
 const AppleLyricsView = ({
@@ -217,14 +231,18 @@ const AppleLyricsView = ({
         return;
       }
       if (isLyricsMountedRef.current) {
-        lyricsTransition.value = withTiming(0, {
-          duration: 500,
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }, (finished) => {
-          if (finished) {
-            runOnJS(setIsLyricsMounted)(false);
-          }
-        });
+        lyricsTransition.value = withTiming(
+          0,
+          {
+            duration: 500,
+            easing: Easing.bezier(0.16, 1, 0.3, 1),
+          },
+          (finished) => {
+            if (finished) {
+              runOnJS(setIsLyricsMounted)(false);
+            }
+          },
+        );
         lyricsRotation.value = withTiming(0, {
           duration: 500,
           easing: Easing.out(Easing.cubic),
@@ -236,7 +254,13 @@ const AppleLyricsView = ({
         isLyricsMountedRef.current = false;
       }
     }
-  }, [isLyricsView, isPlayerVisible, lyricsTransition, lyricsRotation, setIsLyricsMounted]);
+  }, [
+    isLyricsView,
+    isPlayerVisible,
+    lyricsTransition,
+    lyricsRotation,
+    setIsLyricsMounted,
+  ]);
 
   const resetInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
@@ -263,6 +287,8 @@ const AppleLyricsView = ({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  const trackId = getTrackId(currentTrack);
+
   // Reset flags and scroll positions on track change
   useEffect(() => {
     if (manualScrollTimeoutRef.current) {
@@ -278,7 +304,7 @@ const AppleLyricsView = ({
     setBaseTargetY(0);
     setIsInitialMount(true);
     lyricLayouts.current = {};
-  }, [currentTrack?.id]);
+  }, [trackId]);
 
   // Transition from initial snap mount to animated wave springs
   useEffect(() => {
@@ -304,14 +330,15 @@ const AppleLyricsView = ({
 
   // Fetch track lyrics
   useEffect(() => {
-    if (currentTrack?.id) {
+    if (trackId !== null) {
       setIsLoadingLyrics(true);
-      authFetch(`/api/tracks/${currentTrack.id}/lyrics`)
-        .then(res => res.json())
-        .then(data => {
+      authFetch(`/api/tracks/${encodeURIComponent(String(trackId))}/lyrics`)
+        .then((res) => res.json())
+        .then((data) => {
           if (data && data.lyrics) {
             const raw = data.lyrics;
-            const isSynced = data.isSynced !== undefined ? data.isSynced : isLrcSynced(raw);
+            const isSynced =
+              data.isSynced !== undefined ? data.isSynced : isLrcSynced(raw);
             setHasSyncedLyrics(isSynced);
 
             const parsed = parseLrc(raw);
@@ -332,8 +359,13 @@ const AppleLyricsView = ({
           setHasSyncedLyrics(false);
         })
         .finally(() => setIsLoadingLyrics(false));
+    } else {
+      setLyrics([]);
+      setPlainLyricsText('');
+      setHasSyncedLyrics(false);
+      setIsLoadingLyrics(false);
     }
-  }, [currentTrack?.id]);
+  }, [trackId]);
 
   // Active lyric index computation
   const activeIndex = useMemo(() => {
@@ -356,21 +388,25 @@ const AppleLyricsView = ({
       return;
     }
 
-    const focalY = Math.max(160, height * 0.40);
+    const focalY = Math.max(160, height * 0.4);
     const layout = lyricLayouts.current[activeIndex];
-    const lineTop = layout ? layout.y : (activeIndex * 80);
+    const lineTop = layout ? layout.y : activeIndex * 80;
     const lineHeight = layout ? layout.height : 44;
     const newTarget = -(lineTop - focalY + lineHeight / 2);
-    setBaseTargetY((prev) => (Math.abs(prev - newTarget) > 0.5 ? newTarget : prev));
+    setBaseTargetY((prev) =>
+      Math.abs(prev - newTarget) > 0.5 ? newTarget : prev,
+    );
   }, [activeIndex, isManualScrolling, height, hasSyncedLyrics]);
 
   // Record line layout from children
   const handleLineLayout = useCallback((index, y, lineHeight) => {
     lyricLayouts.current[index] = { y, height: lineHeight };
     if (index === activeIndexRef.current && !isManualScrollingRef.current) {
-      const focalY = Math.max(160, heightRef.current * 0.40);
+      const focalY = Math.max(160, heightRef.current * 0.4);
       const newTarget = -(y - focalY + (lineHeight || 44) / 2);
-      setBaseTargetY((prev) => (Math.abs(prev - newTarget) > 0.5 ? newTarget : prev));
+      setBaseTargetY((prev) =>
+        Math.abs(prev - newTarget) > 0.5 ? newTarget : prev,
+      );
     }
   }, []);
 
@@ -388,22 +424,25 @@ const AppleLyricsView = ({
   }, []);
 
   // Handle line click: cancel manual scroll, reset offset, and seek
-  const handleLineClick = useCallback((time) => {
-    if (manualScrollTimeoutRef.current) {
-      clearTimeout(manualScrollTimeoutRef.current);
-    }
-    setIsManualScrolling(false);
-    isManualScrollingRef.current = false;
-    setUserScrollOffset(0);
-    userScrollOffsetRef.current = 0;
-    if (time !== null && seekTo) {
-      seekTo(time);
-    }
-    if (isLyricsCompactRef.current) {
-      exitCompactMode();
-    }
-    resetInactivityTimer();
-  }, [seekTo, exitCompactMode, resetInactivityTimer]);
+  const handleLineClick = useCallback(
+    (time) => {
+      if (manualScrollTimeoutRef.current) {
+        clearTimeout(manualScrollTimeoutRef.current);
+      }
+      setIsManualScrolling(false);
+      isManualScrollingRef.current = false;
+      setUserScrollOffset(0);
+      userScrollOffsetRef.current = 0;
+      if (time !== null && seekTo) {
+        seekTo(time);
+      }
+      if (isLyricsCompactRef.current) {
+        exitCompactMode();
+      }
+      resetInactivityTimer();
+    },
+    [seekTo, exitCompactMode, resetInactivityTimer],
+  );
 
   // Manual drag gesture with traffic-jam parity
   const dragStartYRef = useRef(0);
@@ -423,25 +462,34 @@ const AppleLyricsView = ({
     isManualScrollingRef.current = true;
   }, [exitCompactMode]);
 
-  const handlePanUpdate = useCallback((translationY) => {
-    const next = dragStartYRef.current + translationY;
-    const clamped = Math.max(-4000, Math.min(4000, next));
-    setUserScrollOffset(clamped);
-    userScrollOffsetRef.current = clamped;
-    scheduleManualScrollResume();
-  }, [scheduleManualScrollResume]);
+  const handlePanUpdate = useCallback(
+    (translationY) => {
+      const next = dragStartYRef.current + translationY;
+      const clamped = Math.max(-4000, Math.min(4000, next));
+      setUserScrollOffset(clamped);
+      userScrollOffsetRef.current = clamped;
+      scheduleManualScrollResume();
+    },
+    [scheduleManualScrollResume],
+  );
 
-  const handlePanEnd = useCallback((translationY, velocityY) => {
-    // If pulled down strongly when near top, close lyrics view
-    if ((dragStartYRef.current >= -20 && translationY > 60) || velocityY > 800) {
-      if (onCloseRef.current) {
-        onCloseRef.current();
-        return;
+  const handlePanEnd = useCallback(
+    (translationY, velocityY) => {
+      // If pulled down strongly when near top, close lyrics view
+      if (
+        (dragStartYRef.current >= -20 && translationY > 60) ||
+        velocityY > 800
+      ) {
+        if (onCloseRef.current) {
+          onCloseRef.current();
+          return;
+        }
       }
-    }
-    resetInactivityTimer();
-    scheduleManualScrollResume();
-  }, [resetInactivityTimer, scheduleManualScrollResume]);
+      resetInactivityTimer();
+      scheduleManualScrollResume();
+    },
+    [resetInactivityTimer, scheduleManualScrollResume],
+  );
 
   const panGesture = useMemo(() => {
     return Gesture.Pan()
@@ -463,12 +511,16 @@ const AppleLyricsView = ({
 
   const computedTargetY = baseTargetY + userScrollOffset;
 
-  const styles = useMemo(() => createLyricsStyles({
-    width,
-    height,
-    insets,
-    isEffectivelyCompact,
-  }), [width, height, insets, isEffectivelyCompact]);
+  const styles = useMemo(
+    () =>
+      createLyricsStyles({
+        width,
+        height,
+        insets,
+        isEffectivelyCompact,
+      }),
+    [width, height, insets, isEffectivelyCompact],
+  );
 
   return (
     <>
@@ -485,9 +537,13 @@ const AppleLyricsView = ({
               width: width,
               height: height,
               zIndex: 5,
-            }
+            },
           ]}
-          pointerEvents={(!isPlayerVisible || isQueueVisible || !isLyricsView) ? 'none' : 'auto'}
+          pointerEvents={
+            !isPlayerVisible || isQueueVisible || !isLyricsView
+              ? 'none'
+              : 'auto'
+          }
         >
           {/* Header */}
           <GestureDetector gesture={lyricsHeaderSwipeGesture}>
@@ -505,7 +561,7 @@ const AppleLyricsView = ({
                   height: (insets.top || 47) + 65,
                   backgroundColor: 'transparent',
                   paddingHorizontal: 30,
-                }
+                },
               ]}
             >
               <TouchableOpacity
@@ -514,9 +570,18 @@ const AppleLyricsView = ({
                 activeOpacity={0.8}
               >
                 <View style={styles.lyricsMiniArtSpacer} />
-                <Animated.View style={[styles.lyricsMiniTextContainer, lyricsMiniTextAnimatedStyle]}>
-                  <Text style={styles.lyricsMiniTitle} numberOfLines={1}>{displayTitle}</Text>
-                  <Text style={styles.lyricsMiniArtist} numberOfLines={1}>{displayArtist}</Text>
+                <Animated.View
+                  style={[
+                    styles.lyricsMiniTextContainer,
+                    lyricsMiniTextAnimatedStyle,
+                  ]}
+                >
+                  <Text style={styles.lyricsMiniTitle} numberOfLines={1}>
+                    {displayTitle}
+                  </Text>
+                  <Text style={styles.lyricsMiniArtist} numberOfLines={1}>
+                    {displayArtist}
+                  </Text>
                 </Animated.View>
               </TouchableOpacity>
               <Animated.View style={lyricsMiniHeartAnimatedStyle}>
@@ -526,9 +591,9 @@ const AppleLyricsView = ({
                   style={styles.lyricsHeartBtn}
                 >
                   <Ionicons
-                    name={trackIsLiked ? "heart" : "heart-outline"}
+                    name={trackIsLiked ? 'heart' : 'heart-outline'}
                     size={24}
-                    color={trackIsLiked ? "#ff2d55" : "#e5e5ea"}
+                    color={trackIsLiked ? '#ff2d55' : '#e5e5ea'}
                   />
                 </TouchableOpacity>
               </Animated.View>
@@ -536,9 +601,18 @@ const AppleLyricsView = ({
           </GestureDetector>
 
           {/* Body */}
-          <Animated.View style={[{ flex: 1, width: '100%', overflow: 'hidden' }, lyricsContentAnimatedStyle]}>
+          <Animated.View
+            style={[
+              { flex: 1, width: '100%', overflow: 'hidden' },
+              lyricsContentAnimatedStyle,
+            ]}
+          >
             {isLoadingLyrics ? (
-              <ActivityIndicator color="#fff" size="large" style={{ marginTop: 200 }} />
+              <ActivityIndicator
+                color="#fff"
+                size="large"
+                style={{ marginTop: 200 }}
+              />
             ) : hasSyncedLyrics && lyrics.length > 0 ? (
               /* Synced Lyrics with Staggered Traffic-Jam Wave Propagation */
               <GestureDetector gesture={panGesture}>
@@ -573,39 +647,40 @@ const AppleLyricsView = ({
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={{
                   paddingTop: insets.top + 115,
-                  paddingBottom: isEffectivelyCompact ? ((insets.bottom || 34) + 160) : ((insets.bottom || 34) + 235),
+                  paddingBottom: isEffectivelyCompact
+                    ? (insets.bottom || 34) + 160
+                    : (insets.bottom || 34) + 235,
                   paddingHorizontal: 30,
                 }}
               >
                 <View style={styles.plainLyricsWrapper}>
-                  {(plainLyricsText || lyrics.map(l => l.text).join('\n'))
-                    .split('\n')
-                    .map((line, idx) => {
-                      const trimmed = line.trim();
-                      if (!trimmed) {
-                        return <View key={idx} style={styles.plainStanzaSpacer} />;
-                      }
-                      const isHeader = /^\[.+\]$/.test(trimmed);
-                      if (isHeader) {
-                        return (
-                          <Text key={idx} style={styles.plainSectionTitle}>
-                            {trimmed.replace(/^\[|\]$/g, '')}
-                          </Text>
-                        );
-                      }
+                  {parsePlainLyrics(
+                    plainLyricsText || lyrics.map((l) => l.text).join('\n'),
+                  ).map((row, idx) => {
+                    if (row.type === 'stanza') {
                       return (
-                        <Text key={idx} style={styles.plainLyricText}>
-                          {trimmed}
+                        <View key={idx} style={styles.plainStanzaSpacer} />
+                      );
+                    }
+                    if (row.type === 'header') {
+                      return (
+                        <Text key={idx} style={styles.plainSectionTitle}>
+                          {row.text}
                         </Text>
                       );
-                    })}
+                    }
+                    return (
+                      <Text key={idx} style={styles.plainLyricText}>
+                        {row.text}
+                      </Text>
+                    );
+                  })}
                 </View>
               </ScrollView>
             ) : (
               <Text style={styles.noLyricsText}>Lyrics not found</Text>
             )}
           </Animated.View>
-
         </Animated.View>
       )}
     </>

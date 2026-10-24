@@ -1,9 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  TouchableOpacity,
+  Alert,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { authFetch, SERVER_URL } from '../../shared/api/api';
-import { getSettings, addSettingsListener } from '../../shared/storage/settings';
+import {
+  getSettings,
+  addSettingsListener,
+} from '../../shared/storage/settings';
+import {
+  getTrackId,
+  areTrackIdsEqual,
+  normalizeTrack,
+} from '../../shared/domain/trackAdapter';
 import CoverImage from '../../shared/media/CoverImage';
 
 export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
@@ -11,7 +27,9 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
   const isFavorites = playlistId === 'favorites';
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -31,49 +49,70 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
         const response = await authFetch('/api/favorites');
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        setTracks(data || []);
+        const raw = Array.isArray(data) ? data : [];
+        setTracks(
+          raw
+            .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+            .filter(Boolean),
+        );
       } else {
         const response = await authFetch(`/api/playlists/${playlistId}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        setTracks(data.tracks || []);
+        const raw = Array.isArray(data?.tracks) ? data.tracks : [];
+        setTracks(
+          raw
+            .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+            .filter(Boolean),
+        );
       }
     } catch (error) {
-      console.error("Fetch playlist tracks error:", error);
+      console.error('Fetch playlist tracks error:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleRemoveTrack = async (trackId) => {
+  const handleRemoveTrack = async (trackOrId) => {
+    const trackId = getTrackId(trackOrId);
+    if (trackId === null) return;
+
     Alert.alert(
-      isFavorites ? "Remove Favorite" : "Remove Track",
+      isFavorites ? 'Remove Favorite' : 'Remove Track',
       isFavorites
-        ? "Remove this track from your favorites?"
-        : "Are you sure you want to remove this track from the playlist?",
+        ? 'Remove this track from your favorites?'
+        : 'Are you sure you want to remove this track from the playlist?',
       [
-        { text: "Cancel", style: "cancel" },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: "Remove",
-          style: "destructive",
+          text: 'Remove',
+          style: 'destructive',
           onPress: async () => {
             try {
               if (isFavorites) {
-                await authFetch(`/api/tracks/${trackId}/like`, {
-                  method: 'DELETE'
-                });
+                await authFetch(
+                  `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+                  {
+                    method: 'DELETE',
+                  },
+                );
               } else {
-                await authFetch(`/api/playlists/${playlistId}/tracks/${trackId}`, {
-                  method: 'DELETE',
-                });
+                await authFetch(
+                  `/api/playlists/${encodeURIComponent(String(playlistId))}/tracks/${encodeURIComponent(String(trackId))}`,
+                  {
+                    method: 'DELETE',
+                  },
+                );
               }
-              setTracks(prev => prev.filter(t => t.id !== trackId));
+              setTracks((prev) =>
+                prev.filter((t) => !areTrackIdsEqual(t, trackId)),
+              );
             } catch (e) {
-              console.error("Remove track error", e);
+              console.error('Remove track error', e);
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
@@ -88,12 +127,16 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
         <CoverImage source={item.coverArt} style={styles.trackThumb} />
       )}
       <View style={styles.trackInfo}>
-        <Text style={styles.trackTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.trackArtist} numberOfLines={1}>{item.artist}</Text>
+        <Text style={styles.trackTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.trackArtist} numberOfLines={1}>
+          {item.artist}
+        </Text>
       </View>
-      <TouchableOpacity 
+      <TouchableOpacity
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        onPress={() => handleRemoveTrack(item.id)}
+        onPress={() => handleRemoveTrack(item)}
       >
         <Ionicons name="trash-outline" size={18} color="#ff453a" />
       </TouchableOpacity>
@@ -103,10 +146,15 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+        >
           <Ionicons name="chevron-back" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{playlistName}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {playlistName}
+        </Text>
       </View>
 
       {isLoading ? (
@@ -116,15 +164,21 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
       ) : (
         <FlatList
           data={tracks}
-          keyExtractor={(item, idx) => `${item.id}-${idx}`}
+          keyExtractor={(item, idx) => `${getTrackId(item) ?? idx}-${idx}`}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.playlistHeader}>
-              <View style={[styles.coverImage, styles.coverPlaceholder, isFavorites && styles.favoritesCoverPlaceholder]}>
+              <View
+                style={[
+                  styles.coverImage,
+                  styles.coverPlaceholder,
+                  isFavorites && styles.favoritesCoverPlaceholder,
+                ]}
+              >
                 <Ionicons
-                  name={isFavorites ? "heart" : "list"}
+                  name={isFavorites ? 'heart' : 'list'}
                   size={52}
-                  color={isFavorites ? accentColor : "#555"}
+                  color={isFavorites ? accentColor : '#555'}
                 />
               </View>
               <Text style={styles.playlistTitleText}>{playlistName}</Text>
@@ -137,7 +191,9 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateText}>
-                {isFavorites ? 'No favorite tracks yet' : 'No tracks in this playlist yet'}
+                {isFavorites
+                  ? 'No favorite tracks yet'
+                  : 'No tracks in this playlist yet'}
               </Text>
             </View>
           }

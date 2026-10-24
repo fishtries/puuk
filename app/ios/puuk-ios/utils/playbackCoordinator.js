@@ -9,13 +9,18 @@
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
 import { resolveCoverUri, prefetchCover } from '../shared/media/CoverImage';
-import { SERVER_URL, getCachedAuthToken, getAuthToken } from '../shared/api/api';
+import {
+  SERVER_URL,
+  getCachedAuthToken,
+  getAuthToken,
+} from '../shared/api/api';
 import { getSettings } from '../shared/storage/settings';
 import {
   applyTrackNormalization,
   computeEffectivePlayerVolume,
   computeTrackNormalizationGainDb,
 } from './loudnessNormalization';
+import { getTrackId, areTrackIdsEqual } from '../shared/domain/trackAdapter';
 
 // Native expo-audio preload is disabled because it registers an AVQueuePlayer in the native registry,
 // which triggers an NSInvalidArgumentException / HostFunction crash in unpatched iOS binaries.
@@ -132,7 +137,10 @@ export class PlaybackCoordinator {
     this.scheduler = options.scheduler || defaultPreloadScheduler;
     this.preloadNative = options.preloadNative || null;
     this.serverUrl = options.serverUrl || SERVER_URL;
-    this.bypassCache = options.bypassCache !== undefined ? options.bypassCache : BYPASS_AUDIO_CACHE;
+    this.bypassCache =
+      options.bypassCache !== undefined
+        ? options.bypassCache
+        : BYPASS_AUDIO_CACHE;
     this.debug = Boolean(options.debug);
 
     this.currentTrack = null;
@@ -191,21 +199,31 @@ export class PlaybackCoordinator {
     await player.replace(source);
 
     if (!isCurrent()) {
-      if (this.currentPlayUri && this.currentPlayUri !== source.uri && this.playbackGeneration > generation) {
-        this._warn('[Coordinator] Stale replace completed after newer track was started, re-applying current source:', {
-          staleUri: source.uri,
-          currentUri: this.currentPlayUri,
-        });
+      if (
+        this.currentPlayUri &&
+        this.currentPlayUri !== source.uri &&
+        this.playbackGeneration > generation
+      ) {
+        this._warn(
+          '[Coordinator] Stale replace completed after newer track was started, re-applying current source:',
+          {
+            staleUri: source.uri,
+            currentUri: this.currentPlayUri,
+          },
+        );
         const currentSource = this.currentIsLocal
           ? { uri: this.currentPlayUri }
-          : (this._currentSourceHeaders
-              ? { uri: this.currentPlayUri, headers: this._currentSourceHeaders }
-              : { uri: this.currentPlayUri });
+          : this._currentSourceHeaders
+            ? { uri: this.currentPlayUri, headers: this._currentSourceHeaders }
+            : { uri: this.currentPlayUri };
         try {
           await player.replace(currentSource);
           await player.play();
         } catch (err) {
-          this._warn('[Coordinator] Failed to re-apply current source after stale replace:', err?.message);
+          this._warn(
+            '[Coordinator] Failed to re-apply current source after stale replace:',
+            err?.message,
+          );
         }
       }
       return { superseded: true };
@@ -230,11 +248,9 @@ export class PlaybackCoordinator {
    * @returns {Promise<{ isLocal: boolean, uri: string, reused?: boolean, superseded?: boolean }>}
    */
   async play(player, track, options = {}) {
-    const rawTrackId = (track?.id !== undefined && track?.id !== null)
-      ? track.id
-      : track?.track_id;
+    const rawTrackId = getTrackId(track);
 
-    if (rawTrackId === undefined || rawTrackId === null || (rawTrackId === '' && rawTrackId !== 0)) {
+    if (rawTrackId === null) {
       this._warn('[Coordinator] play() called without valid track:', track);
       return { isLocal: false, uri: null };
     }
@@ -242,7 +258,9 @@ export class PlaybackCoordinator {
     const trackIdStr = String(rawTrackId).trim();
 
     // 1. Нормализация URL
-    const rawStreamUrl = track.stream_url || `${this.serverUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
+    const rawStreamUrl =
+      track.stream_url ||
+      `${this.serverUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
     const normalizedStreamUrl = normalizeStreamUrl(track, this.serverUrl);
 
     this._log('[Coordinator][Stage 1: normalize_url]', {
@@ -252,11 +270,18 @@ export class PlaybackCoordinator {
       serverUrl: this.serverUrl,
     });
 
-    if (!normalizedStreamUrl || (!normalizedStreamUrl.startsWith('http://') && !normalizedStreamUrl.startsWith('https://'))) {
-      const urlErr = new PlaybackError(`[Coordinator] Invalid stream URL: "${normalizedStreamUrl}" for track ${trackIdStr}`, {
-        type: 'remote_replace_error',
-        trackId: trackIdStr,
-      });
+    if (
+      !normalizedStreamUrl ||
+      (!normalizedStreamUrl.startsWith('http://') &&
+        !normalizedStreamUrl.startsWith('https://'))
+    ) {
+      const urlErr = new PlaybackError(
+        `[Coordinator] Invalid stream URL: "${normalizedStreamUrl}" for track ${trackIdStr}`,
+        {
+          type: 'remote_replace_error',
+          trackId: trackIdStr,
+        },
+      );
       this._error('[Coordinator][Stage 1: normalize_url FAILED]', urlErr);
       throw urlErr;
     }
@@ -264,7 +289,9 @@ export class PlaybackCoordinator {
     // 2. Проверка локального кеша
     let localUri = null;
     if (this.bypassCache) {
-      this._log('[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag');
+      this._log(
+        '[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag',
+      );
     } else {
       try {
         localUri = this.cache.getCachedUri(trackIdStr);
@@ -278,11 +305,14 @@ export class PlaybackCoordinator {
           trackId: trackIdStr,
           error: cacheErr?.message,
         });
-        this.lastCacheError = new PlaybackError(cacheErr?.message || 'Cache lookup failed', {
-          type: 'local_cache_error',
-          cause: cacheErr,
-          trackId: trackIdStr,
-        });
+        this.lastCacheError = new PlaybackError(
+          cacheErr?.message || 'Cache lookup failed',
+          {
+            type: 'local_cache_error',
+            cause: cacheErr,
+            trackId: trackIdStr,
+          },
+        );
         localUri = null;
       }
     }
@@ -296,27 +326,43 @@ export class PlaybackCoordinator {
       if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
     }
     let hasHeaders = Object.keys(cleanHeaders).length > 0;
-    const sameHeaders = expectedIsLocal || areHeadersEqual(cleanHeaders, this._currentSourceHeaders);
+    const sameHeaders =
+      expectedIsLocal ||
+      areHeadersEqual(cleanHeaders, this._currentSourceHeaders);
 
     // 3. Идемпотентность play: если уже играет тот же трек, источник и заголовки не изменились
-    if (!options.force && this.currentTrackId === trackIdStr && this.currentPlayUri === expectedUri && sameHeaders) {
-      this._log('[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback');
+    if (
+      !options.force &&
+      this.currentTrackId === trackIdStr &&
+      this.currentPlayUri === expectedUri &&
+      sameHeaders
+    ) {
+      this._log(
+        '[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback',
+      );
       this.applyVolumeNormalization(player, track, options);
       try {
         await player.play();
       } catch (playErr) {
-        const classified = new PlaybackError(playErr?.message || 'Player play failed', {
-          type: 'play_error',
-          cause: playErr,
-          trackId: trackIdStr,
-        });
+        const classified = new PlaybackError(
+          playErr?.message || 'Player play failed',
+          {
+            type: 'play_error',
+            cause: playErr,
+            trackId: trackIdStr,
+          },
+        );
         this.networkError = classified.message;
         this.networkStatus = 'error';
         this.lastErrorType = classified.type;
         this._notifyState();
         throw classified;
       }
-      return { isLocal: this.currentIsLocal, uri: this.currentPlayUri, reused: true };
+      return {
+        isLocal: this.currentIsLocal,
+        uri: this.currentPlayUri,
+        reused: true,
+      };
     }
 
     // 4. Generation token защиты от race condition при быстрых переключениях
@@ -345,16 +391,29 @@ export class PlaybackCoordinator {
       });
 
       try {
-        const replaceRes = await this._performReplace(player, { uri: localUri }, isCurrent, currentGeneration);
-        if (replaceRes.superseded) return { isLocal: false, uri: null, superseded: true };
+        const replaceRes = await this._performReplace(
+          player,
+          { uri: localUri },
+          isCurrent,
+          currentGeneration,
+        );
+        if (replaceRes.superseded)
+          return { isLocal: false, uri: null, superseded: true };
       } catch (localErr) {
-        if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
-        this._warn('[Coordinator][Stage 3: local_replace FAILED, falling back to remote]', localErr?.message);
-        this.lastCacheError = new PlaybackError(localErr?.message || 'Local replace failed', {
-          type: 'local_cache_error',
-          cause: localErr,
-          trackId: trackIdStr,
-        });
+        if (!isCurrent())
+          return { isLocal: false, uri: null, superseded: true };
+        this._warn(
+          '[Coordinator][Stage 3: local_replace FAILED, falling back to remote]',
+          localErr?.message,
+        );
+        this.lastCacheError = new PlaybackError(
+          localErr?.message || 'Local replace failed',
+          {
+            type: 'local_cache_error',
+            cause: localErr,
+            trackId: trackIdStr,
+          },
+        );
         isLocal = false;
         playUri = null;
       }
@@ -383,7 +442,10 @@ export class PlaybackCoordinator {
             hasHeaders = Object.keys(cleanHeaders).length > 0;
           }
         } catch (hdrErr) {
-          this._warn('[Coordinator] Failed to resolve auth headers asynchronously:', hdrErr?.message);
+          this._warn(
+            '[Coordinator] Failed to resolve auth headers asynchronously:',
+            hdrErr?.message,
+          );
         }
       }
 
@@ -396,21 +458,40 @@ export class PlaybackCoordinator {
         : { uri: normalizedStreamUrl };
 
       try {
-        const replaceRes = await this._performReplace(player, source, isCurrent, currentGeneration);
-        if (replaceRes.superseded) return { isLocal: false, uri: null, superseded: true };
+        const replaceRes = await this._performReplace(
+          player,
+          source,
+          isCurrent,
+          currentGeneration,
+        );
+        if (replaceRes.superseded)
+          return { isLocal: false, uri: null, superseded: true };
       } catch (remoteErr) {
-        if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
-        this._log('[Coordinator][Stage 3: remote_replace retrying once via replaceCurrentSource...]');
+        if (!isCurrent())
+          return { isLocal: false, uri: null, superseded: true };
+        this._log(
+          '[Coordinator][Stage 3: remote_replace retrying once via replaceCurrentSource...]',
+        );
 
         try {
-          const retryRes = await this._performReplace(player, source, isCurrent, currentGeneration);
-          if (retryRes.superseded) return { isLocal: false, uri: null, superseded: true };
+          const retryRes = await this._performReplace(
+            player,
+            source,
+            isCurrent,
+            currentGeneration,
+          );
+          if (retryRes.superseded)
+            return { isLocal: false, uri: null, superseded: true };
         } catch (retryErr) {
-          if (!isCurrent()) return { isLocal: false, uri: null, superseded: true };
+          if (!isCurrent())
+            return { isLocal: false, uri: null, superseded: true };
 
           this.currentPlayUri = null;
           this.currentIsLocal = false;
-          const classified = classifyPlaybackError(retryErr || remoteErr, trackIdStr);
+          const classified = classifyPlaybackError(
+            retryErr || remoteErr,
+            trackIdStr,
+          );
           this.networkError = classified.message;
           this.networkStatus = 'error';
           this.lastErrorType = classified.type;
@@ -425,9 +506,16 @@ export class PlaybackCoordinator {
 
       // Запускаем фоновое кеширование (если не отключено)
       if (!this.bypassCache) {
-        this.cache.getOrFetch(trackIdStr, normalizedStreamUrl, { headers: cleanHeaders }).catch((cacheErr) => {
-          this._warn(`[Coordinator] Background cache for track ${trackIdStr} failed:`, cacheErr?.message);
-        });
+        this.cache
+          .getOrFetch(trackIdStr, normalizedStreamUrl, {
+            headers: cleanHeaders,
+          })
+          .catch((cacheErr) => {
+            this._warn(
+              `[Coordinator] Background cache for track ${trackIdStr} failed:`,
+              cacheErr?.message,
+            );
+          });
       }
     }
 
@@ -451,11 +539,14 @@ export class PlaybackCoordinator {
 
       this.currentPlayUri = null;
       this.currentIsLocal = false;
-      const classified = new PlaybackError(playErr?.message || 'Player play failed', {
-        type: 'play_error',
-        cause: playErr,
-        trackId: trackIdStr,
-      });
+      const classified = new PlaybackError(
+        playErr?.message || 'Player play failed',
+        {
+          type: 'play_error',
+          cause: playErr,
+          trackId: trackIdStr,
+        },
+      );
       this.networkError = classified.message;
       this.networkStatus = 'error';
       this.lastErrorType = classified.type;
@@ -481,7 +572,10 @@ export class PlaybackCoordinator {
     try {
       await this.updateLockScreenMetadata(player, track, isCurrent);
     } catch (lockErr) {
-      this._warn('[Coordinator][Stage 5: lock_screen FAILED]', lockErr?.message);
+      this._warn(
+        '[Coordinator][Stage 5: lock_screen FAILED]',
+        lockErr?.message,
+      );
     }
 
     if (!isCurrent()) {
@@ -511,11 +605,11 @@ export class PlaybackCoordinator {
     // Защищаем текущий трек и очередь от LRU вытеснения из кеша
     if (this.cache && typeof this.cache.setProtectedTrackIds === 'function') {
       const protectedIds = [];
-      const curId = currentTrack?.id !== undefined && currentTrack?.id !== null ? currentTrack.id : currentTrack?.track_id;
-      if (curId !== undefined && curId !== null) protectedIds.push(curId);
+      const curId = getTrackId(currentTrack);
+      if (curId !== null) protectedIds.push(curId);
       for (const t of this.upNextQueue) {
-        const qId = t?.id !== undefined && t?.id !== null ? t.id : t?.track_id;
-        if (qId !== undefined && qId !== null) protectedIds.push(qId);
+        const qId = getTrackId(t);
+        if (qId !== null) protectedIds.push(qId);
       }
       this.cache.setProtectedTrackIds(protectedIds);
     }
@@ -525,11 +619,9 @@ export class PlaybackCoordinator {
 
     // Обновляем статус следующего трека
     const nextTrack = this.upNextQueue[0];
-    const nextId = (nextTrack?.id !== undefined && nextTrack?.id !== null)
-      ? nextTrack.id
-      : nextTrack?.track_id;
+    const nextId = getTrackId(nextTrack);
 
-    if (nextId !== undefined && nextId !== null && (nextId !== '' || nextId === 0)) {
+    if (nextId !== null) {
       const nextIdStr = String(nextId).trim();
       this.nextTrackStatus = this.scheduler.getStatus(nextIdStr);
       const err = this.scheduler.getError(nextIdStr);
@@ -591,7 +683,9 @@ export class PlaybackCoordinator {
 
     try {
       const token = getCachedAuthToken();
-      const artworkUrl = track?.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
+      const artworkUrl = track?.coverArt
+        ? resolveCoverUri(track.coverArt, token)
+        : undefined;
       player.setActiveForLockScreen(
         true,
         {
@@ -604,16 +698,22 @@ export class PlaybackCoordinator {
           isLiveStream: false,
           showSeekForward: false,
           showSeekBackward: false,
-        }
+        },
       );
 
       if (!token) {
         this.updateLockScreenMetadata(player, track, isCurrent).catch((err) => {
-          this._warn('[Coordinator] Async token lock screen update failed:', err?.message);
+          this._warn(
+            '[Coordinator] Async token lock screen update failed:',
+            err?.message,
+          );
         });
       }
     } catch (err) {
-      this._warn('[Coordinator] Failed to set immediate lock screen controls:', err?.message);
+      this._warn(
+        '[Coordinator] Failed to set immediate lock screen controls:',
+        err?.message,
+      );
     }
   }
 
@@ -627,13 +727,20 @@ export class PlaybackCoordinator {
    * @returns {number} Применённая громкость (0.0 - 1.0)
    */
   applyVolumeNormalization(player, track = this.currentTrack, options = {}) {
-    const isNormalizationEnabled = options.soundCheck !== undefined
-      ? Boolean(options.soundCheck)
-      : (typeof getSettings === 'function' ? Boolean(getSettings()?.soundCheck) : true);
+    const isNormalizationEnabled =
+      options.soundCheck !== undefined
+        ? Boolean(options.soundCheck)
+        : typeof getSettings === 'function'
+          ? Boolean(getSettings()?.soundCheck)
+          : true;
 
-    const effectiveVolume = applyTrackNormalization(player, track, isNormalizationEnabled);
+    const effectiveVolume = applyTrackNormalization(
+      player,
+      track,
+      isNormalizationEnabled,
+    );
     this._log('[Coordinator] Applied volume normalization:', {
-      trackId: track?.id ?? track?.track_id,
+      trackId: getTrackId(track),
       isNormalizationEnabled,
       loudnessStatus: track?.loudness_status,
       normalizationGainDb: track?.normalization_gain_db,
@@ -660,18 +767,14 @@ export class PlaybackCoordinator {
 
       if (isCurrent && !isCurrent()) return;
 
-      const trackId = (track?.id !== undefined && track?.id !== null) ? track.id : track?.track_id;
-      if (this.currentTrack) {
-        const currentId = (this.currentTrack?.id !== undefined && this.currentTrack?.id !== null)
-          ? this.currentTrack.id
-          : this.currentTrack?.track_id;
-        if (trackId !== undefined && currentId !== undefined && String(trackId).trim() !== String(currentId).trim()) {
-          // Трек уже сменился — не перезаписываем экран блокировки устаревшими данными
-          return;
-        }
+      if (this.currentTrack && !areTrackIdsEqual(track, this.currentTrack)) {
+        // Трек уже сменился — не перезаписываем экран блокировки устаревшими данными
+        return;
       }
 
-      const artworkUrl = track?.coverArt ? resolveCoverUri(track.coverArt, token) : undefined;
+      const artworkUrl = track?.coverArt
+        ? resolveCoverUri(track.coverArt, token)
+        : undefined;
       player.setActiveForLockScreen(
         true,
         {
@@ -684,10 +787,13 @@ export class PlaybackCoordinator {
           isLiveStream: false,
           showSeekForward: false,
           showSeekBackward: false,
-        }
+        },
       );
     } catch (err) {
-      this._warn('[Coordinator] Failed to set lock screen controls:', err?.message);
+      this._warn(
+        '[Coordinator] Failed to set lock screen controls:',
+        err?.message,
+      );
     }
   }
 
@@ -717,10 +823,7 @@ export class PlaybackCoordinator {
 
   _handleSchedulerEvent(event) {
     const nextTrack = this.upNextQueue[0];
-    const nextId = (nextTrack?.id !== undefined && nextTrack?.id !== null)
-      ? nextTrack.id
-      : nextTrack?.track_id;
-    if (nextId !== undefined && nextId !== null && String(nextId).trim() === String(event.trackId).trim()) {
+    if (areTrackIdsEqual(nextTrack, event?.trackId)) {
       this.nextTrackStatus = event.status;
       if (event.status === TRACK_STATUS.READY) {
         this.networkError = null;

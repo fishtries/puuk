@@ -9,36 +9,48 @@ import {
   ActionSheetIOS,
   RefreshControl,
   ActivityIndicator,
-  DeviceEventEmitter
+  DeviceEventEmitter,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   FadeInDown,
   FadeInRight,
-  LinearTransition
+  LinearTransition,
 } from 'react-native-reanimated';
 
 import CoverImage from '../../shared/media/CoverImage';
 import { authFetch, SERVER_URL } from '../../shared/api/api';
-import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog, DEFAULT_TTL_MS } from '../../shared/api/apiCache';
-import { getSettings, addSettingsListener } from '../../shared/storage/settings';
+import {
+  fetchCatalogWithCache,
+  setCachedCatalog,
+  removeCachedCatalog,
+  DEFAULT_TTL_MS,
+} from '../../shared/api/apiCache';
+import {
+  getSettings,
+  addSettingsListener,
+} from '../../shared/storage/settings';
+import {
+  getTrackId,
+  areTrackIdsEqual,
+  normalizeTrack,
+} from '../../shared/domain/trackAdapter';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
-// Normalize track items: ensures coverArt URI fallback is present
+// Normalize track items: ensures canonical identity, coverArt URI fallback, and preserved fields
 const normalizeTracks = (data) => {
   const items = Array.isArray(data) ? data : [];
   return items
-    .filter((track) => track != null && typeof track === 'object')
-    .map((track) => ({
-      ...track,
-      coverArt: track.coverArt || (track.id ? `${SERVER_URL}/api/cover/${track.id}` : null),
-    }));
+    .map((track) => normalizeTrack(track, { serverUrl: SERVER_URL }))
+    .filter(Boolean);
 };
 
 // Normalize playlists list
 const normalizePlaylists = (data) => {
-  return Array.isArray(data) ? data.filter((pl) => pl != null && typeof pl === 'object') : [];
+  return Array.isArray(data)
+    ? data.filter((pl) => pl != null && typeof pl === 'object')
+    : [];
 };
 
 // Relative time formatting for history
@@ -67,9 +79,11 @@ export default function LibraryScreen({
   onPlayTrackList,
   onPressEllipsis,
   currentUser,
-  onOpenAuthModal
+  onOpenAuthModal,
 }) {
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
   const [favorites, setFavorites] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [history, setHistory] = useState([]);
@@ -87,95 +101,116 @@ export default function LibraryScreen({
   }, []);
 
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('PUUK_SCROLL_TO_TOP_LIBRARY', () => {
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    });
+    const sub = DeviceEventEmitter.addListener(
+      'PUUK_SCROLL_TO_TOP_LIBRARY',
+      () => {
+        scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+      },
+    );
     return () => sub.remove();
   }, []);
 
   // Загрузка данных библиотеки (избранное, плейлисты, история) со Stale-While-Revalidate кэшированием
-  const fetchLibraryData = useCallback(async (forceRefresh = false) => {
-    if (!currentUser) {
-      setFavorites([]);
-      setPlaylists([]);
-      setHistory([]);
-      setIsLoading(false);
-      setIsRefreshing(false);
-      if (libraryAbortRef.current) {
-        libraryAbortRef.current.abort();
-        libraryAbortRef.current = null;
-      }
-      return;
-    }
-
-    userGenerationRef.current += 1;
-    const currentGeneration = userGenerationRef.current;
-
-    if (libraryAbortRef.current) {
-      libraryAbortRef.current.abort();
-    }
-    const controller = new AbortController();
-    libraryAbortRef.current = controller;
-
-    try {
-      await Promise.allSettled([
-        fetchCatalogWithCache('/api/favorites', {
-          key: 'favorites',
-          userId: currentUser.id,
-          serverUrl: SERVER_URL,
-          ttlMs: DEFAULT_TTL_MS.favorites,
-          forceRefresh,
-          signal: controller.signal,
-          transform: normalizeTracks,
-          onData: (data) => {
-            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
-              setFavorites(Array.isArray(data) ? data : []);
-              setIsLoading(false);
-            }
-          },
-        }),
-        fetchCatalogWithCache('/api/playlists', {
-          key: 'playlists',
-          userId: currentUser.id,
-          serverUrl: SERVER_URL,
-          ttlMs: DEFAULT_TTL_MS.playlists,
-          forceRefresh,
-          signal: controller.signal,
-          transform: normalizePlaylists,
-          onData: (data) => {
-            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
-              setPlaylists(Array.isArray(data) ? data : []);
-              setIsLoading(false);
-            }
-          },
-        }),
-        fetchCatalogWithCache('/api/history', {
-          key: 'history',
-          userId: currentUser.id,
-          serverUrl: SERVER_URL,
-          ttlMs: DEFAULT_TTL_MS.history,
-          forceRefresh,
-          signal: controller.signal,
-          transform: normalizeTracks,
-          onData: (data) => {
-            if (!controller.signal.aborted && userGenerationRef.current === currentGeneration) {
-              setHistory(Array.isArray(data) ? data : []);
-              setIsLoading(false);
-            }
-          },
-        }),
-      ]);
-    } catch (err) {
-      if (err?.name !== 'AbortError' && !err?.message?.includes('AbortError')) {
-        console.warn('[LibraryScreen] Failed to load user library data:', err?.message || err);
-      }
-    } finally {
-      if (userGenerationRef.current === currentGeneration) {
+  const fetchLibraryData = useCallback(
+    async (forceRefresh = false) => {
+      if (!currentUser) {
+        setFavorites([]);
+        setPlaylists([]);
+        setHistory([]);
         setIsLoading(false);
         setIsRefreshing(false);
+        if (libraryAbortRef.current) {
+          libraryAbortRef.current.abort();
+          libraryAbortRef.current = null;
+        }
+        return;
       }
-    }
-  }, [currentUser]);
+
+      userGenerationRef.current += 1;
+      const currentGeneration = userGenerationRef.current;
+
+      if (libraryAbortRef.current) {
+        libraryAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      libraryAbortRef.current = controller;
+
+      try {
+        await Promise.allSettled([
+          fetchCatalogWithCache('/api/favorites', {
+            key: 'favorites',
+            userId: currentUser.id,
+            serverUrl: SERVER_URL,
+            ttlMs: DEFAULT_TTL_MS.favorites,
+            forceRefresh,
+            signal: controller.signal,
+            transform: normalizeTracks,
+            onData: (data) => {
+              if (
+                !controller.signal.aborted &&
+                userGenerationRef.current === currentGeneration
+              ) {
+                setFavorites(Array.isArray(data) ? data : []);
+                setIsLoading(false);
+              }
+            },
+          }),
+          fetchCatalogWithCache('/api/playlists', {
+            key: 'playlists',
+            userId: currentUser.id,
+            serverUrl: SERVER_URL,
+            ttlMs: DEFAULT_TTL_MS.playlists,
+            forceRefresh,
+            signal: controller.signal,
+            transform: normalizePlaylists,
+            onData: (data) => {
+              if (
+                !controller.signal.aborted &&
+                userGenerationRef.current === currentGeneration
+              ) {
+                setPlaylists(Array.isArray(data) ? data : []);
+                setIsLoading(false);
+              }
+            },
+          }),
+          fetchCatalogWithCache('/api/history', {
+            key: 'history',
+            userId: currentUser.id,
+            serverUrl: SERVER_URL,
+            ttlMs: DEFAULT_TTL_MS.history,
+            forceRefresh,
+            signal: controller.signal,
+            transform: normalizeTracks,
+            onData: (data) => {
+              if (
+                !controller.signal.aborted &&
+                userGenerationRef.current === currentGeneration
+              ) {
+                setHistory(Array.isArray(data) ? data : []);
+                setIsLoading(false);
+              }
+            },
+          }),
+        ]);
+      } catch (err) {
+        if (
+          err?.name !== 'AbortError' &&
+          !err?.message?.includes('AbortError')
+        ) {
+          console.warn(
+            '[LibraryScreen] Failed to load user library data:',
+            err?.message || err,
+          );
+        }
+      } finally {
+        if (userGenerationRef.current === currentGeneration) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [currentUser],
+  );
 
   useEffect(() => {
     if (!currentUser) {
@@ -219,10 +254,13 @@ export default function LibraryScreen({
             try {
               const res = await authFetch('/api/playlists', {
                 method: 'POST',
-                body: { name: trimmed }
+                body: { name: trimmed },
               });
               if (res.ok) {
-                await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                await removeCachedCatalog('playlists', {
+                  userId: currentUser?.id,
+                  serverUrl: SERVER_URL,
+                });
                 fetchLibraryData(true);
               } else {
                 Alert.alert('Error', 'Failed to create playlist');
@@ -230,49 +268,74 @@ export default function LibraryScreen({
             } catch (e) {
               Alert.alert('Error', 'Network error while creating playlist');
             }
-          }
-        }
+          },
+        },
       ],
-      'plain-text'
+      'plain-text',
     );
   }, [fetchLibraryData]);
 
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('PUUK_CREATE_PLAYLIST', handleCreatePlaylist);
+    const sub = DeviceEventEmitter.addListener(
+      'PUUK_CREATE_PLAYLIST',
+      handleCreatePlaylist,
+    );
     return () => sub.remove();
   }, [handleCreatePlaylist]);
 
   // Track deleted from library (TrackEditScreen): drop it from local lists and cache
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('PUUK_TRACK_DELETED', ({ id }) => {
-      setFavorites((prev) => {
-        const next = prev.filter((t) => t.id !== id);
-        setCachedCatalog('favorites', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
-        return next;
-      });
-      setHistory((prev) => {
-        const next = prev.filter((t) => t.id !== id);
-        setCachedCatalog('history', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
-        return next;
-      });
-    });
+    const sub = DeviceEventEmitter.addListener(
+      'PUUK_TRACK_DELETED',
+      ({ id }) => {
+        setFavorites((prev) => {
+          const next = prev.filter((t) => !areTrackIdsEqual(t, id));
+          setCachedCatalog('favorites', next, {
+            userId: currentUser?.id,
+            serverUrl: SERVER_URL,
+          }).catch(() => {});
+          return next;
+        });
+        setHistory((prev) => {
+          const next = prev.filter((t) => !areTrackIdsEqual(t, id));
+          setCachedCatalog('history', next, {
+            userId: currentUser?.id,
+            serverUrl: SERVER_URL,
+          }).catch(() => {});
+          return next;
+        });
+      },
+    );
     return () => sub.remove();
   }, [currentUser?.id]);
 
   // Track updated in library (TrackEditScreen): update in local lists and cache
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('PUUK_TRACK_UPDATED', (updated) => {
-      setFavorites((prev) => {
-        const next = prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t));
-        setCachedCatalog('favorites', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
-        return next;
-      });
-      setHistory((prev) => {
-        const next = prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t));
-        setCachedCatalog('history', next, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
-        return next;
-      });
-    });
+    const sub = DeviceEventEmitter.addListener(
+      'PUUK_TRACK_UPDATED',
+      (updated) => {
+        setFavorites((prev) => {
+          const next = prev.map((t) =>
+            areTrackIdsEqual(t, updated) ? { ...t, ...updated } : t,
+          );
+          setCachedCatalog('favorites', next, {
+            userId: currentUser?.id,
+            serverUrl: SERVER_URL,
+          }).catch(() => {});
+          return next;
+        });
+        setHistory((prev) => {
+          const next = prev.map((t) =>
+            areTrackIdsEqual(t, updated) ? { ...t, ...updated } : t,
+          );
+          setCachedCatalog('history', next, {
+            userId: currentUser?.id,
+            serverUrl: SERVER_URL,
+          }).catch(() => {});
+          return next;
+        });
+      },
+    );
     return () => sub.remove();
   }, [currentUser?.id]);
 
@@ -283,7 +346,7 @@ export default function LibraryScreen({
         options: ['Cancel', 'Rename', 'Delete Playlist'],
         destructiveButtonIndex: 2,
         cancelButtonIndex: 0,
-        title: playlist.name
+        title: playlist.name,
       },
       async (buttonIndex) => {
         if (buttonIndex === 1) {
@@ -298,22 +361,28 @@ export default function LibraryScreen({
                   const trimmed = newName?.trim();
                   if (!trimmed) return;
                   try {
-                    const res = await authFetch(`/api/playlists/${playlist.id}`, {
-                      method: 'PATCH',
-                      body: { name: trimmed }
-                    });
+                    const res = await authFetch(
+                      `/api/playlists/${playlist.id}`,
+                      {
+                        method: 'PATCH',
+                        body: { name: trimmed },
+                      },
+                    );
                     if (res.ok) {
-                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      await removeCachedCatalog('playlists', {
+                        userId: currentUser?.id,
+                        serverUrl: SERVER_URL,
+                      });
                       fetchLibraryData(true);
                     }
                   } catch (e) {
                     Alert.alert('Error', 'Failed to update playlist');
                   }
-                }
-              }
+                },
+              },
             ],
             'plain-text',
-            playlist.name
+            playlist.name,
           );
         } else if (buttonIndex === 2) {
           Alert.alert(
@@ -326,44 +395,68 @@ export default function LibraryScreen({
                 style: 'destructive',
                 onPress: async () => {
                   try {
-                    const res = await authFetch(`/api/playlists/${playlist.id}`, {
-                      method: 'DELETE'
-                    });
+                    const res = await authFetch(
+                      `/api/playlists/${playlist.id}`,
+                      {
+                        method: 'DELETE',
+                      },
+                    );
                     if (res.ok) {
-                      await removeCachedCatalog('playlists', { userId: currentUser?.id, serverUrl: SERVER_URL });
+                      await removeCachedCatalog('playlists', {
+                        userId: currentUser?.id,
+                        serverUrl: SERVER_URL,
+                      });
                       fetchLibraryData(true);
                     }
                   } catch (e) {
                     Alert.alert('Error', 'Failed to delete playlist');
                   }
-                }
-              }
-            ]
+                },
+              },
+            ],
           );
         }
-      }
+      },
     );
   };
 
   // Переключение лайка из библиотеки
   const handleToggleFavorite = async (track) => {
-    const isCurrentlyLiked = favorites.some((t) => t.id === track.id);
+    const trackId = getTrackId(track);
+    if (trackId === null) return;
+
+    const isCurrentlyLiked = favorites.some((t) => areTrackIdsEqual(t, track));
     if (isCurrentlyLiked) {
-      const updated = favorites.filter((t) => t.id !== track.id);
+      const updated = favorites.filter((t) => !areTrackIdsEqual(t, track));
       setFavorites(updated);
-      setCachedCatalog('favorites', updated, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+      setCachedCatalog('favorites', updated, {
+        userId: currentUser?.id,
+        serverUrl: SERVER_URL,
+      }).catch(() => {});
       try {
-        await authFetch(`/api/tracks/${track.id}/like`, { method: 'DELETE' });
+        await authFetch(
+          `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+          { method: 'DELETE' },
+        );
       } catch (e) {
         console.warn('Failed to remove favorite:', e);
         fetchLibraryData(true);
       }
     } else {
-      const updated = [track, ...favorites];
+      const updated = [
+        track,
+        ...favorites.filter((t) => !areTrackIdsEqual(t, track)),
+      ];
       setFavorites(updated);
-      setCachedCatalog('favorites', updated, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+      setCachedCatalog('favorites', updated, {
+        userId: currentUser?.id,
+        serverUrl: SERVER_URL,
+      }).catch(() => {});
       try {
-        await authFetch(`/api/tracks/${track.id}/like`, { method: 'POST' });
+        await authFetch(
+          `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+          { method: 'POST' },
+        );
       } catch (e) {
         console.warn('Failed to add favorite:', e);
         fetchLibraryData(true);
@@ -373,12 +466,13 @@ export default function LibraryScreen({
 
   // ─── Track Row Render ──────────────────────────────────────────
   const renderTrackItem = (track, index, showTime = false) => {
-    const isCurrentPlaying = currentTrack?.id === track.id;
-    const isLiked = favorites.some((f) => f.id === track.id);
+    const isCurrentPlaying = areTrackIdsEqual(currentTrack, track);
+    const isLiked = favorites.some((f) => areTrackIdsEqual(f, track));
+    const trackId = getTrackId(track) ?? index;
 
     return (
       <AnimatedTouchable
-        key={`${track.id}-${index}`}
+        key={`${trackId}-${index}`}
         layout={LinearTransition.springify()}
         entering={FadeInDown.delay(index * 25).duration(300)}
         style={[
@@ -386,8 +480,8 @@ export default function LibraryScreen({
           isCurrentPlaying && {
             backgroundColor: '#1b1816',
             borderWidth: 1,
-            borderColor: 'rgba(255, 218, 185, 0.25)'
-          }
+            borderColor: 'rgba(255, 218, 185, 0.25)',
+          },
         ]}
         activeOpacity={0.65}
         onPress={() => onPlayTrack && onPlayTrack(track)}
@@ -398,7 +492,7 @@ export default function LibraryScreen({
           <Text
             style={[
               styles.trackTitle,
-              isCurrentPlaying && { color: accentColor }
+              isCurrentPlaying && { color: accentColor },
             ]}
             numberOfLines={1}
           >
@@ -458,13 +552,16 @@ export default function LibraryScreen({
       onPress={() =>
         navigation.navigate('Playlist', {
           playlistId: playlist.id,
-          playlistName: playlist.name
+          playlistName: playlist.name,
         })
       }
       onLongPress={() => handlePlaylistLongPress(playlist)}
     >
       <View style={styles.playlistCardCover}>
-        <CoverImage source={playlist.coverArt} style={styles.playlistCardImage} />
+        <CoverImage
+          source={playlist.coverArt}
+          style={styles.playlistCardImage}
+        />
         <View style={styles.playlistCardOverlayIcon}>
           <Ionicons name="musical-notes" size={20} color="#fff" />
         </View>
@@ -473,7 +570,9 @@ export default function LibraryScreen({
         {playlist.name}
       </Text>
       <Text style={styles.playlistCardSubtitle} numberOfLines={1}>
-        {playlist.track_count ? `${playlist.track_count} ${playlist.track_count === 1 ? 'track' : 'tracks'}` : 'Playlist'}
+        {playlist.track_count
+          ? `${playlist.track_count} ${playlist.track_count === 1 ? 'track' : 'tracks'}`
+          : 'Playlist'}
       </Text>
     </AnimatedTouchable>
   );
@@ -489,7 +588,7 @@ export default function LibraryScreen({
           ref={scrollViewRef}
           contentContainerStyle={[
             styles.scrollContent,
-            { paddingBottom: currentTrack ? 100 : 70 }
+            { paddingBottom: currentTrack ? 100 : 70 },
           ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -530,14 +629,17 @@ export default function LibraryScreen({
               onPress={() =>
                 navigation.navigate('Playlist', {
                   playlistId: 'favorites',
-                  playlistName: 'Favorites'
+                  playlistName: 'Favorites',
                 })
               }
             >
               <View style={[styles.playlistCardCover, styles.favoritesCover]}>
                 {favorites.length > 0 && favorites[0]?.coverArt ? (
                   <>
-                    <CoverImage source={favorites[0].coverArt} style={styles.playlistCardImage} />
+                    <CoverImage
+                      source={favorites[0].coverArt}
+                      style={styles.playlistCardImage}
+                    />
                     <View style={styles.favoritesBadge}>
                       <Ionicons name="heart" size={18} color={accentColor} />
                     </View>
@@ -567,9 +669,7 @@ export default function LibraryScreen({
                 <Text style={styles.sectionTitle}>Recently Played</Text>
               </View>
 
-              {history.map((track, idx) =>
-                renderTrackItem(track, idx, true)
-              )}
+              {history.map((track, idx) => renderTrackItem(track, idx, true))}
             </View>
           )}
 
@@ -583,36 +683,36 @@ export default function LibraryScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000'
+    backgroundColor: '#000000',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 12
+    paddingTop: 12,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14
+    marginBottom: 14,
   },
   sectionTitle: {
     fontSize: 22,
     fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: -0.3
+    letterSpacing: -0.3,
   },
   horizontalScroll: {
     gap: 14,
-    paddingBottom: 6
+    paddingBottom: 6,
   },
   createPlaylistCard: {
     width: 130,
-    alignItems: 'center'
+    alignItems: 'center',
   },
   createPlaylistDashed: {
     width: 130,
@@ -624,15 +724,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#121216',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8
+    marginBottom: 8,
   },
   createPlaylistText: {
     color: '#fff',
     fontSize: 13,
-    fontWeight: '600'
+    fontWeight: '600',
   },
   playlistCard: {
-    width: 130
+    width: 130,
   },
   playlistCardCover: {
     width: 130,
@@ -641,11 +741,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#1c1c22',
     overflow: 'hidden',
     marginBottom: 8,
-    position: 'relative'
+    position: 'relative',
   },
   playlistCardImage: {
     width: '100%',
-    height: '100%'
+    height: '100%',
   },
   playlistCardOverlayIcon: {
     position: 'absolute',
@@ -656,29 +756,29 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   playlistCardTitle: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 2
+    marginBottom: 2,
   },
   playlistCardSubtitle: {
     color: '#8E8E93',
-    fontSize: 12
+    fontSize: 12,
   },
   favoritesCover: {
     backgroundColor: '#1c1917',
     borderWidth: 1,
-    borderColor: 'rgba(255, 218, 185, 0.15)'
+    borderColor: 'rgba(255, 218, 185, 0.15)',
   },
   favoritesPlaceholder: {
     width: '100%',
     height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#1c1917'
+    backgroundColor: '#1c1917',
   },
   favoritesBadge: {
     position: 'absolute',
@@ -691,10 +791,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 218, 185, 0.2)'
+    borderColor: 'rgba(255, 218, 185, 0.2)',
   },
   historySection: {
-    marginTop: 26
+    marginTop: 26,
   },
   trackRow: {
     flexDirection: 'row',
@@ -703,42 +803,42 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     backgroundColor: '#111115',
     borderRadius: 12,
-    marginBottom: 8
+    marginBottom: 8,
   },
   trackImage: {
     width: 46,
     height: 46,
     borderRadius: 8,
     backgroundColor: '#1c1c22',
-    marginRight: 12
+    marginRight: 12,
   },
   trackInfo: {
     flex: 1,
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   trackTitle: {
     fontSize: 15,
     fontWeight: '600',
     color: '#ffffff',
-    marginBottom: 3
+    marginBottom: 3,
   },
   trackMetaRow: {
     flexDirection: 'row',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   trackArtist: {
     fontSize: 13,
-    color: '#8E8E93'
+    color: '#8E8E93',
   },
   trackTimeAgo: {
     fontSize: 12,
     color: '#666',
-    marginLeft: 4
+    marginLeft: 4,
   },
   trackLikeBtn: {
-    padding: 6
+    padding: 6,
   },
   trackEllipsisBtn: {
-    padding: 6
-  }
+    padding: 6,
+  },
 });

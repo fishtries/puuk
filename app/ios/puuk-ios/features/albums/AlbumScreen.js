@@ -1,12 +1,25 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  TouchableOpacity,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import CoverImage from '../../shared/media/CoverImage';
-import { authFetch } from '../../shared/api/api';
+import { authFetch, SERVER_URL } from '../../shared/api/api';
+import { getTrackId, normalizeTrack } from '../../shared/domain/trackAdapter';
 
-export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEllipsis }) {
+export default function AlbumScreen({
+  route,
+  navigation,
+  onPlayTrack,
+  onPressEllipsis,
+}) {
   const { albumId, albumTitle, coverArt } = route.params;
   const [album, setAlbum] = useState(null);
   const [tracks, setTracks] = useState([]);
@@ -21,7 +34,11 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setAlbum(data.album || null);
-      setTracks(Array.isArray(data.tracks) ? data.tracks : []);
+      const rawTracks = Array.isArray(data.tracks) ? data.tracks : [];
+      const normalizedTracks = rawTracks
+        .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+        .filter(Boolean);
+      setTracks(normalizedTracks);
     } catch (error) {
       console.error('Fetch album detail error:', error);
       setErrorMessage('Не удалось загрузить альбом');
@@ -34,7 +51,7 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
   useFocusEffect(
     useCallback(() => {
       fetchAlbum();
-    }, [fetchAlbum])
+    }, [fetchAlbum]),
   );
 
   const renderTrack = ({ item, index }) => (
@@ -43,10 +60,18 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
       activeOpacity={0.6}
       onPress={() => onPlayTrack(item)}
     >
-      <Text style={styles.trackNumber}>{item.track_number ? String(item.track_number).split('/')[0] : index + 1}</Text>
+      <Text style={styles.trackNumber}>
+        {item.track_number
+          ? String(item.track_number).split('/')[0]
+          : index + 1}
+      </Text>
       <View style={styles.trackInfo}>
-        <Text style={styles.trackTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.trackArtist} numberOfLines={1}>{item.artist}</Text>
+        <Text style={styles.trackTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.trackArtist} numberOfLines={1}>
+          {item.artist}
+        </Text>
       </View>
       <TouchableOpacity
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -60,17 +85,23 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
   const resolvedTitle = album?.title || albumTitle;
   const resolvedCover = album?.coverArt || coverArt;
   const metaParts = [];
-  if (album?.album_artist || album?.artist) metaParts.push(album.album_artist || album.artist);
+  if (album?.album_artist || album?.artist)
+    metaParts.push(album.album_artist || album.artist);
   if (album?.year) metaParts.push(String(album.year));
   if (album?.track_count) metaParts.push(`${album.track_count} трек(ов)`);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+        >
           <Ionicons name="chevron-back" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{resolvedTitle}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {resolvedTitle}
+        </Text>
         <TouchableOpacity
           onPress={() => navigation.navigate('AlbumEdit', { albumId, album })}
           style={styles.editButton}
@@ -95,20 +126,24 @@ export default function AlbumScreen({ route, navigation, onPlayTrack, onPressEll
       ) : (
         <FlatList
           data={tracks}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, index) => String(getTrackId(item) ?? index)}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.albumHeader}>
               <CoverImage source={resolvedCover} style={styles.coverImage} />
               <Text style={styles.albumTitleText}>{resolvedTitle}</Text>
               {metaParts.length > 0 && (
-                <Text style={styles.albumMetaText}>{metaParts.join(' · ')}</Text>
+                <Text style={styles.albumMetaText}>
+                  {metaParts.join(' · ')}
+                </Text>
               )}
             </View>
           }
           ListEmptyComponent={
             <View style={styles.center}>
-              <Text style={styles.stateText}>В этом альбоме пока нет треков</Text>
+              <Text style={styles.stateText}>
+                В этом альбоме пока нет треков
+              </Text>
             </View>
           }
           renderItem={renderTrack}

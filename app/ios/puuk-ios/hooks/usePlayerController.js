@@ -1,5 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import {
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  setAudioModeAsync,
+} from 'expo-audio';
 import {
   authFetch,
   SERVER_URL,
@@ -13,35 +17,39 @@ import {
   ApiError,
 } from '../shared/api/api';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
-import { clearSavedLastTrack, getSettings, addSettingsListener } from '../shared/storage/settings';
+import {
+  clearSavedLastTrack,
+  getSettings,
+  addSettingsListener,
+} from '../shared/storage/settings';
 import {
   applyTrackNormalization,
   computeEffectivePlayerVolume,
   computeTrackNormalizationGainDb,
 } from '../utils/loudnessNormalization';
+import {
+  getTrackId,
+  areTrackIdsEqual,
+  normalizeTrack,
+} from '../shared/domain/trackAdapter';
 
 /**
- * Единое DTO трека для плеера: волна/API отдаёт разные формы (id|track_id),
- * здесь форма нормализуется.
+ * Единое DTO трека для плеера: сохраняет все дополнительные поля,
+ * нормализует канонический id и алиас track_id, задаёт дефолты плеера.
  */
 export function normalizeTrackDto(source) {
-  const id = (source?.id !== undefined && source?.id !== null)
-    ? source.id
-    : source?.track_id;
+  const normalized = normalizeTrack(source, { serverUrl: SERVER_URL });
+  if (!normalized) return null;
   return {
-    id,
-    title: source?.title || 'Unknown Track',
+    bpm: 0,
+    duration: 0,
+    normalization_gain_db: null,
+    loudness_status: 'pending',
+    loudness_lufs: null,
+    true_peak_db: null,
+    ...normalized,
     artist: source?.artist || 'My Wave',
-    bpm: source?.bpm || 0,
-    stream_url: source?.stream_url,
     is_liked: !!source?.is_liked,
-    coverArt: source?.coverArt || `${SERVER_URL}/api/cover/${id}`,
-    cover_color: source?.cover_color,
-    normalization_gain_db: source?.normalization_gain_db ?? null,
-    loudness_status: source?.loudness_status || 'pending',
-    loudness_lufs: source?.loudness_lufs ?? null,
-    true_peak_db: source?.true_peak_db ?? null,
-    duration: source?.duration ?? 0,
   };
 }
 
@@ -53,30 +61,41 @@ const MAX_HISTORY = 50;
 const HISTORY_COOLDOWN_MS = 30000;
 
 function capIds(ids, limit = MAX_EXCLUDE_IDS) {
-  const valid = ids.filter(id => id !== undefined && id !== null && id !== '');
-  const unique = [...new Set(valid)];
+  const valid = (ids || []).map(getTrackId).filter((id) => id !== null);
+  const unique = [...new Set(valid.map((id) => String(id).trim()))];
   return unique.length > limit ? unique.slice(unique.length - limit) : unique;
 }
 
 /** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
 function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
   const params = new URLSearchParams();
-  if (trackId !== undefined && trackId !== null) {
-    params.append('current_track_id', String(trackId));
+  const canonicalId = getTrackId(trackId);
+  if (canonicalId !== null) {
+    params.append('current_track_id', String(canonicalId));
   }
-  for (const id of capIds(excludeIds)) params.append('exclude_track_ids', String(id));
-  for (const id of capIds(queuedIds)) params.append('queued_track_ids', String(id));
+  for (const id of capIds(excludeIds))
+    params.append('exclude_track_ids', String(id));
+  for (const id of capIds(queuedIds))
+    params.append('queued_track_ids', String(id));
   return `/api/wave/queue?${params.toString()}`;
 }
 
 /** Слияние пачки рекомендаций с буфером без дублей. */
 function mergeUniqueQueue(existing, incoming, maxBuffer = MAX_QUEUE_BUFFER) {
-  const seen = new Set(existing.map(t => (t?.id !== undefined && t?.id !== null ? t.id : t?.track_id)));
-  const merged = [...existing];
-  for (const track of incoming) {
-    const trackId = track?.id !== undefined && track?.id !== null ? track.id : track?.track_id;
-    if (trackId === undefined || trackId === null || seen.has(trackId)) continue;
-    seen.add(trackId);
+  const seen = new Set();
+  for (const t of existing || []) {
+    const id = getTrackId(t);
+    if (id !== null) {
+      seen.add(String(id).trim());
+    }
+  }
+  const merged = [...(existing || [])];
+  for (const track of incoming || []) {
+    const trackId = getTrackId(track);
+    if (trackId === null) continue;
+    const key = String(trackId).trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
     merged.push(track);
   }
   return merged.length > maxBuffer ? merged.slice(0, maxBuffer) : merged;
@@ -91,7 +110,9 @@ export default function usePlayerController({ setTracks }) {
   const [history, setHistory] = useState([]);
 
   // Состояние сети и предзагрузки для Network UX
-  const [networkUX, setNetworkUX] = useState(defaultPlaybackCoordinator.getState());
+  const [networkUX, setNetworkUX] = useState(
+    defaultPlaybackCoordinator.getState(),
+  );
 
   // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии
   const isWaveSessionRef = useRef(false);
@@ -106,8 +127,18 @@ export default function usePlayerController({ setTracks }) {
   const pendingBackgroundEventsRef = useRef([]);
   const isFlushingBackgroundEventsRef = useRef(false);
   const currentTrackRef = useRef(null);
-  const initialUser = typeof getCachedUser === 'function' ? getCachedUser() : null;
-  const currentUserIdRef = useRef(initialUser ? String(initialUser.id || initialUser.user_id || initialUser.username || 'user') : 'anonymous');
+  const initialUser =
+    typeof getCachedUser === 'function' ? getCachedUser() : null;
+  const currentUserIdRef = useRef(
+    initialUser
+      ? String(
+          initialUser.id ||
+            initialUser.user_id ||
+            initialUser.username ||
+            'user',
+        )
+      : 'anonymous',
+  );
   const sessionIdRef = useRef('sess_' + Math.random().toString(36).slice(2, 9));
   const retryTimerRef = useRef(null);
   const flushPendingBackgroundEventsRef = useRef(null);
@@ -160,11 +191,15 @@ export default function usePlayerController({ setTracks }) {
   // Отслеживание смены пользователя: сброс дедупликации и таймеров повтора
   useEffect(() => {
     let isMounted = true;
-    const resetAuthScopedState = (user, { preservePendingHistory = false } = {}) => {
+    const resetAuthScopedState = (
+      user,
+      { preservePendingHistory = false } = {},
+    ) => {
       const newUserId = user
         ? String(user.id || user.user_id || user.username || 'user')
         : 'anonymous';
-      if (currentUserIdRef.current === newUserId && authReadyRef.current) return;
+      if (currentUserIdRef.current === newUserId && authReadyRef.current)
+        return;
 
       currentUserIdRef.current = newUserId;
       authReadyRef.current = true;
@@ -186,16 +221,20 @@ export default function usePlayerController({ setTracks }) {
       try {
         const res = getSavedUser();
         if (res && typeof res.then === 'function') {
-          res.then(user => {
-            if (isMounted) {
-              resetAuthScopedState(user, { preservePendingHistory: !authReadyRef.current });
-              const pending = pendingHistoryRef.current;
-              pendingHistoryRef.current = [];
-              for (const item of pending) {
-                recordTrackHistoryRef.current?.(item.trackId, item.event);
+          res
+            .then((user) => {
+              if (isMounted) {
+                resetAuthScopedState(user, {
+                  preservePendingHistory: !authReadyRef.current,
+                });
+                const pending = pendingHistoryRef.current;
+                pendingHistoryRef.current = [];
+                for (const item of pending) {
+                  recordTrackHistoryRef.current?.(item.trackId, item.event);
+                }
               }
-            }
-          }).catch(() => {});
+            })
+            .catch(() => {});
         } else if (isMounted) {
           authReadyRef.current = true;
         }
@@ -206,11 +245,12 @@ export default function usePlayerController({ setTracks }) {
       authReadyRef.current = true;
     }
 
-    const unsubscribe = typeof addAuthListener === 'function'
-      ? addAuthListener((user) => {
-          resetAuthScopedState(user);
-        })
-      : () => {};
+    const unsubscribe =
+      typeof addAuthListener === 'function'
+        ? addAuthListener((user) => {
+            resetAuthScopedState(user);
+          })
+        : () => {};
 
     return () => {
       isMounted = false;
@@ -232,11 +272,16 @@ export default function usePlayerController({ setTracks }) {
     if (!err) return false;
     if (err.name === 'AbortError') return false;
     if (err.status && !isRetryableStatus(err.status)) return false;
-    if (err.isTimeout || err.name === 'TimeoutError' || err.type === 'timeout') return true;
+    if (err.isTimeout || err.name === 'TimeoutError' || err.type === 'timeout')
+      return true;
     if (err.isNetwork || isNetworkError(err)) return true;
     if (err.status && isRetryableStatus(err.status)) return true;
     const msg = (err.message || '').toLowerCase();
-    if (msg.includes('network') || msg.includes('timeout') || msg.includes('fetch failed')) {
+    if (
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('fetch failed')
+    ) {
       return true;
     }
     return false;
@@ -272,7 +317,10 @@ export default function usePlayerController({ setTracks }) {
 
       const now = Date.now();
       for (const event of events) {
-        if (flushEpoch !== authEpochRef.current || event.authEpoch !== flushEpoch) {
+        if (
+          flushEpoch !== authEpochRef.current ||
+          event.authEpoch !== flushEpoch
+        ) {
           continue;
         }
         if (now - event.timestamp > 10 * 60 * 1000 || event.attempts >= 3) {
@@ -294,17 +342,25 @@ export default function usePlayerController({ setTracks }) {
             if (isRetryableStatus(res.status)) {
               throw new ApiError(`HTTP ${res.status}`, { status: res.status });
             } else {
-              console.warn(`[usePlayerController] Background event permanent HTTP ${res.status} on retry (${event.url})`);
+              console.warn(
+                `[usePlayerController] Background event permanent HTTP ${res.status} on retry (${event.url})`,
+              );
               continue;
             }
           }
         } catch (retryErr) {
-          if (flushEpoch !== authEpochRef.current || retryErr?.name === 'AbortError') {
+          if (
+            flushEpoch !== authEpochRef.current ||
+            retryErr?.name === 'AbortError'
+          ) {
             continue;
           }
           if (isRetryableError(retryErr, retryErr?.status)) {
             event.attempts += 1;
-            if (event.attempts < 3 && event.authEpoch === authEpochRef.current) {
+            if (
+              event.attempts < 3 &&
+              event.authEpoch === authEpochRef.current
+            ) {
               pendingBackgroundEventsRef.current.push(event);
               hasFailedEvents = true;
             }
@@ -326,75 +382,94 @@ export default function usePlayerController({ setTracks }) {
     flushPendingBackgroundEventsRef.current = flushPendingBackgroundEvents;
   }, [flushPendingBackgroundEvents]);
 
-  const sendBackgroundEvent = useCallback(async (url, body = null) => {
-    const options = {
-      method: 'POST',
-      retry: 1,
-      background: true,
-    };
-    if (body) {
-      options.body = body;
-    }
+  const sendBackgroundEvent = useCallback(
+    async (url, body = null) => {
+      const options = {
+        method: 'POST',
+        retry: 1,
+        background: true,
+      };
+      if (body) {
+        options.body = body;
+      }
 
-    try {
-      const response = await authFetch(url, options);
-      if (!response.ok) {
-        if (isRetryableStatus(response.status)) {
-          throw new ApiError(`HTTP ${response.status}`, {
-            status: response.status,
-            type: response.status >= 500 ? 'server' : 'transient_http',
-          });
-        } else {
-          console.warn(`[usePlayerController] Background event permanent HTTP ${response.status} (${url})`);
-          return;
+      try {
+        const response = await authFetch(url, options);
+        if (!response.ok) {
+          if (isRetryableStatus(response.status)) {
+            throw new ApiError(`HTTP ${response.status}`, {
+              status: response.status,
+              type: response.status >= 500 ? 'server' : 'transient_http',
+            });
+          } else {
+            console.warn(
+              `[usePlayerController] Background event permanent HTTP ${response.status} (${url})`,
+            );
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[usePlayerController] Background event failed (${url}):`,
+          err?.message || err,
+        );
+        if (isRetryableError(err, err?.status)) {
+          const authEpoch = authEpochRef.current;
+          if (pendingBackgroundEventsRef.current.length < 50) {
+            pendingBackgroundEventsRef.current.push({
+              url,
+              body,
+              timestamp: Date.now(),
+              attempts: 1,
+              authEpoch,
+            });
+          }
+          scheduleFlush(5000);
         }
       }
-    } catch (err) {
-      console.warn(`[usePlayerController] Background event failed (${url}):`, err?.message || err);
-      if (isRetryableError(err, err?.status)) {
-        const authEpoch = authEpochRef.current;
-        if (pendingBackgroundEventsRef.current.length < 50) {
-          pendingBackgroundEventsRef.current.push({
-            url,
-            body,
-            timestamp: Date.now(),
-            attempts: 1,
-            authEpoch,
-          });
-        }
-        scheduleFlush(5000);
+    },
+    [scheduleFlush],
+  );
+
+  const recordTrackHistory = useCallback(
+    (trackId, event = 'listen') => {
+      if (
+        trackId === undefined ||
+        trackId === null ||
+        (trackId === '' && trackId !== 0)
+      )
+        return;
+      if (!authReadyRef.current) {
+        pendingHistoryRef.current.push({ trackId, event });
+        return;
       }
-    }
-  }, [scheduleFlush]);
+      const idStr = String(trackId);
+      const userId = currentUserIdRef.current || 'anonymous';
+      const sessionId = sessionIdRef.current || 'default';
+      const dedupKey = `${userId}:${sessionId}:${idStr}:${event}`;
 
-  const recordTrackHistory = useCallback((trackId, event = 'listen') => {
-    if (trackId === undefined || trackId === null || (trackId === '' && trackId !== 0)) return;
-    if (!authReadyRef.current) {
-      pendingHistoryRef.current.push({ trackId, event });
-      return;
-    }
-    const idStr = String(trackId);
-    const userId = currentUserIdRef.current || 'anonymous';
-    const sessionId = sessionIdRef.current || 'default';
-    const dedupKey = `${userId}:${sessionId}:${idStr}:${event}`;
+      const now = Date.now();
+      const lastRecorded = recentHistoryRef.current.get(dedupKey);
+      if (lastRecorded && now - lastRecorded < HISTORY_COOLDOWN_MS) {
+        return;
+      }
+      recentHistoryRef.current.set(dedupKey, now);
 
-    const now = Date.now();
-    const lastRecorded = recentHistoryRef.current.get(dedupKey);
-    if (lastRecorded && (now - lastRecorded) < HISTORY_COOLDOWN_MS) {
-      return;
-    }
-    recentHistoryRef.current.set(dedupKey, now);
-
-    if (recentHistoryRef.current.size > 200) {
-      for (const [k, timestamp] of recentHistoryRef.current.entries()) {
-        if (now - timestamp > HISTORY_COOLDOWN_MS) {
-          recentHistoryRef.current.delete(k);
+      if (recentHistoryRef.current.size > 200) {
+        for (const [k, timestamp] of recentHistoryRef.current.entries()) {
+          if (now - timestamp > HISTORY_COOLDOWN_MS) {
+            recentHistoryRef.current.delete(k);
+          }
         }
       }
-    }
 
-    sendBackgroundEvent(`/api/tracks/${encodeURIComponent(idStr)}/history`, null);
-  }, [sendBackgroundEvent]);
+      sendBackgroundEvent(
+        `/api/tracks/${encodeURIComponent(idStr)}/history`,
+        null,
+      );
+    },
+    [sendBackgroundEvent],
+  );
 
   useEffect(() => {
     recordTrackHistoryRef.current = recordTrackHistory;
@@ -406,7 +481,7 @@ export default function usePlayerController({ setTracks }) {
       playsInSilentMode: true,
       shouldPlayInBackground: true,
       interruptionMode: 'doNotMix',
-    }).catch(err => {
+    }).catch((err) => {
       console.warn('Failed to configure audio mode:', err);
     });
   }, []);
@@ -415,7 +490,10 @@ export default function usePlayerController({ setTracks }) {
   useEffect(() => {
     const unsubscribe = defaultPlaybackCoordinator.subscribe((state) => {
       setNetworkUX(state);
-      if (state?.networkStatus === 'good' && pendingBackgroundEventsRef.current.length > 0) {
+      if (
+        state?.networkStatus === 'good' &&
+        pendingBackgroundEventsRef.current.length > 0
+      ) {
         flushPendingBackgroundEvents();
       }
     });
@@ -424,16 +502,20 @@ export default function usePlayerController({ setTracks }) {
 
   // Отслеживание медленной буферизации
   useEffect(() => {
-    defaultPlaybackCoordinator.handleBufferingStatus(Boolean(status?.isBuffering));
+    defaultPlaybackCoordinator.handleBufferingStatus(
+      Boolean(status?.isBuffering),
+    );
   }, [status?.isBuffering]);
 
   // Синхронизация очереди с координатором и планировщиком предзагрузки
   useEffect(() => {
     let isMounted = true;
     getAuthHeaders()
-      .then(headers => {
+      .then((headers) => {
         if (isMounted) {
-          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, { headers });
+          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {
+            headers,
+          });
         }
       })
       .catch(() => {
@@ -449,97 +531,112 @@ export default function usePlayerController({ setTracks }) {
 
   const requestExpandPlayer = useCallback(() => {
     setIsPlayerVisible(true);
-    setPlayerExpandToken(prev => prev + 1);
+    setPlayerExpandToken((prev) => prev + 1);
   }, []);
 
   /** Фоновое обновление метаданных громкости (EBU R128), если трек еще pending */
-  const refreshTrackLoudness = useCallback(async (trackId) => {
-    if (trackId === undefined || trackId === null || trackId === '') return;
-    try {
-      const res = await authFetch(`/api/tracks/${encodeURIComponent(trackId)}`);
-      if (!res.ok) return;
-      const fresh = await res.json();
-      if (!fresh || fresh.loudness_status !== 'analyzed' || fresh.normalization_gain_db == null) return;
+  const refreshTrackLoudness = useCallback(
+    async (trackId) => {
+      if (trackId === undefined || trackId === null || trackId === '') return;
+      try {
+        const res = await authFetch(
+          `/api/tracks/${encodeURIComponent(trackId)}`,
+        );
+        if (!res.ok) return;
+        const fresh = await res.json();
+        if (
+          !fresh ||
+          fresh.loudness_status !== 'analyzed' ||
+          fresh.normalization_gain_db == null
+        )
+          return;
 
-      const patch = {
-        loudness_status: fresh.loudness_status,
-        normalization_gain_db: fresh.normalization_gain_db,
-        loudness_lufs: fresh.loudness_lufs ?? null,
-        true_peak_db: fresh.true_peak_db ?? null,
-      };
+        const patch = {
+          loudness_status: fresh.loudness_status,
+          normalization_gain_db: fresh.normalization_gain_db,
+          loudness_lufs: fresh.loudness_lufs ?? null,
+          true_peak_db: fresh.true_peak_db ?? null,
+        };
 
-      const trackIdStr = String(trackId);
-      const activeTrack = currentTrackRef.current;
-      const activeId = activeTrack?.id !== undefined && activeTrack?.id !== null
-        ? String(activeTrack.id)
-        : (activeTrack?.track_id ? String(activeTrack.track_id) : null);
-
-      if (activeId === trackIdStr) {
-        const updated = { ...activeTrack, ...patch };
-        currentTrackRef.current = updated;
-        if (player) {
-          applyTrackNormalization(player, updated, soundCheckRef.current);
+        const activeTrack = currentTrackRef.current;
+        if (areTrackIdsEqual(activeTrack, trackId)) {
+          const updated = { ...activeTrack, ...patch };
+          currentTrackRef.current = updated;
+          if (player) {
+            applyTrackNormalization(player, updated, soundCheckRef.current);
+          }
+          setCurrentTrack(updated);
         }
-        setCurrentTrack(updated);
-      }
 
-      setUpNextQueue((prev) =>
-        prev.map((t) => {
-          const tId = t?.id !== undefined && t?.id !== null ? String(t.id) : (t?.track_id ? String(t.track_id) : null);
-          return tId === trackIdStr ? { ...t, ...patch } : t;
-        })
-      );
-    } catch {
-      // Метаданные громкости не критичны для непрерывности воспроизведения
-    }
-  }, [player]);
+        setUpNextQueue((prev) =>
+          prev.map((t) =>
+            areTrackIdsEqual(t, trackId) ? { ...t, ...patch } : t,
+          ),
+        );
+      } catch {
+        // Метаданные громкости не критичны для непрерывности воспроизведения
+      }
+    },
+    [player],
+  );
 
   /** Делегируем воспроизведение координатору */
-  const loadAndPlay = useCallback((track) => {
-    const reportPlaybackError = (error) => {
-      console.error('[usePlayerController] loadAndPlay error:', {
-        message: error?.message,
-        name: error?.name,
-        type: error?.type,
-        trackId: track?.id ?? track?.track_id,
-        trackTitle: track?.title,
+  const loadAndPlay = useCallback(
+    (track) => {
+      const reportPlaybackError = (error) => {
+        console.error('[usePlayerController] loadAndPlay error:', {
+          message: error?.message,
+          name: error?.name,
+          type: error?.type,
+          trackId: getTrackId(track),
+          trackTitle: track?.title,
+        });
+      };
+
+      let playbackPromise;
+      try {
+        const cached =
+          typeof getCachedAuthHeaders === 'function'
+            ? getCachedAuthHeaders()
+            : null;
+        playbackPromise = defaultPlaybackCoordinator.play(player, track, {
+          headers: cached || undefined,
+          getHeadersAsync: getAuthHeaders,
+          soundCheck: soundCheckRef.current,
+        });
+      } catch (e) {
+        reportPlaybackError(e);
+        return Promise.resolve({ isLocal: false, uri: null, error: e });
+      }
+
+      if (track && track.loudness_status !== 'analyzed') {
+        const trackId = getTrackId(track);
+        if (trackId !== null) {
+          refreshTrackLoudness(trackId);
+        }
+      }
+
+      return Promise.resolve(playbackPromise).catch((error) => {
+        reportPlaybackError(error);
+        return { isLocal: false, uri: null, error };
       });
-    };
-
-    let playbackPromise;
-    try {
-      const cached = typeof getCachedAuthHeaders === 'function' ? getCachedAuthHeaders() : null;
-      playbackPromise = defaultPlaybackCoordinator.play(player, track, {
-        headers: cached || undefined,
-        getHeadersAsync: getAuthHeaders,
-        soundCheck: soundCheckRef.current,
-      });
-    } catch (e) {
-      reportPlaybackError(e);
-      return Promise.resolve({ isLocal: false, uri: null, error: e });
-    }
-
-    if (track && track.loudness_status !== 'analyzed') {
-      const trackId = (track.id !== undefined && track.id !== null) ? track.id : track.track_id;
-      refreshTrackLoudness(trackId);
-    }
-
-    return Promise.resolve(playbackPromise).catch((error) => {
-      reportPlaybackError(error);
-      return { isLocal: false, uri: null, error };
-    });
-  }, [player, refreshTrackLoudness]);
+    },
+    [player, refreshTrackLoudness],
+  );
 
   const fetchQueue = useCallback(async (trackId, signal, exclusions) => {
     const epoch = queueEpochRef.current;
     try {
       const response = await authFetch(buildWaveQueueUrl(trackId, exclusions), {
-        signal
+        signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (epoch !== queueEpochRef.current) return;
-      setUpNextQueue(prev => mergeUniqueQueue(prev, data.map(normalizeTrackDto)));
+      const normalizedQueue = (Array.isArray(data) ? data : [])
+        .map(normalizeTrackDto)
+        .filter(Boolean);
+      setUpNextQueue((prev) => mergeUniqueQueue(prev, normalizedQueue));
     } catch (error) {
       if (error.name !== 'AbortError') {
         // Не спамим Alert, ошибка видна в UI-баннере
@@ -548,31 +645,44 @@ export default function usePlayerController({ setTracks }) {
     }
   }, []);
 
-  const playPreviousTrack = useCallback((options = {}) => {
-    const force = typeof options === 'boolean' ? options : !!options?.force;
-    if (!force && currentTime > 3) {
-      player.seekTo(0);
-      return;
-    }
-
-    if (history.length > 0) {
-      const newHistory = [...history];
-      const prevTrack = newHistory.pop();
-
-      if (currentTrack) {
-        setUpNextQueue([currentTrack, ...upNextQueue]);
+  const playPreviousTrack = useCallback(
+    (options = {}) => {
+      const force = typeof options === 'boolean' ? options : !!options?.force;
+      if (!force && currentTime > 3) {
+        player.seekTo(0);
+        return;
       }
 
-      currentTrackRef.current = prevTrack;
-      setHistory(newHistory);
-      setCurrentTrack(prevTrack);
-      loadAndPlay(prevTrack);
-      const prevTrackId = (prevTrack?.id !== undefined && prevTrack?.id !== null) ? prevTrack.id : prevTrack?.track_id;
-      recordTrackHistory(prevTrackId);
-    } else {
-      player.seekTo(0);
-    }
-  }, [currentTime, history, currentTrack, upNextQueue, player, loadAndPlay, recordTrackHistory]);
+      if (history.length > 0) {
+        const newHistory = [...history];
+        const prevTrack = newHistory.pop();
+
+        if (currentTrack) {
+          setUpNextQueue([currentTrack, ...upNextQueue]);
+        }
+
+        currentTrackRef.current = prevTrack;
+        setHistory(newHistory);
+        setCurrentTrack(prevTrack);
+        loadAndPlay(prevTrack);
+        const prevTrackId = getTrackId(prevTrack);
+        if (prevTrackId !== null) {
+          recordTrackHistory(prevTrackId);
+        }
+      } else {
+        player.seekTo(0);
+      }
+    },
+    [
+      currentTime,
+      history,
+      currentTrack,
+      upNextQueue,
+      player,
+      loadAndPlay,
+      recordTrackHistory,
+    ],
+  );
 
   const fetchNextTrack = useCallback(async () => {
     if (!currentTrack) return;
@@ -581,7 +691,7 @@ export default function usePlayerController({ setTracks }) {
 
     try {
       setIsLoading(true);
-      setHistory(prev => [...prev, currentTrack].slice(-MAX_HISTORY));
+      setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
 
       let nextTrack;
       let newQueue = [...upNextQueue];
@@ -592,8 +702,8 @@ export default function usePlayerController({ setTracks }) {
       }
 
       if (nextTrack) {
-        const nextTrackId = (nextTrack.id !== undefined && nextTrack.id !== null) ? nextTrack.id : nextTrack.track_id;
-        const currentTrackId = (currentTrack.id !== undefined && currentTrack.id !== null) ? currentTrack.id : currentTrack.track_id;
+        const nextTrackId = getTrackId(nextTrack);
+        const currentTrackId = getTrackId(currentTrack);
 
         currentTrackRef.current = nextTrack;
         setCurrentTrack(nextTrack);
@@ -601,24 +711,34 @@ export default function usePlayerController({ setTracks }) {
 
         if (isWaveSessionRef.current && newQueue.length < 3) {
           fetchQueue(nextTrackId, undefined, {
-            excludeIds: [...history.map(t => (t?.id !== undefined && t?.id !== null ? t.id : t?.track_id)), currentTrackId],
-            queuedIds: newQueue.map(t => (t?.id !== undefined && t?.id !== null ? t.id : t?.track_id)),
+            excludeIds: [
+              ...history.map(getTrackId).filter((id) => id !== null),
+              currentTrackId,
+            ],
+            queuedIds: newQueue.map(getTrackId).filter((id) => id !== null),
           });
         }
 
         // Телеметрия волны: finish при дослушивании, иначе skip
-        const trackMs = Math.round((currentTrack.duration || duration || 0) * 1000);
+        const trackMs = Math.round(
+          (currentTrack.duration || duration || 0) * 1000,
+        );
         const listenedMs = Math.round((currentTime || 0) * 1000);
-        const eventType = duration > 0 && currentTime >= duration * 0.9 ? 'finish' : 'skip';
-        sendBackgroundEvent('/api/wave/feedback', {
-          track_id: currentTrackId,
-          event_type: eventType,
-          listen_duration_ms: listenedMs,
-          track_duration_ms: trackMs,
-        });
+        const eventType =
+          duration > 0 && currentTime >= duration * 0.9 ? 'finish' : 'skip';
+        if (currentTrackId !== null) {
+          sendBackgroundEvent('/api/wave/feedback', {
+            track_id: currentTrackId,
+            event_type: eventType,
+            listen_duration_ms: listenedMs,
+            track_duration_ms: trackMs,
+          });
+        }
 
         // Записываем прослушивание в историю
-        recordTrackHistory(nextTrackId);
+        if (nextTrackId !== null) {
+          recordTrackHistory(nextTrackId);
+        }
 
         await playPromise;
       } else {
@@ -628,7 +748,18 @@ export default function usePlayerController({ setTracks }) {
       setIsLoading(false);
       isAdvancingRef.current = false;
     }
-  }, [currentTrack, upNextQueue, player, loadAndPlay, fetchQueue, currentTime, duration, history, sendBackgroundEvent, recordTrackHistory]);
+  }, [
+    currentTrack,
+    upNextQueue,
+    player,
+    loadAndPlay,
+    fetchQueue,
+    currentTime,
+    duration,
+    history,
+    sendBackgroundEvent,
+    recordTrackHistory,
+  ]);
 
   const fetchNextTrackRef = useRef(fetchNextTrack);
   const playPreviousTrackRef = useRef(playPreviousTrack);
@@ -678,99 +809,142 @@ export default function usePlayerController({ setTracks }) {
     }
   }, [isPlaying, currentTime, currentTrack, player, loadAndPlay]);
 
-  const playTrack = useCallback((track) => {
-    if (!track) return;
-    const trackId = (track.id !== undefined && track.id !== null) ? track.id : track.track_id;
-    const activeTrack = currentTrackRef.current || currentTrack;
-    const currentId = (activeTrack?.id !== undefined && activeTrack?.id !== null) ? activeTrack.id : activeTrack?.track_id;
+  const playTrack = useCallback(
+    (track) => {
+      if (!track) return;
+      const trackId = getTrackId(track);
+      if (trackId === null) return;
+      const activeTrack = currentTrackRef.current || currentTrack;
+      const currentId = getTrackId(activeTrack);
 
-    if (activeTrack && currentId !== trackId) {
-      setHistory(prev => [...prev, activeTrack].slice(-MAX_HISTORY));
-    }
-    if (!activeTrack || currentId !== trackId) {
-      sessionIdRef.current = 'track_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-    }
-    currentTrackRef.current = track;
-    isWaveSessionRef.current = true;
-    setCurrentTrack(track);
-    loadAndPlay(track);
-    // Инвалидируем ответы старой очереди до запуска нового запроса.
-    // Иначе fetchQueue захватит уже устаревшую эпоху и сможет примешать
-    // старый ответ к новой сессии воспроизведения.
-    queueEpochRef.current += 1;
-    setUpNextQueue([]);
-    fetchQueue(trackId, undefined, {
-      excludeIds: [...history.map(t => (t?.id !== undefined && t?.id !== null ? t.id : t?.track_id)), currentId],
-      queuedIds: [],
-    });
-    recordTrackHistory(trackId);
-  }, [currentTrack, history, fetchQueue, loadAndPlay, recordTrackHistory]);
-
-  const playTrackList = useCallback((trackList, startIndex = 0) => {
-    if (!trackList || trackList.length === 0) return;
-    const track = trackList[startIndex];
-    const trackId = (track?.id !== undefined && track?.id !== null) ? track.id : track?.track_id;
-    const activeTrack = currentTrackRef.current || currentTrack;
-    const currentId = (activeTrack?.id !== undefined && activeTrack?.id !== null) ? activeTrack.id : activeTrack?.track_id;
-    const queue = trackList.slice(startIndex + 1);
-
-    if (activeTrack && currentId !== trackId) {
-      setHistory(prev => [...prev, activeTrack].slice(-MAX_HISTORY));
-    }
-    sessionIdRef.current = 'list_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-    currentTrackRef.current = track;
-    isWaveSessionRef.current = false;
-    setCurrentTrack(track);
-    loadAndPlay(track);
-    // Ручной плейлист также инвалидирует in-flight wave queue response.
-    queueEpochRef.current += 1;
-    setUpNextQueue(queue);
-    recordTrackHistory(trackId);
-  }, [currentTrack, loadAndPlay, recordTrackHistory]);
-
-  const handleToggleLike = useCallback(async (track) => {
-    if (!track) return;
-    const trackId = (track.id !== undefined && track.id !== null) ? track.id : track.track_id;
-    const currentLiked = !!track.is_liked;
-    const newLiked = !currentLiked;
-
-    setCurrentTrack(prev => {
-      const prevId = (prev?.id !== undefined && prev?.id !== null) ? prev.id : prev?.track_id;
-      return prev && prevId === trackId ? { ...prev, is_liked: newLiked } : prev;
-    });
-    setTracks(prev => prev.map(t => {
-      const tId = (t?.id !== undefined && t?.id !== null) ? t.id : t?.track_id;
-      return tId === trackId ? { ...t, is_liked: newLiked } : t;
-    }));
-
-    try {
-      const response = await authFetch(`/api/tracks/${encodeURIComponent(trackId)}/like`, {
-        method: newLiked ? 'POST' : 'DELETE'
+      if (activeTrack && !areTrackIdsEqual(activeTrack, trackId)) {
+        setHistory((prev) => [...prev, activeTrack].slice(-MAX_HISTORY));
+      }
+      if (!activeTrack || !areTrackIdsEqual(activeTrack, trackId)) {
+        sessionIdRef.current =
+          'track_' +
+          Date.now().toString(36) +
+          '_' +
+          Math.random().toString(36).slice(2, 6);
+      }
+      currentTrackRef.current = track;
+      isWaveSessionRef.current = true;
+      setCurrentTrack(track);
+      loadAndPlay(track);
+      // Инвалидируем ответы старой очереди до запуска нового запроса.
+      // Иначе fetchQueue захватит уже устаревшую эпоху и сможет примешать
+      // старый ответ к новой сессии воспроизведения.
+      queueEpochRef.current += 1;
+      setUpNextQueue([]);
+      fetchQueue(trackId, undefined, {
+        excludeIds: [
+          ...history.map(getTrackId).filter((id) => id !== null),
+          currentId,
+        ],
+        queuedIds: [],
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    } catch (err) {
-      console.warn("Failed to toggle like:", err);
-      setCurrentTrack(prev => {
-        const prevId = (prev?.id !== undefined && prev?.id !== null) ? prev.id : prev?.track_id;
-        return prev && prevId === trackId ? { ...prev, is_liked: currentLiked } : prev;
+      recordTrackHistory(trackId);
+    },
+    [currentTrack, history, fetchQueue, loadAndPlay, recordTrackHistory],
+  );
+
+  const playTrackList = useCallback(
+    (trackList, startIndex = 0) => {
+      if (!trackList || trackList.length === 0) return;
+      const track = trackList[startIndex];
+      const trackId = getTrackId(track);
+      if (trackId === null) return;
+      const activeTrack = currentTrackRef.current || currentTrack;
+      const queue = trackList.slice(startIndex + 1);
+
+      if (activeTrack && !areTrackIdsEqual(activeTrack, trackId)) {
+        setHistory((prev) => [...prev, activeTrack].slice(-MAX_HISTORY));
+      }
+      sessionIdRef.current =
+        'list_' +
+        Date.now().toString(36) +
+        '_' +
+        Math.random().toString(36).slice(2, 6);
+      currentTrackRef.current = track;
+      isWaveSessionRef.current = false;
+      setCurrentTrack(track);
+      loadAndPlay(track);
+      // Ручной плейлист также инвалидирует in-flight wave queue response.
+      queueEpochRef.current += 1;
+      setUpNextQueue(queue);
+      recordTrackHistory(trackId);
+    },
+    [currentTrack, loadAndPlay, recordTrackHistory],
+  );
+
+  const handleToggleLike = useCallback(
+    async (track) => {
+      if (!track) return;
+      const trackId = getTrackId(track);
+      if (trackId === null) return;
+      const currentLiked = !!track.is_liked;
+      const newLiked = !currentLiked;
+
+      setCurrentTrack((prev) => {
+        return prev && areTrackIdsEqual(prev, trackId)
+          ? { ...prev, is_liked: newLiked }
+          : prev;
       });
-      setTracks(prev => prev.map(t => {
-        const tId = (t?.id !== undefined && t?.id !== null) ? t.id : t?.track_id;
-        return tId === trackId ? { ...t, is_liked: currentLiked } : t;
-      }));
-    }
-  }, [setTracks]);
+      setTracks((prev) =>
+        prev.map((t) => {
+          return areTrackIdsEqual(t, trackId)
+            ? { ...t, is_liked: newLiked }
+            : t;
+        }),
+      );
+
+      try {
+        const response = await authFetch(
+          `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+          {
+            method: newLiked ? 'POST' : 'DELETE',
+          },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (err) {
+        console.warn('Failed to toggle like:', err);
+        setCurrentTrack((prev) => {
+          return prev && areTrackIdsEqual(prev, trackId)
+            ? { ...prev, is_liked: currentLiked }
+            : prev;
+        });
+        setTracks((prev) =>
+          prev.map((t) => {
+            return areTrackIdsEqual(t, trackId)
+              ? { ...t, is_liked: currentLiked }
+              : t;
+          }),
+        );
+      }
+    },
+    [setTracks],
+  );
 
   const startWave = useCallback(async () => {
     try {
-      const response = await authFetch('/api/wave/next?current_track_id=random');
+      const response = await authFetch(
+        '/api/wave/next?current_track_id=random',
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const waveTrack = normalizeTrackDto(data);
-      const waveTrackId = (waveTrack.id !== undefined && waveTrack.id !== null) ? waveTrack.id : waveTrack.track_id;
-      const currentTrackId = (currentTrack?.id !== undefined && currentTrack?.id !== null) ? currentTrack.id : currentTrack?.track_id;
+      if (!waveTrack) throw new Error('Wave track missing valid identifier');
+      const waveTrackId = getTrackId(waveTrack);
+      const currentTrackId = getTrackId(currentTrack);
 
-      sessionIdRef.current = 'wave_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      if (currentTrack && !areTrackIdsEqual(currentTrack, waveTrackId)) {
+        setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
+      }
+      sessionIdRef.current =
+        'wave_' +
+        Date.now().toString(36) +
+        '_' +
+        Math.random().toString(36).slice(2, 6);
       currentTrackRef.current = waveTrack;
       isWaveSessionRef.current = true;
       setCurrentTrack(waveTrack);
@@ -778,13 +952,16 @@ export default function usePlayerController({ setTracks }) {
       queueEpochRef.current += 1;
       setUpNextQueue([]);
       fetchQueue(waveTrackId, undefined, {
-        excludeIds: [...history.map(t => (t?.id !== undefined && t?.id !== null ? t.id : t?.track_id)), currentTrackId],
+        excludeIds: [
+          ...history.map(getTrackId).filter((id) => id !== null),
+          currentTrackId,
+        ],
         queuedIds: [],
       });
       recordTrackHistory(waveTrackId);
     } catch (error) {
       if (error.name !== 'AbortError') {
-        console.warn("Failed to start wave:", error.message);
+        console.warn('Failed to start wave:', error.message);
       }
     }
   }, [history, currentTrack, fetchQueue, loadAndPlay, recordTrackHistory]);
@@ -814,7 +991,10 @@ export default function usePlayerController({ setTracks }) {
     try {
       await clearSavedLastTrack();
     } catch (e) {
-      console.warn('[usePlayerController] dismissPlayer clear storage error:', e);
+      console.warn(
+        '[usePlayerController] dismissPlayer clear storage error:',
+        e,
+      );
     }
   }, [player]);
 
@@ -851,8 +1031,10 @@ export default function usePlayerController({ setTracks }) {
     networkError: networkUX.networkError,
     isBufferingSlow: networkUX.isBufferingSlow,
     retryPreload: () => {
-      getAuthHeaders().then(headers => {
-        defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, { headers });
+      getAuthHeaders().then((headers) => {
+        defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {
+          headers,
+        });
       });
     },
     skipToNext: fetchNextTrack,

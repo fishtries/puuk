@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { authFetch } from '../../shared/api/api';
+import { getTrackId } from '../../shared/domain/trackAdapter';
 
 export default function AddToPlaylistModal({ visible, track, onClose }) {
   const [playlists, setPlaylists] = useState([]);
@@ -31,29 +32,33 @@ export default function AddToPlaylistModal({ visible, track, onClose }) {
         setPlaylists(await response.json());
       }
     } catch (e) {
-      console.warn("Fetch playlists error:", e);
+      console.warn('Fetch playlists error:', e);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleAddToPlaylist = async (playlist) => {
-    if (!track) return;
+    const trackId = getTrackId(track);
+    if (trackId === null) {
+      Alert.alert('Error', 'Invalid track.');
+      return;
+    }
     try {
       const response = await authFetch(`/api/playlists/${playlist.id}/tracks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ track_id: track.id })
+        body: JSON.stringify({ track_id: trackId }),
       });
       const data = await response.json();
       if (data.status === 'already_exists') {
-        Alert.alert("Notice", "Track is already in this playlist.");
+        Alert.alert('Notice', 'Track is already in this playlist.');
       } else {
-        Alert.alert("Success", "Track added to playlist!");
+        Alert.alert('Success', 'Track added to playlist!');
       }
       onClose();
     } catch (e) {
-      Alert.alert("Error", "Failed to add track.");
+      Alert.alert('Error', 'Failed to add track.');
     }
   };
 
@@ -85,7 +90,12 @@ export default function AddToPlaylistModal({ visible, track, onClose }) {
                   style={styles.playlistRow}
                   onPress={() => handleAddToPlaylist(item)}
                 >
-                  <Ionicons name="list" size={24} color="#8e8e93" style={{ marginRight: 12 }} />
+                  <Ionicons
+                    name="list"
+                    size={24}
+                    color="#8e8e93"
+                    style={{ marginRight: 12 }}
+                  />
                   <Text style={styles.playlistName}>{item.name}</Text>
                 </TouchableOpacity>
               )}

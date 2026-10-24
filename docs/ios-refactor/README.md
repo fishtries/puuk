@@ -37,6 +37,26 @@ The current player background implementation is the accepted baseline. Do not re
 
 Stages 2 and 6 may be prepared in parallel only as read-only design work. Source edits should be serialized because `App.js`, navigation, and player composition are coupled. Stage 4 should be split into non-overlapping batches; never dispatch concurrent file moves in the same feature tree.
 
+## Current structure after stages 0–8
+
+The accepted feature moves are reflected in `features/auth`, `features/catalog`,
+`features/search`, `features/library`, `features/playlists`, and `features/albums`;
+cross-feature transport/cache code lives under `shared/api`, settings and
+persisted last-track storage under `shared/storage`, and reusable artwork under
+`shared/media`. The accepted Stage 8 implementation is limited to the
+persisted last-track boundary in `shared/storage/settings.js`: stored `id` and
+legacy `track_id` records are read compatibly and written with canonical `id`
+plus a temporary `track_id` alias. The `shared/domain/trackAdapter.js` work and
+other track-consumer changes present in the current dirty tree remain subject
+to explicit Stage 8 scope/acceptance review.
+
+Player runtime and presentation remain in their existing `hooks/`, `utils/`, and
+`components/` ownership areas; the Stage 6/7 player contract and physical-device
+invariants remain applicable. The current tree is not repository-wide track
+normalization: catalog/search/album/playlist/edit/event and player history
+consumers still require the Stage 8 contract review before further boundary
+migrations.
+
 ## Junior vs senior assignment
 
 **Junior model is suitable for:** exact file moves after the move map is approved; updating imports; extracting a pure helper with supplied behavior; adding focused tests from explicit cases; applying formatter to listed changed files; updating an agreed file map. Give it an exact allowlist of files and ask it to stop rather than broaden scope.

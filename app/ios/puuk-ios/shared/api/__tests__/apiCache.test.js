@@ -6,7 +6,9 @@ function mockNormalizeUri(uri) {
 
 class MockDirectory {
   constructor(...parts) {
-    this.uri = mockNormalizeUri(parts.map((p) => (p && p.uri ? p.uri : String(p))).join('/'));
+    this.uri = mockNormalizeUri(
+      parts.map((p) => (p && p.uri ? p.uri : String(p))).join('/'),
+    );
     this.name = this.uri.split('/').pop() || '';
   }
 
@@ -47,7 +49,9 @@ class MockDirectory {
 
 class MockFile {
   constructor(...parts) {
-    this.uri = mockNormalizeUri(parts.map((p) => (p && p.uri ? p.uri : String(p))).join('/'));
+    this.uri = mockNormalizeUri(
+      parts.map((p) => (p && p.uri ? p.uri : String(p))).join('/'),
+    );
     this.name = this.uri.split('/').pop() || '';
   }
 
@@ -133,11 +137,20 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
   describe('запись и чтение валидного кэша', () => {
     it('saves and reads valid catalog cache from memory and disk', async () => {
-      const tracks = [{ id: '1', title: 'Song 1' }, { id: '2', title: 'Song 2' }];
-      await setCachedCatalog('tracks', tracks, { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const tracks = [
+        { id: '1', title: 'Song 1' },
+        { id: '2', title: 'Song 2' },
+      ];
+      await setCachedCatalog('tracks', tracks, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       // Immediate read (from memory)
-      const cachedMem = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cachedMem = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(cachedMem).not.toBeNull();
       expect(cachedMem.data).toEqual(tracks);
       expect(cachedMem.version).toBe(CATALOG_CACHE_VERSION);
@@ -146,7 +159,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       // Clear memory cache to force reading from mock filesystem
       resetMemoryCache();
 
-      const cachedDisk = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cachedDisk = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(cachedDisk).not.toBeNull();
       expect(cachedDisk.data).toEqual(tracks);
       expect(cachedDisk.isStale).toBe(false);
@@ -185,7 +201,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
       expect(file.exists).toBe(true);
 
-      const result = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const result = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(result).toBeNull();
       expect(file.exists).toBe(false); // Cleaned up
     });
@@ -193,22 +212,46 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
   describe('разделение данных по serverUrl и user id', () => {
     it('isolates cache between different servers', async () => {
-      await setCachedCatalog('tracks', [{ id: 'srv1' }], { userId: 10, serverUrl: 'https://server1.com' });
-      await setCachedCatalog('tracks', [{ id: 'srv2' }], { userId: 10, serverUrl: 'https://server2.com' });
+      await setCachedCatalog('tracks', [{ id: 'srv1' }], {
+        userId: 10,
+        serverUrl: 'https://server1.com',
+      });
+      await setCachedCatalog('tracks', [{ id: 'srv2' }], {
+        userId: 10,
+        serverUrl: 'https://server2.com',
+      });
 
-      const res1 = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://server1.com' });
-      const res2 = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://server2.com' });
+      const res1 = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://server1.com',
+      });
+      const res2 = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://server2.com',
+      });
 
       expect(res1.data).toEqual([{ id: 'srv1' }]);
       expect(res2.data).toEqual([{ id: 'srv2' }]);
     });
 
     it('isolates cache between different user accounts', async () => {
-      await setCachedCatalog('playlists', [{ name: 'User 10 List' }], { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      await setCachedCatalog('playlists', [{ name: 'User 20 List' }], { userId: 20, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('playlists', [{ name: 'User 10 List' }], {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      await setCachedCatalog('playlists', [{ name: 'User 20 List' }], {
+        userId: 20,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
-      const resUser10 = await getCachedCatalog('playlists', { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      const resUser20 = await getCachedCatalog('playlists', { userId: 20, serverUrl: 'https://web.puuk.fun' });
+      const resUser10 = await getCachedCatalog('playlists', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      const resUser20 = await getCachedCatalog('playlists', {
+        userId: 20,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       expect(resUser10.data).toEqual([{ name: 'User 10 List' }]);
       expect(resUser20.data).toEqual([{ name: 'User 20 List' }]);
@@ -217,33 +260,84 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
   describe('очистка одного ключа и полная очистка', () => {
     it('removes specific cache key while preserving others', async () => {
-      await setCachedCatalog('tracks', [{ id: '1' }], { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      await setCachedCatalog('albums', [{ id: 'a1' }], { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', [{ id: '1' }], {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      await setCachedCatalog('albums', [{ id: 'a1' }], {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
-      await removeCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      await removeCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
-      expect(await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' })).toBeNull();
-      expect(await getCachedCatalog('albums', { userId: 10, serverUrl: 'https://web.puuk.fun' })).not.toBeNull();
+      expect(
+        await getCachedCatalog('tracks', {
+          userId: 10,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).toBeNull();
+      expect(
+        await getCachedCatalog('albums', {
+          userId: 10,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).not.toBeNull();
     });
 
     it('clears all cache for a specific user when userId is provided', async () => {
-      await setCachedCatalog('tracks', [{ id: 'u1' }], { userId: 1, serverUrl: 'https://web.puuk.fun' });
-      await setCachedCatalog('tracks', [{ id: 'u2' }], { userId: 2, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', [{ id: 'u1' }], {
+        userId: 1,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      await setCachedCatalog('tracks', [{ id: 'u2' }], {
+        userId: 2,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       await clearCatalogCache({ userId: 1 });
 
-      expect(await getCachedCatalog('tracks', { userId: 1, serverUrl: 'https://web.puuk.fun' })).toBeNull();
-      expect(await getCachedCatalog('tracks', { userId: 2, serverUrl: 'https://web.puuk.fun' })).not.toBeNull();
+      expect(
+        await getCachedCatalog('tracks', {
+          userId: 1,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).toBeNull();
+      expect(
+        await getCachedCatalog('tracks', {
+          userId: 2,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).not.toBeNull();
     });
 
     it('completely clears all catalog cache when no userId is specified', async () => {
-      await setCachedCatalog('tracks', [{ id: '1' }], { userId: 1, serverUrl: 'https://web.puuk.fun' });
-      await setCachedCatalog('albums', [{ id: '2' }], { userId: 2, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', [{ id: '1' }], {
+        userId: 1,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      await setCachedCatalog('albums', [{ id: '2' }], {
+        userId: 2,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       await clearCatalogCache();
 
-      expect(await getCachedCatalog('tracks', { userId: 1, serverUrl: 'https://web.puuk.fun' })).toBeNull();
-      expect(await getCachedCatalog('albums', { userId: 2, serverUrl: 'https://web.puuk.fun' })).toBeNull();
+      expect(
+        await getCachedCatalog('tracks', {
+          userId: 1,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).toBeNull();
+      expect(
+        await getCachedCatalog('albums', {
+          userId: 2,
+          serverUrl: 'https://web.puuk.fun',
+        }),
+      ).toBeNull();
     });
   });
 
@@ -282,19 +376,35 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(authFetch).toHaveBeenCalledTimes(1);
 
       // Both callers received onData callback with fresh data!
-      expect(onData1).toHaveBeenCalledWith([{ id: 'shared', title: 'Shared Song' }], { fromCache: false, isStale: false });
-      expect(onData2).toHaveBeenCalledWith([{ id: 'shared', title: 'Shared Song' }], { fromCache: false, isStale: false });
+      expect(onData1).toHaveBeenCalledWith(
+        [{ id: 'shared', title: 'Shared Song' }],
+        { fromCache: false, isStale: false },
+      );
+      expect(onData2).toHaveBeenCalledWith(
+        [{ id: 'shared', title: 'Shared Song' }],
+        { fromCache: false, isStale: false },
+      );
 
       // The result is actually saved in cache and readable without network request
-      const cachedEntry = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cachedEntry = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(cachedEntry).not.toBeNull();
-      expect(cachedEntry.data).toEqual([{ id: 'shared', title: 'Shared Song' }]);
+      expect(cachedEntry.data).toEqual([
+        { id: 'shared', title: 'Shared Song' },
+      ]);
       expect(cachedEntry.isStale).toBe(false);
     });
 
     it('caller with aborted signal aborts immediately without breaking shared network request', async () => {
       let resolveFetch;
-      authFetch.mockImplementationOnce(() => new Promise((r) => { resolveFetch = r; }));
+      authFetch.mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolveFetch = r;
+          }),
+      );
 
       const controller = new AbortController();
 
@@ -329,7 +439,9 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
     it('forceRefresh does not delete a newer inFlightRequests promise', async () => {
       let resolveReq1;
-      const promise1 = new Promise((r) => { resolveReq1 = r; });
+      const promise1 = new Promise((r) => {
+        resolveReq1 = r;
+      });
       authFetch.mockImplementationOnce(() => promise1);
 
       // Start Request 1
@@ -362,7 +474,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       await Promise.all([req1, req2]);
 
       // Cache stores fresh-2
-      const cached = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cached = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(cached.data).toEqual([{ id: 'fresh-2' }]);
     });
 
@@ -431,21 +546,33 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
       await req2;
 
-      const cacheAfterReq2 = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      expect(cacheAfterReq2.data).toEqual([{ id: 'fresh-req-2', title: 'Fresh Version' }]);
+      const cacheAfterReq2 = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      expect(cacheAfterReq2.data).toEqual([
+        { id: 'fresh-req-2', title: 'Fresh Version' },
+      ]);
 
       // Now resolve the older slow request 1
       resolveSlow({
         ok: true,
         status: 200,
-        json: async () => [{ id: 'stale-req-1', title: 'Old Outdated Version' }],
+        json: async () => [
+          { id: 'stale-req-1', title: 'Old Outdated Version' },
+        ],
       });
 
       await req1;
 
       // Must NOT have overwritten fresh-req-2!
-      const finalCache = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      expect(finalCache.data).toEqual([{ id: 'fresh-req-2', title: 'Fresh Version' }]);
+      const finalCache = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      expect(finalCache.data).toEqual([
+        { id: 'fresh-req-2', title: 'Fresh Version' },
+      ]);
     });
 
     it('does not cache 401 unauthorized response', async () => {
@@ -460,10 +587,13 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
           userId: 10,
           serverUrl: 'https://web.puuk.fun',
           forceRefresh: true,
-        })
+        }),
       ).rejects.toThrow('HTTP 401');
 
-      const cached = await getCachedCatalog('tracks', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cached = await getCachedCatalog('tracks', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
       expect(cached).toBeNull();
     });
   });
@@ -471,7 +601,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
   describe('интеграционные сценарии UI каталога (App.js & HomeScreen)', () => {
     it('UI появляется из локального кэша до завершения сети и затем обновляется', async () => {
       const cached = [{ id: '1', title: 'Cached Song' }];
-      await setCachedCatalog('tracks', cached, { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', cached, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       let resolveNetwork;
       const networkPromise = new Promise((r) => {
@@ -511,7 +644,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
     it('ошибка сети не очищает уже показанный каталог', async () => {
       const cached = [{ id: '1', title: 'Song 1' }];
-      await setCachedCatalog('tracks', cached, { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', cached, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       authFetch.mockRejectedValueOnce(new TypeError('Network request failed'));
 
@@ -533,7 +669,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
     });
 
     it('смена пользователя не показывает старый каталог', async () => {
-      await setCachedCatalog('tracks', [{ id: 'u1-song' }], { userId: 1, serverUrl: 'https://web.puuk.fun' });
+      await setCachedCatalog('tracks', [{ id: 'u1-song' }], {
+        userId: 1,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       authFetch.mockResolvedValueOnce({
         ok: true,
@@ -578,9 +717,76 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
     it('корректно обрабатывает пустые списки или элементы без id', () => {
       expect(mergeTracks([], [])).toEqual([]);
-      expect(mergeTracks([{ id: '1' }], [null, undefined, {}, { id: '2' }])).toEqual([
-        { id: '1' },
-        { id: '2' },
+      expect(
+        mergeTracks([{ id: '1' }], [null, undefined, {}, { id: '2' }]),
+      ).toEqual([{ id: '1' }, { id: '2' }]);
+    });
+
+    it('merge id vs track_id duplicate replacement with preserved order', () => {
+      const page1 = [
+        { id: 'track-100', title: 'Initial by id' },
+        { id: 'track-200', title: 'Keep unmodified' },
+      ];
+      const page2 = [
+        {
+          track_id: 'track-100',
+          title: 'Replaced by legacy track_id',
+          album: 'Updated Album',
+        },
+      ];
+      const merged = mergeTracks(page1, page2);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]).toEqual({
+        track_id: 'track-100',
+        title: 'Replaced by legacy track_id',
+        album: 'Updated Album',
+      });
+      expect(merged[1].id).toBe('track-200');
+
+      // Inverse: initial track_id replaced by id
+      const page3 = [{ track_id: 'track-300', title: 'Legacy Initial' }];
+      const page4 = [{ id: 'track-300', title: 'Canonical Replacement' }];
+      const mergedInv = mergeTracks(page3, page4);
+      expect(mergedInv).toHaveLength(1);
+      expect(mergedInv[0]).toEqual({
+        id: 'track-300',
+        title: 'Canonical Replacement',
+      });
+    });
+
+    it('merge track_id 0 and deduplicates with id 0', () => {
+      const page1 = [{ track_id: 0, title: 'Zero Track Initial' }];
+      const page2 = [
+        { id: 0, title: 'Zero Track Replaced' },
+        { track_id: 'next-1', title: 'Next Track' },
+      ];
+      const merged = mergeTracks(page1, page2);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]).toEqual({ id: 0, title: 'Zero Track Replaced' });
+      expect(merged[1]).toEqual({ track_id: 'next-1', title: 'Next Track' });
+    });
+
+    it('missing identity ignored across both current and incoming lists', () => {
+      const current = [
+        null,
+        undefined,
+        {},
+        { id: '' },
+        { id: '   ' },
+        { track_id: null },
+        { id: 'valid-current', title: 'Valid 1' },
+      ];
+      const incoming = [
+        null,
+        {},
+        { id: null, track_id: undefined },
+        { id: '   ' },
+        { track_id: 'valid-incoming', title: 'Valid 2' },
+      ];
+      const merged = mergeTracks(current, incoming);
+      expect(merged).toEqual([
+        { id: 'valid-current', title: 'Valid 1' },
+        { track_id: 'valid-incoming', title: 'Valid 2' },
       ]);
     });
   });
@@ -604,7 +810,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
       expect(authFetch).toHaveBeenCalledWith(
         '/api/tracks?limit=30&offset=0',
-        expect.anything()
+        expect.anything(),
       );
 
       expect(res.data).toEqual({
@@ -612,8 +818,20 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
         limit: 30,
         offset: 0,
         items: [
-          { id: 't-1', title: 'Track 1', coverArt: 'https://web.puuk.fun/api/cover/t-1' },
-          { id: 't-2', title: 'Track 2', coverArt: 'https://web.puuk.fun/api/cover/t-2' },
+          {
+            id: 't-1',
+            track_id: 't-1',
+            title: 'Track 1',
+            artist: 'Unknown Artist',
+            coverArt: 'https://web.puuk.fun/api/cover/t-1',
+          },
+          {
+            id: 't-2',
+            track_id: 't-2',
+            title: 'Track 2',
+            artist: 'Unknown Artist',
+            coverArt: 'https://web.puuk.fun/api/cover/t-2',
+          },
         ],
         hasMore: false, // 2 items < 30
       });
@@ -631,11 +849,25 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
         json: async () => [{ id: 'p30-track' }],
       });
 
-      await fetchTracksPage(0, 30, { userId: 10, serverUrl: 'https://web.puuk.fun', forceRefresh: true });
-      await fetchTracksPage(30, 30, { userId: 10, serverUrl: 'https://web.puuk.fun', forceRefresh: true });
+      await fetchTracksPage(0, 30, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+      await fetchTracksPage(30, 30, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
 
-      const cachePage0 = await getCachedCatalog('tracks_page_0', { userId: 10, serverUrl: 'https://web.puuk.fun' });
-      const cachePage30 = await getCachedCatalog('tracks_page_30', { userId: 10, serverUrl: 'https://web.puuk.fun' });
+      const cachePage0 = await getCachedCatalog('tracks_page_0', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
+      const cachePage30 = await getCachedCatalog('tracks_page_30', {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+      });
 
       expect(cachePage0).not.toBeNull();
       expect(cachePage30).not.toBeNull();
@@ -667,7 +899,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
           limit: 30,
           offset: 0,
           items: [expect.objectContaining({ id: 'fd-1' })],
-        })
+        }),
       );
     });
 
@@ -703,7 +935,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       });
 
       await req2;
-      expect(newOnData).toHaveBeenCalledWith([{ id: 'new-fresh-data' }], { fromCache: false, isStale: false });
+      expect(newOnData).toHaveBeenCalledWith([{ id: 'new-fresh-data' }], {
+        fromCache: false,
+        isStale: false,
+      });
 
       // Now resolve the old slow request
       resolveOldReq({
@@ -715,7 +950,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       await req1;
 
       // The old request's onData must NOT have been called with the stale data!
-      expect(oldOnData).not.toHaveBeenCalledWith([{ id: 'old-stale-data' }], expect.anything());
+      expect(oldOnData).not.toHaveBeenCalledWith(
+        [{ id: 'old-stale-data' }],
+        expect.anything(),
+      );
     });
 
     it('устаревший forceRefresh не удаляет snapshot, записанный более новым запросом', async () => {
@@ -758,17 +996,116 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(cached?.data).toEqual([{ id: 'newer-track' }]);
     });
 
+    it('нормализует legacy track_id и сохраняет все поля трека при пагинации каталога', async () => {
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          {
+            track_id: 'legacy-uuid-99',
+            title: 'Legacy Song',
+            artist: 'Legacy Artist',
+            album: 'Vintage LP',
+            year: 1982,
+            genre: 'Synthpop',
+            bpm: 120,
+            duration: 215.5,
+            file_path: 'vintage/song.mp3',
+            custom_metadata: { source: 'tape' },
+          },
+        ],
+      });
+
+      const res = await fetchTracksPage(0, 30, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+
+      expect(res.data.items).toHaveLength(1);
+      const item = res.data.items[0];
+      expect(item.id).toBe('legacy-uuid-99');
+      expect(item.track_id).toBe('legacy-uuid-99');
+      expect(item.title).toBe('Legacy Song');
+      expect(item.artist).toBe('Legacy Artist');
+      expect(item.album).toBe('Vintage LP');
+      expect(item.year).toBe(1982);
+      expect(item.genre).toBe('Synthpop');
+      expect(item.bpm).toBe(120);
+      expect(item.duration).toBe(215.5);
+      expect(item.file_path).toBe('vintage/song.mp3');
+      expect(item.custom_metadata).toEqual({ source: 'tape' });
+      expect(item.coverArt).toBe(
+        'https://web.puuk.fun/api/cover/legacy-uuid-99',
+      );
+    });
+
+    it('корректно формирует fallback coverArt для трека с числовым id 0', async () => {
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { id: 0, title: 'Zero Track', artist: 'Zero Artist' },
+        ],
+      });
+
+      const res = await fetchTracksPage(0, 30, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+
+      expect(res.data.items).toHaveLength(1);
+      const item = res.data.items[0];
+      expect(item.id).toBe(0);
+      expect(item.track_id).toBe(0);
+      expect(item.coverArt).toBe('https://web.puuk.fun/api/cover/0');
+    });
+
+    it('игнорирует записи без валидного идентификатора при формировании страницы каталога', async () => {
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { id: 'valid-item-1', title: 'Good Track' },
+          null,
+          {},
+          { id: '' },
+          { id: '   ' },
+          { track_id: 'valid-item-2', title: 'Good Legacy Track' },
+        ],
+      });
+
+      const res = await fetchTracksPage(0, 30, {
+        userId: 10,
+        serverUrl: 'https://web.puuk.fun',
+        forceRefresh: true,
+      });
+
+      expect(res.data.items).toHaveLength(2);
+      expect(res.data.items[0].id).toBe('valid-item-1');
+      expect(res.data.items[1].id).toBe('valid-item-2');
+    });
+
     it('deriveCacheKeyFromEndpoint формирует безопасные ключи с query-параметрами', () => {
-      expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=0')).toBe('tracks_limit_30_offset_0');
-      expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=30')).toBe('tracks_limit_30_offset_30');
+      expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=0')).toBe(
+        'tracks_limit_30_offset_0',
+      );
+      expect(deriveCacheKeyFromEndpoint('/api/tracks?limit=30&offset=30')).toBe(
+        'tracks_limit_30_offset_30',
+      );
       expect(deriveCacheKeyFromEndpoint('/api/albums')).toBe('albums');
     });
   });
 
   describe('защита от коллизий и нормализация serverUrl в getCacheKey', () => {
     it('нормализует serverUrl (trailing slashes, регистр, пробелы)', () => {
-      expect(normalizeServerUrl('  https://FOO.bar/  ')).toBe('https://foo.bar');
-      expect(normalizeServerUrl('http://192.168.1.100:8000///')).toBe('http://192.168.1.100:8000');
+      expect(normalizeServerUrl('  https://FOO.bar/  ')).toBe(
+        'https://foo.bar',
+      );
+      expect(normalizeServerUrl('http://192.168.1.100:8000///')).toBe(
+        'http://192.168.1.100:8000',
+      );
       expect(normalizeServerUrl('')).toBe('');
       expect(normalizeServerUrl(null)).toBe('');
     });
@@ -781,7 +1118,9 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(key1).toContain('foo_bar');
       expect(key2).toContain('foo_bar');
       // Хэши должны различаться
-      expect(hashString('https://foo.bar')).not.toBe(hashString('https://foo/bar'));
+      expect(hashString('https://foo.bar')).not.toBe(
+        hashString('https://foo/bar'),
+      );
     });
 
     it('изолирует кэш при смене порта или протокола сервера', () => {
@@ -805,17 +1144,23 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
             return reject(err);
           }
           if (options?.signal) {
-            options.signal.addEventListener('abort', () => {
-              const err = new Error('Aborted');
-              err.name = 'AbortError';
-              reject(err);
-            }, { once: true });
+            options.signal.addEventListener(
+              'abort',
+              () => {
+                const err = new Error('Aborted');
+                err.name = 'AbortError';
+                reject(err);
+              },
+              { once: true },
+            );
           }
           resolveNetwork = () => {
             resolve({
               ok: true,
               status: 200,
-              json: async () => [{ id: 'stale-user1-track', title: 'Should Not Persist' }],
+              json: async () => [
+                { id: 'stale-user1-track', title: 'Should Not Persist' },
+              ],
             });
           };
         });
@@ -849,7 +1194,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(onData).not.toHaveBeenCalled();
 
       // 2. Кэш User 1 на диске и в памяти должен быть чистым (не восстановлен старым запросом!)
-      const cached = await getCachedCatalog('tracks', { userId: 1, serverUrl: 'https://puuk.app' });
+      const cached = await getCachedCatalog('tracks', {
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+      });
       expect(cached).toBeNull();
     });
 
@@ -857,9 +1205,13 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       let abortedSignalsCount = 0;
       authFetch.mockImplementation((endpoint, options) => {
         if (options?.signal) {
-          options.signal.addEventListener('abort', () => {
-            abortedSignalsCount += 1;
-          }, { once: true });
+          options.signal.addEventListener(
+            'abort',
+            () => {
+              abortedSignalsCount += 1;
+            },
+            { once: true },
+          );
         }
         return new Promise(() => {}); // hang
       });
@@ -882,7 +1234,9 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       authFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => [{ id: 'late-race-user-track', title: 'Late User Race' }],
+        json: async () => [
+          { id: 'late-race-user-track', title: 'Late User Race' },
+        ],
       });
 
       const originalMove = MockFile.prototype.move;
@@ -908,7 +1262,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(onData).not.toHaveBeenCalled();
 
       // 2. Файл кэша не должен остаться на диске или в памяти
-      const cached = await getCachedCatalog('tracks', { userId: 1, serverUrl: 'https://puuk.app' });
+      const cached = await getCachedCatalog('tracks', {
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+      });
       expect(cached).toBeNull();
     });
 
@@ -916,7 +1273,9 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       authFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => [{ id: 'late-race-global-track', title: 'Late Global Race' }],
+        json: async () => [
+          { id: 'late-race-global-track', title: 'Late Global Race' },
+        ],
       });
 
       const originalMove = MockFile.prototype.move;
@@ -940,7 +1299,10 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
 
       expect(onData).not.toHaveBeenCalled();
 
-      const cached = await getCachedCatalog('tracks', { userId: 1, serverUrl: 'https://puuk.app' });
+      const cached = await getCachedCatalog('tracks', {
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+      });
       expect(cached).toBeNull();
     });
   });

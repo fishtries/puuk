@@ -10,9 +10,14 @@
  */
 
 import defaultAudioCache from './audioCache';
-import { getCurrentNetworkPolicy, subscribeNetworkPolicy, SAFE_NETWORK_POLICY } from './networkPolicy';
+import {
+  getCurrentNetworkPolicy,
+  subscribeNetworkPolicy,
+  SAFE_NETWORK_POLICY,
+} from './networkPolicy';
 import { SERVER_URL } from '../shared/api/api';
 import { normalizeStreamUrl } from './streamUrl';
+import { getTrackId } from '../shared/domain/trackAdapter';
 
 export const TRACK_STATUS = {
   IDLE: 'idle',
@@ -41,11 +46,13 @@ export class PreloadScheduler {
     this.maxConcurrent = options.maxConcurrent ?? 2;
     this.lookahead = options.lookahead ?? 2;
     this.cache = options.cache || defaultAudioCache;
-    this.getStreamUrl = options.getStreamUrl || ((t) => normalizeStreamUrl(t, this.serverUrl));
+    this.getStreamUrl =
+      options.getStreamUrl || ((t) => normalizeStreamUrl(t, this.serverUrl));
     this.gracePeriodMs = options.gracePeriodMs ?? GRACE_PERIOD_MS;
     this.staleSyncLimit = options.staleSyncLimit ?? STALE_SYNC_LIMIT;
     this.getNetworkPolicy = options.getNetworkPolicy || getCurrentNetworkPolicy;
-    this.subscribeNetworkPolicy = options.subscribeNetworkPolicy || subscribeNetworkPolicy;
+    this.subscribeNetworkPolicy =
+      options.subscribeNetworkPolicy || subscribeNetworkPolicy;
 
     this.queue = []; // [{ trackId, track, priority, options, epoch, promise, resolve, reject, preempted }]
     this.activeTasks = new Map(); // trackId => item
@@ -69,7 +76,10 @@ export class PreloadScheduler {
           this._onNetworkPolicyChanged(policy);
         });
       } catch (err) {
-        console.warn('[PreloadScheduler] Failed to subscribe to network policy:', err);
+        console.warn(
+          '[PreloadScheduler] Failed to subscribe to network policy:',
+          err,
+        );
       }
     }
   }
@@ -83,14 +93,20 @@ export class PreloadScheduler {
     let maxConcurrent = this.maxConcurrent;
     let lookahead = this.lookahead;
     try {
-      const rawPolicy = typeof this.getNetworkPolicy === 'function' ? this.getNetworkPolicy() : null;
+      const rawPolicy =
+        typeof this.getNetworkPolicy === 'function'
+          ? this.getNetworkPolicy()
+          : null;
       const policy = rawPolicy || SAFE_NETWORK_POLICY;
       if (policy) {
         maxConcurrent = Math.min(maxConcurrent, policy.maxConcurrent);
         lookahead = Math.min(lookahead, policy.lookahead);
       }
     } catch {
-      maxConcurrent = Math.min(maxConcurrent, SAFE_NETWORK_POLICY.maxConcurrent);
+      maxConcurrent = Math.min(
+        maxConcurrent,
+        SAFE_NETWORK_POLICY.maxConcurrent,
+      );
       lookahead = Math.min(lookahead, SAFE_NETWORK_POLICY.lookahead);
     }
     return { maxConcurrent, lookahead };
@@ -101,9 +117,10 @@ export class PreloadScheduler {
    * @param {Object|null} track
    */
   setCurrentTrack(track) {
-    const idStr = track?.id !== undefined && track?.id !== null ? String(track.id) : null;
+    const rawId = getTrackId(track);
+    const idStr = rawId !== null ? String(rawId) : null;
     this.currentTrackId = idStr;
-    if (idStr) {
+    if (idStr !== null) {
       this._clearGraceTimer(idStr);
       this.pendingCancelCount.delete(idStr);
     }
@@ -116,7 +133,11 @@ export class PreloadScheduler {
   _onNetworkPolicyChanged(_policy) {
     if (this.lastCurrentTrack !== undefined) {
       const { force: _force, ...networkOptions } = this.lastOptions || {};
-      this.syncQueue(this.lastCurrentTrack, this.lastUpNextQueue, networkOptions);
+      this.syncQueue(
+        this.lastCurrentTrack,
+        this.lastUpNextQueue,
+        networkOptions,
+      );
     } else {
       this._pump();
     }
@@ -164,9 +185,8 @@ export class PreloadScheduler {
     this.epoch += 1;
     const currentEpoch = this.epoch;
     const { force = false, ...fetchOptions } = options;
-    this.currentTrackId = (currentTrack?.id !== undefined && currentTrack?.id !== null)
-      ? String(currentTrack.id)
-      : null;
+    const currentRawId = getTrackId(currentTrack);
+    this.currentTrackId = currentRawId !== null ? String(currentRawId) : null;
     const { lookahead } = this._effectiveLimits();
 
     // Окно кандидатов: upNextQueue[0] (next, priority 1), upNextQueue[1] (next-next, priority 2)
@@ -177,8 +197,9 @@ export class PreloadScheduler {
       const window = upNextQueue.slice(0, lookahead);
       for (let i = 0; i < window.length; i++) {
         const track = window[i];
-        if (!track?.id && track?.id !== 0) continue;
-        const trackIdStr = String(track.id);
+        const rawId = getTrackId(track);
+        if (rawId === null) continue;
+        const trackIdStr = String(rawId);
         neededTrackIds.add(trackIdStr);
         candidates.push({
           trackId: trackIdStr,
@@ -220,7 +241,11 @@ export class PreloadScheduler {
     // 2. Очередь ожидания: та же политика отложенной отмены с таймером
     const remainingQueue = [];
     for (const item of Array.from(this.queue)) {
-      if (neededTrackIds.has(item.trackId) || item.trackId === this.currentTrackId || item.priority === 0) {
+      if (
+        neededTrackIds.has(item.trackId) ||
+        item.trackId === this.currentTrackId ||
+        item.priority === 0
+      ) {
         this._clearGraceTimer(item.trackId);
         this.pendingCancelCount.delete(item.trackId);
         remainingQueue.push(item);
@@ -243,12 +268,17 @@ export class PreloadScheduler {
     for (const cand of candidates) {
       this._clearGraceTimer(cand.trackId);
       this.pendingCancelCount.delete(cand.trackId);
-      const downloadState = typeof this.cache.getDownloadState === 'function'
-        ? this.cache.getDownloadState(cand.trackId)
-        : (this.cache.isCached(cand.trackId) ? { status: 'cached' } : { status: 'idle' });
+      const downloadState =
+        typeof this.cache.getDownloadState === 'function'
+          ? this.cache.getDownloadState(cand.trackId)
+          : this.cache.isCached(cand.trackId)
+            ? { status: 'cached' }
+            : { status: 'idle' };
 
       if (downloadState.status === 'cached') {
-        this._setStatus(cand.trackId, TRACK_STATUS.READY, { uri: downloadState.uri });
+        this._setStatus(cand.trackId, TRACK_STATUS.READY, {
+          uri: downloadState.uri,
+        });
         continue;
       }
 
@@ -273,21 +303,28 @@ export class PreloadScheduler {
             })
             .catch((err) => {
               if (this.getStatus(cand.trackId) === TRACK_STATUS.DOWNLOADING) {
-                this._setStatus(cand.trackId, TRACK_STATUS.FAILED, { error: err });
+                this._setStatus(cand.trackId, TRACK_STATUS.FAILED, {
+                  error: err,
+                });
               }
             });
         }
         continue;
       }
 
-      const existingInQueue = this.queue.find(q => q.trackId === cand.trackId);
+      const existingInQueue = this.queue.find(
+        (q) => q.trackId === cand.trackId,
+      );
       if (existingInQueue) {
         // Обновляем приоритет и эпоху
         existingInQueue.priority = cand.priority;
         existingInQueue.epoch = currentEpoch;
       } else {
         const currentStatus = this.getStatus(cand.trackId);
-        if (currentStatus !== TRACK_STATUS.DOWNLOADING && currentStatus !== TRACK_STATUS.READY) {
+        if (
+          currentStatus !== TRACK_STATUS.DOWNLOADING &&
+          currentStatus !== TRACK_STATUS.READY
+        ) {
           let resolveFn, rejectFn;
           const promise = new Promise((res, rej) => {
             resolveFn = res;
@@ -324,13 +361,14 @@ export class PreloadScheduler {
    * @returns {Promise<string>}
    */
   async preloadImmediate(track, options = {}) {
-    if (!track?.id && track?.id !== 0) throw new Error('Track must have an id');
-    const trackIdStr = String(track.id);
-    const activeCurrentId = options.currentTrackId !== undefined && options.currentTrackId !== null
-      ? String(options.currentTrackId)
-      : this.currentTrackId;
+    const rawId = getTrackId(track);
+    if (rawId === null) throw new Error('Track must have an id');
+    const trackIdStr = String(rawId);
+    const rawCurrentId = getTrackId(options.currentTrackId);
+    const activeCurrentId =
+      rawCurrentId !== null ? String(rawCurrentId) : this.currentTrackId;
 
-    if (activeCurrentId) {
+    if (activeCurrentId !== null) {
       this.currentTrackId = activeCurrentId;
       this._clearGraceTimer(activeCurrentId);
       this.pendingCancelCount.delete(activeCurrentId);
@@ -339,8 +377,9 @@ export class PreloadScheduler {
     // Срочная загрузка освобождает полосу от задач, уже выпавших из окна.
     // Защита: текущий трек (activeCurrentId / this.currentTrackId) и сам целевой трек НЕ отменяются.
     for (const [staleTrackId] of Array.from(this.graceTimers.entries())) {
-      const staleTask = this.activeTasks.get(staleTrackId)
-        || this.queue.find((item) => item.trackId === staleTrackId);
+      const staleTask =
+        this.activeTasks.get(staleTrackId) ||
+        this.queue.find((item) => item.trackId === staleTrackId);
       if (
         !staleTask ||
         staleTrackId === trackIdStr ||
@@ -372,14 +411,19 @@ export class PreloadScheduler {
     }
 
     // 3. Если трек уже скачивается в AudioCache напрямую:
-    const downloadState = typeof this.cache.getDownloadState === 'function'
-      ? this.cache.getDownloadState(trackIdStr)
-      : null;
+    const downloadState =
+      typeof this.cache.getDownloadState === 'function'
+        ? this.cache.getDownloadState(trackIdStr)
+        : null;
 
-    if (downloadState && downloadState.status === 'downloading' && downloadState.promise) {
+    if (
+      downloadState &&
+      downloadState.status === 'downloading' &&
+      downloadState.promise
+    ) {
       this._setStatus(trackIdStr, TRACK_STATUS.DOWNLOADING);
       // Если стоял в очереди ожидания, удаляем, так как он уже скачивается
-      this.queue = this.queue.filter(q => q.trackId !== trackIdStr);
+      this.queue = this.queue.filter((q) => q.trackId !== trackIdStr);
       try {
         const uri = await downloadState.promise;
         this._setStatus(trackIdStr, TRACK_STATUS.READY, { uri });
@@ -391,7 +435,7 @@ export class PreloadScheduler {
     }
 
     // 4. Если трек уже есть в очереди ожидания: повышаем приоритет до 0
-    const existingInQueue = this.queue.find(q => q.trackId === trackIdStr);
+    const existingInQueue = this.queue.find((q) => q.trackId === trackIdStr);
     if (existingInQueue) {
       existingInQueue.priority = 0;
       if (options) {
@@ -434,8 +478,9 @@ export class PreloadScheduler {
    * @returns {string} TRACK_STATUS
    */
   getStatus(trackId) {
-    if (!trackId && trackId !== 0) return TRACK_STATUS.IDLE;
-    const trackIdStr = String(trackId);
+    const rawId = getTrackId(trackId);
+    if (rawId === null) return TRACK_STATUS.IDLE;
+    const trackIdStr = String(rawId);
 
     if (this.cache.isCached(trackIdStr)) {
       return TRACK_STATUS.READY;
@@ -445,7 +490,10 @@ export class PreloadScheduler {
       return this.statuses.get(trackIdStr);
     }
 
-    if (typeof this.cache.isDownloading === 'function' && this.cache.isDownloading(trackIdStr)) {
+    if (
+      typeof this.cache.isDownloading === 'function' &&
+      this.cache.isDownloading(trackIdStr)
+    ) {
       return TRACK_STATUS.DOWNLOADING;
     }
 
@@ -458,8 +506,9 @@ export class PreloadScheduler {
    * @returns {Error|null}
    */
   getError(trackId) {
-    if (!trackId && trackId !== 0) return null;
-    return this.errors.get(String(trackId)) || null;
+    const rawId = getTrackId(trackId);
+    if (rawId === null) return null;
+    return this.errors.get(String(rawId)) || null;
   }
 
   /**
@@ -558,7 +607,10 @@ export class PreloadScheduler {
 
     if (status === TRACK_STATUS.FAILED && extra.error) {
       this.errors.set(trackIdStr, extra.error);
-    } else if (status === TRACK_STATUS.READY || status === TRACK_STATUS.QUEUED) {
+    } else if (
+      status === TRACK_STATUS.READY ||
+      status === TRACK_STATUS.QUEUED
+    ) {
       this.errors.delete(trackIdStr);
     }
 
@@ -640,7 +692,11 @@ export class PreloadScheduler {
     const streamUrl = this.getStreamUrl(item.track);
 
     try {
-      const uri = await this.cache.getOrFetch(item.trackId, streamUrl, item.options);
+      const uri = await this.cache.getOrFetch(
+        item.trackId,
+        streamUrl,
+        item.options,
+      );
       if (item.attemptToken !== attemptId) {
         // Попытка была вытеснена или отменена до завершения; игнорируем устаревший результат
         return;
@@ -664,7 +720,10 @@ export class PreloadScheduler {
         item.reject(err);
       }
     } finally {
-      if (this.activeTasks.get(item.trackId) === item && item.attemptToken === attemptId) {
+      if (
+        this.activeTasks.get(item.trackId) === item &&
+        item.attemptToken === attemptId
+      ) {
         this.activeTasks.delete(item.trackId);
         this._pump();
       }

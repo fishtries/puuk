@@ -121,7 +121,9 @@ describe('AppleLyricsView', () => {
 
     let renderer;
     await act(async () => {
-      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={12} />);
+      renderer = TestRenderer.create(
+        <AppleLyricsView {...defaultProps} currentTime={12} />,
+      );
     });
 
     await act(async () => {
@@ -146,10 +148,9 @@ describe('AppleLyricsView', () => {
   });
 
   it('tapping on a line triggers seekTo', async () => {
-    const lrcContent = [
-      '[00:05.00]First line',
-      '[00:10.00]Second line',
-    ].join('\n');
+    const lrcContent = ['[00:05.00]First line', '[00:10.00]Second line'].join(
+      '\n',
+    );
 
     authFetch.mockResolvedValueOnce({
       json: async () => ({
@@ -200,7 +201,9 @@ describe('AppleLyricsView', () => {
     const animatedLines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(animatedLines).toHaveLength(0);
 
-    const texts = renderer.root.findAll((node) => node.type === 'Text' && node.props.children === 'Plain line 1');
+    const texts = renderer.root.findAll(
+      (node) => node.type === 'Text' && node.props.children === 'Plain line 1',
+    );
     expect(texts.length).toBeGreaterThan(0);
   });
 
@@ -220,7 +223,142 @@ describe('AppleLyricsView', () => {
       jest.runAllTimers();
     });
 
-    const noLyrics = renderer.root.findAll((node) => node.type === 'Text' && node.props.children === 'Lyrics not found');
+    const noLyrics = renderer.root.findAll(
+      (node) =>
+        node.type === 'Text' && node.props.children === 'Lyrics not found',
+    );
     expect(noLyrics).toHaveLength(1);
+  });
+
+  it('loads lyrics correctly for legacy track_id-only records', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: '[00:01.00]Legacy lyrics line',
+        isSynced: true,
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          currentTrack={{ track_id: 'legacy-track-99', title: 'Legacy Song' }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/tracks/legacy-track-99/lyrics',
+    );
+    const lyricLines = renderer.root.findAllByType(AnimatedLyricLine);
+    expect(lyricLines).toHaveLength(1);
+  });
+
+  it('loads lyrics correctly for numeric id 0', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: '[00:01.00]Zero id lyrics line',
+        isSynced: true,
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          currentTrack={{ id: 0, title: 'Zero Track' }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics');
+    const lyricLines = renderer.root.findAllByType(AnimatedLyricLine);
+    expect(lyricLines).toHaveLength(1);
+  });
+
+  it('loads lyrics correctly when id is blank whitespace by falling back to track_id', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: '[00:01.00]Whitespace fallback line',
+        isSynced: true,
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          currentTrack={{
+            id: '   ',
+            track_id: 'fallback-77',
+            title: 'Fallback Track',
+          }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/fallback-77/lyrics');
+  });
+
+  it('resets and re-fetches lyrics when currentTrack changes between legacy IDs and id 0', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: '[00:01.00]First track line',
+        isSynced: true,
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          currentTrack={{ track_id: 'leg-first', title: 'Track 1' }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/leg-first/lyrics');
+
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: '[00:02.00]Zero track line',
+        isSynced: true,
+      }),
+    });
+
+    await act(async () => {
+      renderer.update(
+        <AppleLyricsView
+          {...defaultProps}
+          currentTrack={{ id: 0, title: 'Zero Track' }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics');
   });
 });

@@ -1,8 +1,16 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { DeviceEventEmitter, RefreshControl, ActivityIndicator } from 'react-native';
+import {
+  DeviceEventEmitter,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import LibraryScreen from '../LibraryScreen';
-import { fetchCatalogWithCache, setCachedCatalog, removeCachedCatalog } from '../../../shared/api/apiCache';
+import {
+  fetchCatalogWithCache,
+  setCachedCatalog,
+  removeCachedCatalog,
+} from '../../../shared/api/apiCache';
 import { authFetch } from '../../../shared/api/api';
 
 jest.mock('../../../shared/api/api', () => ({
@@ -54,15 +62,30 @@ describe('LibraryScreen', () => {
   };
 
   const sampleFavorites = [
-    { id: 'fav-1', title: 'Favorite Song 1', artist: 'Artist 1', coverArt: 'https://puuk.app/api/cover/fav-1' },
+    {
+      id: 'fav-1',
+      title: 'Favorite Song 1',
+      artist: 'Artist 1',
+      coverArt: 'https://puuk.app/api/cover/fav-1',
+    },
   ];
 
   const samplePlaylists = [
-    { id: 'pl-1', name: 'Chill Vibes', track_count: 5, coverArt: 'https://puuk.app/api/cover/pl-1' },
+    {
+      id: 'pl-1',
+      name: 'Chill Vibes',
+      track_count: 5,
+      coverArt: 'https://puuk.app/api/cover/pl-1',
+    },
   ];
 
   const sampleHistory = [
-    { id: 'hist-1', title: 'Recent Song 1', artist: 'Artist 2', played_at: new Date().toISOString() },
+    {
+      id: 'hist-1',
+      title: 'Recent Song 1',
+      artist: 'Artist 2',
+      played_at: new Date().toISOString(),
+    },
   ];
 
   beforeEach(() => {
@@ -89,7 +112,7 @@ describe('LibraryScreen', () => {
         <LibraryScreen
           navigation={mockNavigation}
           currentUser={{ id: 1, name: 'Alice' }}
-        />
+        />,
       );
     });
 
@@ -98,10 +121,14 @@ describe('LibraryScreen', () => {
     expect(indicators).toHaveLength(0);
 
     // Проверяем наличие текста из кэша
-    const playlistNodes = renderer.root.findAll((node) => node.props.children === 'Chill Vibes');
+    const playlistNodes = renderer.root.findAll(
+      (node) => node.props.children === 'Chill Vibes',
+    );
     expect(playlistNodes.length).toBeGreaterThan(0);
 
-    const historyNodes = renderer.root.findAll((node) => node.props.children === 'Recent Song 1');
+    const historyNodes = renderer.root.findAll(
+      (node) => node.props.children === 'Recent Song 1',
+    );
     expect(historyNodes.length).toBeGreaterThan(0);
   });
 
@@ -110,7 +137,9 @@ describe('LibraryScreen', () => {
     fetchCatalogWithCache.mockImplementation(async (endpoint, options) => {
       if (endpoint === '/api/history') {
         historyCallback = options.onData;
-        options.onData([{ id: 'hist-initial', title: 'Cached Song', artist: 'Artist' }]);
+        options.onData([
+          { id: 'hist-initial', title: 'Cached Song', artist: 'Artist' },
+        ]);
       }
       return { data: [], fromCache: true, isStale: true };
     });
@@ -118,24 +147,30 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Cached Song').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Cached Song').length,
+    ).toBeGreaterThan(0);
 
     // Приходят свежие данные по сети
     await act(async () => {
       if (historyCallback) {
-        historyCallback([{ id: 'hist-fresh', title: 'Network Fresh Song', artist: 'Artist' }]);
+        historyCallback([
+          { id: 'hist-fresh', title: 'Network Fresh Song', artist: 'Artist' },
+        ]);
       }
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Cached Song').length).toBe(0);
-    expect(renderer.root.findAll((n) => n.props.children === 'Network Fresh Song').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Cached Song').length,
+    ).toBe(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Network Fresh Song')
+        .length,
+    ).toBeGreaterThan(0);
   });
 
   it('частичный сбой одного ресурса (/api/history) не ломает отображение остальных (Promise.allSettled)', async () => {
@@ -157,10 +192,7 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
@@ -169,8 +201,12 @@ describe('LibraryScreen', () => {
     expect(indicators).toHaveLength(0);
 
     // Плейлисты и избранное должны успешно отрендериться
-    expect(renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length).toBeGreaterThan(0);
-    expect(renderer.root.findAll((n) => n.props.children === 'Favorites').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length,
+    ).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Favorites').length,
+    ).toBeGreaterThan(0);
   });
 
   it('pull-to-refresh передаёт forceRefresh=true во все 3 вызова fetchCatalogWithCache', async () => {
@@ -182,10 +218,7 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
@@ -202,15 +235,15 @@ describe('LibraryScreen', () => {
     expect(fetchCatalogWithCache).toHaveBeenCalledTimes(3);
     expect(fetchCatalogWithCache).toHaveBeenCalledWith(
       '/api/favorites',
-      expect.objectContaining({ forceRefresh: true, userId: 1 })
+      expect.objectContaining({ forceRefresh: true, userId: 1 }),
     );
     expect(fetchCatalogWithCache).toHaveBeenCalledWith(
       '/api/playlists',
-      expect.objectContaining({ forceRefresh: true, userId: 1 })
+      expect.objectContaining({ forceRefresh: true, userId: 1 }),
     );
     expect(fetchCatalogWithCache).toHaveBeenCalledWith(
       '/api/history',
-      expect.objectContaining({ forceRefresh: true, userId: 1 })
+      expect.objectContaining({ forceRefresh: true, userId: 1 }),
     );
   });
 
@@ -233,10 +266,7 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
@@ -246,10 +276,7 @@ describe('LibraryScreen', () => {
     // Смена пользователя на User 2
     await act(async () => {
       renderer.update(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 2 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 2 }} />,
       );
     });
 
@@ -257,7 +284,10 @@ describe('LibraryScreen', () => {
     expect(capturedUser1Signal.aborted).toBe(true);
 
     // В интерфейсе должны быть данные User 2
-    expect(renderer.root.findAll((n) => n.props.children === 'User 2 Playlist').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'User 2 Playlist')
+        .length,
+    ).toBeGreaterThan(0);
   });
 
   it('при logout (currentUser=null) списки очищаются и запросы не выполняются', async () => {
@@ -269,28 +299,26 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length,
+    ).toBeGreaterThan(0);
 
     fetchCatalogWithCache.mockClear();
 
     // Logout
     await act(async () => {
       renderer.update(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={null}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={null} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length).toBe(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Chill Vibes').length,
+    ).toBe(0);
     expect(fetchCatalogWithCache).not.toHaveBeenCalled();
   });
 
@@ -309,18 +337,20 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length,
+    ).toBeGreaterThan(0);
 
     // Находим кнопку лайка
     const likeButtons = renderer.root.findAll(
-      (node) => node.props.style && node.props.style.padding === 6 && typeof node.props.onPress === 'function'
+      (node) =>
+        node.props.style &&
+        node.props.style.padding === 6 &&
+        typeof node.props.onPress === 'function',
     );
     expect(likeButtons.length).toBeGreaterThan(0);
 
@@ -332,11 +362,11 @@ describe('LibraryScreen', () => {
     expect(setCachedCatalog).toHaveBeenCalledWith(
       'favorites',
       expect.any(Array),
-      expect.objectContaining({ userId: 1 })
+      expect.objectContaining({ userId: 1 }),
     );
     expect(authFetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/tracks/'),
-      expect.objectContaining({ method: expect.stringMatching(/POST|DELETE/) })
+      expect.objectContaining({ method: expect.stringMatching(/POST|DELETE/) }),
     );
   });
 
@@ -354,25 +384,26 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length,
+    ).toBeGreaterThan(0);
 
     // Генерируем событие удаления трека
     await act(async () => {
       DeviceEventEmitter.emit('PUUK_TRACK_DELETED', { id: 'hist-1' });
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length).toBe(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length,
+    ).toBe(0);
     expect(setCachedCatalog).toHaveBeenCalledWith(
       'history',
       [],
-      expect.objectContaining({ userId: 1 })
+      expect.objectContaining({ userId: 1 }),
     );
   });
 
@@ -387,25 +418,195 @@ describe('LibraryScreen', () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
-        <LibraryScreen
-          navigation={mockNavigation}
-          currentUser={{ id: 1 }}
-        />
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
       );
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Recent Song 1').length,
+    ).toBeGreaterThan(0);
 
     // Генерируем событие обновления трека
     await act(async () => {
-      DeviceEventEmitter.emit('PUUK_TRACK_UPDATED', { id: 'hist-1', title: 'Renamed Song' });
+      DeviceEventEmitter.emit('PUUK_TRACK_UPDATED', {
+        id: 'hist-1',
+        title: 'Renamed Song',
+      });
     });
 
-    expect(renderer.root.findAll((n) => n.props.children === 'Renamed Song').length).toBeGreaterThan(0);
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Renamed Song').length,
+    ).toBeGreaterThan(0);
     expect(setCachedCatalog).toHaveBeenCalledWith(
       'history',
-      expect.arrayContaining([expect.objectContaining({ id: 'hist-1', title: 'Renamed Song' })]),
-      expect.objectContaining({ userId: 1 })
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'hist-1', title: 'Renamed Song' }),
+      ]),
+      expect.objectContaining({ userId: 1 }),
+    );
+  });
+
+  it('нормализует legacy track_id, сохраняет все поля и генерирует fallback coverArt', async () => {
+    let historyTransform;
+    fetchCatalogWithCache.mockImplementation(async (endpoint, options) => {
+      if (endpoint === '/api/history') {
+        historyTransform = options.transform;
+        const rawTracks = [
+          {
+            track_id: 'legacy-hist-99',
+            title: 'Vintage Track',
+            artist: 'Vintage Artist',
+            album: 'Cassette Master',
+            year: 1989,
+            genre: 'Retrowave',
+            duration: 240,
+            played_at: new Date().toISOString(),
+          },
+        ];
+        const transformed = options.transform(rawTracks);
+        if (options.onData) options.onData(transformed);
+      }
+      return { data: [] };
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
+      );
+    });
+
+    // Check transformation
+    expect(historyTransform).toBeDefined();
+    const rawSingle = [
+      {
+        track_id: 'sample-raw-1',
+        title: 'Raw Title',
+        album: 'Preserved Album',
+        year: 2020,
+      },
+    ];
+    const transformed = historyTransform(rawSingle);
+    expect(transformed[0].id).toBe('sample-raw-1');
+    expect(transformed[0].track_id).toBe('sample-raw-1');
+    expect(transformed[0].album).toBe('Preserved Album');
+    expect(transformed[0].year).toBe(2020);
+    expect(transformed[0].coverArt).toBe(
+      'https://puuk.app/api/cover/sample-raw-1',
+    );
+
+    // Check rendered elements
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Vintage Track').length,
+    ).toBeGreaterThan(0);
+    const coverImage = renderer.root.findByProps({
+      source: 'https://puuk.app/api/cover/legacy-hist-99',
+    });
+    expect(coverImage).toBeDefined();
+  });
+
+  it('корректно формирует fallback coverArt для трека с числовым ID 0', async () => {
+    fetchCatalogWithCache.mockImplementation(async (endpoint, options) => {
+      if (endpoint === '/api/history') {
+        const rawTracks = [
+          {
+            id: 0,
+            title: 'Zero ID Track',
+            artist: 'Zero Artist',
+            played_at: new Date().toISOString(),
+          },
+        ];
+        const transformed = options.transform
+          ? options.transform(rawTracks)
+          : rawTracks;
+        if (options.onData) options.onData(transformed);
+      }
+      return { data: [] };
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <LibraryScreen navigation={mockNavigation} currentUser={{ id: 1 }} />,
+      );
+    });
+
+    expect(
+      renderer.root.findAll((n) => n.props.children === 'Zero ID Track').length,
+    ).toBeGreaterThan(0);
+    const coverImage = renderer.root.findByProps({
+      source: 'https://puuk.app/api/cover/0',
+    });
+    expect(coverImage).toBeDefined();
+  });
+
+  it('треки с отсутствующим ID не считаются играющими при невалидном currentTrack, а совпадающие ID подсвечиваются', async () => {
+    fetchCatalogWithCache.mockImplementation(async (endpoint, options) => {
+      if (endpoint === '/api/history') {
+        const rawTracks = [
+          { id: 'track-playing', title: 'Playing Song', artist: 'Artist' },
+          { id: 'track-other', title: 'Other Song', artist: 'Artist' },
+        ];
+        const transformed = options.transform
+          ? options.transform(rawTracks)
+          : rawTracks;
+        if (options.onData) options.onData(transformed);
+      }
+      return { data: [] };
+    });
+
+    // 1. С невалидным / отсутствующим currentTrack (id: null или {})
+    let rendererInvalid;
+    await act(async () => {
+      rendererInvalid = TestRenderer.create(
+        <LibraryScreen
+          navigation={mockNavigation}
+          currentUser={{ id: 1 }}
+          currentTrack={{ id: null }}
+        />,
+      );
+    });
+
+    // Ни один трек не должен быть подсвечен акцентным цветом активного воспроизведения
+    const playingTitleInvalid = rendererInvalid.root.findByProps({
+      children: 'Playing Song',
+    });
+    expect(playingTitleInvalid.props.style).not.toContainEqual(
+      expect.objectContaining({ color: '#FFDAB9' }),
+    );
+
+    const otherTitleInvalid = rendererInvalid.root.findByProps({
+      children: 'Other Song',
+    });
+    expect(otherTitleInvalid.props.style).not.toContainEqual(
+      expect.objectContaining({ color: '#FFDAB9' }),
+    );
+
+    // 2. С валидным currentTrack в форме track_id, совпадающим с canonical id
+    let rendererPlaying;
+    await act(async () => {
+      rendererPlaying = TestRenderer.create(
+        <LibraryScreen
+          navigation={mockNavigation}
+          currentUser={{ id: 1 }}
+          currentTrack={{ track_id: 'track-playing' }}
+        />,
+      );
+    });
+
+    // Трек с совпадающим ID подсвечивается, а другой нет
+    const playingTitleValid = rendererPlaying.root.findByProps({
+      children: 'Playing Song',
+    });
+    expect(playingTitleValid.props.style).toContainEqual(
+      expect.objectContaining({ color: '#FFDAB9' }),
+    );
+
+    const otherTitleValid = rendererPlaying.root.findByProps({
+      children: 'Other Song',
+    });
+    expect(otherTitleValid.props.style).not.toContainEqual(
+      expect.objectContaining({ color: '#FFDAB9' }),
     );
   });
 });

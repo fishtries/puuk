@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   View,
@@ -7,8 +14,15 @@ import {
   ActivityIndicator,
   DeviceEventEmitter,
 } from 'react-native';
-import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
-import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context';
+import {
+  NavigationContainer,
+  useNavigationContainerRef,
+} from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
@@ -20,7 +34,11 @@ import Animated, {
   Extrapolation,
   Easing,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 
 import FullPlayerModal from './components/FullPlayerModal';
 import MiniPlayerBar from './components/fullplayer/MiniPlayerBar';
@@ -33,8 +51,21 @@ import LoginModal from './features/auth/LoginModal';
 import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
-import { authFetch, checkAuth, addAuthListener, SERVER_URL, setServerUrl } from './shared/api/api';
-import { loadSettings, getSavedLastTrack, setSavedLastTrack, getSettings, addSettingsListener } from './shared/storage/settings';
+import {
+  authFetch,
+  checkAuth,
+  addAuthListener,
+  SERVER_URL,
+  setServerUrl,
+} from './shared/api/api';
+import {
+  loadSettings,
+  getSavedLastTrack,
+  setSavedLastTrack,
+  getSettings,
+  addSettingsListener,
+} from './shared/storage/settings';
+import { getTrackId, areTrackIdsEqual } from './shared/domain/trackAdapter';
 import defaultAudioCache from './utils/audioCache';
 
 const { width, height } = Dimensions.get('window');
@@ -46,7 +77,9 @@ function AppContent() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [isAuthModalVisible, setIsAuthModalVisible] = useState(false);
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -109,17 +142,30 @@ function AppContent() {
   setTracksRef.current = setTracks;
 
   useEffect(() => {
-    const subUpdated = DeviceEventEmitter.addListener('PUUK_TRACK_UPDATED', (updated) => {
-      setTracks((prev) =>
-        prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
-      );
-      if (currentTrack && currentTrack.id === updated.id) {
-        setCurrentTrack((prev) => (prev ? { ...prev, ...updated } : prev));
-      }
-    });
-    const subDeleted = DeviceEventEmitter.addListener('PUUK_TRACK_DELETED', ({ id }) => {
-      setTracks((prev) => prev.filter((t) => t.id !== id));
-    });
+    const subUpdated = DeviceEventEmitter.addListener(
+      'PUUK_TRACK_UPDATED',
+      (updated) => {
+        if (getTrackId(updated) === null) return;
+        setTracks((prev) =>
+          prev.map((t) =>
+            areTrackIdsEqual(t, updated) ? { ...t, ...updated } : t,
+          ),
+        );
+        if (areTrackIdsEqual(currentTrack, updated)) {
+          setCurrentTrack((prev) => (prev ? { ...prev, ...updated } : prev));
+        }
+      },
+    );
+    const subDeleted = DeviceEventEmitter.addListener(
+      'PUUK_TRACK_DELETED',
+      (payload) => {
+        const deletedId = getTrackId(payload);
+        if (deletedId === null) return;
+        setTracks((prev) =>
+          prev.filter((t) => !areTrackIdsEqual(t, deletedId)),
+        );
+      },
+    );
     return () => {
       subUpdated.remove();
       subDeleted.remove();
@@ -132,8 +178,7 @@ function AppContent() {
   const nextTrack = useMemo(() => {
     if (controllerNextTrack) return controllerNextTrack;
     if (!activeTrack || !tracks || tracks.length === 0) return null;
-    const activeId = activeTrack.id ?? activeTrack.track_id;
-    const idx = tracks.findIndex((t) => (t.id ?? t.track_id) === activeId);
+    const idx = tracks.findIndex((t) => areTrackIdsEqual(t, activeTrack));
     if (idx >= 0 && idx < tracks.length - 1) return tracks[idx + 1];
     return null;
   }, [controllerNextTrack, activeTrack, tracks]);
@@ -141,8 +186,7 @@ function AppContent() {
   const previousTrack = useMemo(() => {
     if (controllerPrevTrack) return controllerPrevTrack;
     if (!activeTrack || !tracks || tracks.length === 0) return null;
-    const activeId = activeTrack.id ?? activeTrack.track_id;
-    const idx = tracks.findIndex((t) => (t.id ?? t.track_id) === activeId);
+    const idx = tracks.findIndex((t) => areTrackIdsEqual(t, activeTrack));
     if (idx > 0) return tracks[idx - 1];
     return null;
   }, [controllerPrevTrack, activeTrack, tracks]);
@@ -233,21 +277,27 @@ function AppContent() {
       expandProgress.value,
       [0, 1],
       [0, -cardTravel],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
-    const dragProg = Math.min(1, Math.max(0, dismissDragY.value / bottomBarHeight));
-    const effectiveDismiss = Math.min(1, Math.max(dismissProgress.value, dragProg));
+    const dragProg = Math.min(
+      1,
+      Math.max(0, dismissDragY.value / bottomBarHeight),
+    );
+    const effectiveDismiss = Math.min(
+      1,
+      Math.max(dismissProgress.value, dragProg),
+    );
     const bottom = interpolate(
       effectiveDismiss,
       [0, 1],
       [bottomBarHeight, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const borderRadius = interpolate(
       effectiveDismiss,
       [0, 1],
       [32, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       bottom,
@@ -259,19 +309,25 @@ function AppContent() {
 
   // Анимация затухания светящейся границы при раскрытии плеера или скрытии мини-плеера
   const glowBoundaryAnimatedStyle = useAnimatedStyle(() => {
-    const dragProg = Math.min(1, Math.max(0, dismissDragY.value / bottomBarHeight));
-    const effectiveDismiss = Math.min(1, Math.max(dismissProgress.value, dragProg));
+    const dragProg = Math.min(
+      1,
+      Math.max(0, dismissDragY.value / bottomBarHeight),
+    );
+    const effectiveDismiss = Math.min(
+      1,
+      Math.max(dismissProgress.value, dragProg),
+    );
     const dismissOpacity = interpolate(
       effectiveDismiss,
       [0, 0.3],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const expandOpacity = interpolate(
       expandProgress.value,
       [0, 0.15],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity: dismissOpacity * expandOpacity,
@@ -284,13 +340,13 @@ function AppContent() {
       dismissProgress.value,
       [0, 1],
       [0, bottomBarHeight + 20],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const opacity = interpolate(
       dismissProgress.value,
       [0, 0.7],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       transform: [{ translateY: dismissTranslateY + dismissDragY.value }],
@@ -317,7 +373,13 @@ function AppContent() {
     } else if (nextTrack) {
       playTrack(nextTrack);
     }
-  }, [fetchNextTrack, playTrack, upNextQueue.length, nextTrack, isSwipingTrack]);
+  }, [
+    fetchNextTrack,
+    playTrack,
+    upNextQueue.length,
+    nextTrack,
+    isSwipingTrack,
+  ]);
 
   const handleSwipePrevComplete = useCallback(() => {
     isSwipingTrack.value = false;
@@ -340,7 +402,10 @@ function AppContent() {
         'worklet';
         if (event.translationY < 0) {
           dismissDragY.value = 0;
-          const prog = Math.min(1, Math.max(0, -event.translationY / (height * 0.75)));
+          const prog = Math.min(
+            1,
+            Math.max(0, -event.translationY / (height * 0.75)),
+          );
           expandProgress.value = prog;
         } else {
           expandProgress.value = 0;
@@ -409,7 +474,7 @@ function AppContent() {
               if (finished) {
                 runOnJS(handleSwipeNextComplete)();
               }
-            }
+            },
           );
         } else if ((dx > threshold || vx > 350) && hasPrevTrack.value) {
           trackSwipeX.value = withTiming(
@@ -420,7 +485,7 @@ function AppContent() {
               if (finished) {
                 runOnJS(handleSwipePrevComplete)();
               }
-            }
+            },
           );
         } else {
           trackSwipeX.value = withSpring(
@@ -431,7 +496,7 @@ function AppContent() {
               if (finished) {
                 isSwipingTrack.value = false;
               }
-            }
+            },
           );
         }
       });
@@ -457,7 +522,6 @@ function AppContent() {
       togglePlayPause();
     }
   }, [currentTrack, tracks, playTrack, startWave, togglePlayPause]);
-
 
   // Последовательная инициализация настроек и авторизации при старте приложения
   useEffect(() => {
@@ -507,13 +571,15 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (currentTrack && currentTrack.id) {
+    if (getTrackId(currentTrack) !== null) {
       setSavedLastTrack(currentTrack);
     }
   }, [currentTrack]);
 
   if (isAuthChecking) {
-    return <AppAuthGate isChecking={isAuthChecking} currentUser={currentUser} />;
+    return (
+      <AppAuthGate isChecking={isAuthChecking} currentUser={currentUser} />
+    );
   }
 
   if (!currentUser) {
@@ -527,7 +593,9 @@ function AppContent() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: PLAYER_BACKGROUND_COLOR }}>
+    <GestureHandlerRootView
+      style={{ flex: 1, backgroundColor: PLAYER_BACKGROUND_COLOR }}
+    >
       <StatusBar style="light" />
 
       {/* СЛОЙ 0 (ПОДЛОЖКА): Плеер на весь экран под карточкой */}

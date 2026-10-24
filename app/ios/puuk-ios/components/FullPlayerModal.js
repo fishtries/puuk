@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from 'react';
 import {
   View,
   Text,
@@ -11,6 +18,7 @@ import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import CoverImage, { prefetchCover } from '../shared/media/CoverImage';
+import { areTrackIdsEqual, getTrackId } from '../shared/domain/trackAdapter';
 
 import Animated, {
   useSharedValue,
@@ -24,14 +32,17 @@ import Animated, {
   cancelAnimation,
   ReduceMotion,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 
 import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
 import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
-import { MenuView } from '@react-native-menu/menu';
-import TrackLoadingBadge from './fullplayer/TrackLoadingBadge';
+import PlayerHeader from './fullplayer/PlayerHeader';
 import styles from './fullplayer/playerStyles';
 
 const { width, height } = Dimensions.get('window');
@@ -71,9 +82,12 @@ const FullPlayerModal = ({
   isBufferingSlow = false,
   onRetryPreload,
 }) => {
-  const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
-  const insets = propInsets || initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
-  const effectiveBottomBarHeight = bottomBarHeight || (64 + (insets.bottom || 34));
+  const trackIsLiked =
+    isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
+  const insets = propInsets ||
+    initialWindowMetrics?.insets || { top: 47, bottom: 34, left: 0, right: 0 };
+  const effectiveBottomBarHeight =
+    bottomBarHeight || 64 + (insets.bottom || 34);
   const effectiveTopInset = insets?.top || 47;
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const [isSliding, setIsSliding] = useState(false);
@@ -170,7 +184,9 @@ const FullPlayerModal = ({
   // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт)
   useEffect(() => {
     if (isPlayerVisible && !isSliding && duration > 0) {
-      slideProgressShared.value = withTiming(currentTime / duration, { duration: 250 });
+      slideProgressShared.value = withTiming(currentTime / duration, {
+        duration: 250,
+      });
     }
   }, [currentTime, duration, isSliding, isPlayerVisible]);
 
@@ -241,7 +257,7 @@ const FullPlayerModal = ({
       .onUpdate((event) => {
         'worklet';
         if (event.translationY >= 0) {
-          const prog = Math.max(0, 1 - (event.translationY / (height * 0.75)));
+          const prog = Math.max(0, 1 - event.translationY / (height * 0.75));
           expandProgress.value = prog;
         }
       })
@@ -267,7 +283,11 @@ const FullPlayerModal = ({
       .onFinalize((event, success) => {
         'worklet';
         if (isClosingShared.value) return;
-        if (!success && expandProgress.value < 0.99 && expandProgress.value > 0.01) {
+        if (
+          !success &&
+          expandProgress.value < 0.99 &&
+          expandProgress.value > 0.01
+        ) {
           expandProgress.value = withSpring(1, {
             damping: 28,
             stiffness: 220,
@@ -279,13 +299,12 @@ const FullPlayerModal = ({
   };
 
   const effectiveNextTrack = useMemo(() => {
-    const curId = currentTrack?.id ?? currentTrack?.track_id;
-    if (nextTrack && (nextTrack.id ?? nextTrack.track_id) !== curId) {
+    if (nextTrack && !areTrackIdsEqual(nextTrack, currentTrack)) {
       return nextTrack;
     }
     if (upNextQueue && upNextQueue.length > 0) {
       const candidate = upNextQueue[0];
-      if ((candidate?.id ?? candidate?.track_id) !== curId) {
+      if (!areTrackIdsEqual(candidate, currentTrack)) {
         return candidate;
       }
     }
@@ -293,13 +312,12 @@ const FullPlayerModal = ({
   }, [nextTrack, upNextQueue, currentTrack]);
 
   const effectivePrevTrack = useMemo(() => {
-    const curId = currentTrack?.id ?? currentTrack?.track_id;
-    if (previousTrack && (previousTrack.id ?? previousTrack.track_id) !== curId) {
+    if (previousTrack && !areTrackIdsEqual(previousTrack, currentTrack)) {
       return previousTrack;
     }
     if (history && history.length > 0) {
       const candidate = history[history.length - 1];
-      if ((candidate?.id ?? candidate?.track_id) !== curId) {
+      if (!areTrackIdsEqual(candidate, currentTrack)) {
         return candidate;
       }
     }
@@ -365,7 +383,7 @@ const FullPlayerModal = ({
     transitionDirection.value = 0;
     isTransitioningShared.value = false;
     isSwipingAlbum.value = false;
-  }, [currentTrack?.id, width]);
+  }, [getTrackId(currentTrack), width]);
 
   useEffect(() => {
     return () => {
@@ -496,7 +514,7 @@ const FullPlayerModal = ({
               if (finished) {
                 runOnJS(handleSwipeNextComplete)();
               }
-            }
+            },
           );
         } else if ((dx > threshold || vx > 350) && hasPrevShared.value) {
           isTransitioningShared.value = true;
@@ -516,7 +534,7 @@ const FullPlayerModal = ({
               if (finished) {
                 runOnJS(handleSwipePrevComplete)();
               }
-            }
+            },
           );
         } else {
           albumSwipeX.value = withSpring(
@@ -533,7 +551,7 @@ const FullPlayerModal = ({
               if (finished) {
                 isSwipingAlbum.value = false;
               }
-            }
+            },
           );
         }
       })
@@ -569,13 +587,13 @@ const FullPlayerModal = ({
       expandProgress.value,
       [0.2, 0.75],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const translateY = interpolate(
       expandProgress.value,
       [0.2, 1],
       [50, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -584,19 +602,26 @@ const FullPlayerModal = ({
   });
 
   const lyricsModalContentAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(expandProgress.value, [0.85, 1], [0, 1], Extrapolation.CLAMP);
+    const opacity = interpolate(
+      expandProgress.value,
+      [0.85, 1],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
     return {
       opacity,
     };
   });
 
   const topGrabberAnimatedStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      expandProgress.value,
-      [0.4, 0.85],
-      [0, 1],
-      Extrapolation.CLAMP
-    ) * (1 - lyricsTransition.value);
+    const opacity =
+      interpolate(
+        expandProgress.value,
+        [0.4, 0.85],
+        [0, 1],
+        Extrapolation.CLAMP,
+      ) *
+      (1 - lyricsTransition.value);
     return {
       opacity,
     };
@@ -606,7 +631,9 @@ const FullPlayerModal = ({
     const nextState = !isQueueVisible;
     if (nextState) {
       queueAnimationRef.current = true;
-      setTimeout(() => { queueAnimationRef.current = false; }, 1000);
+      setTimeout(() => {
+        queueAnimationRef.current = false;
+      }, 1000);
       if (isLyricsView) {
         setIsLyricsView(false);
         cancelAnimation(lyricsTransition);
@@ -652,7 +679,7 @@ const FullPlayerModal = ({
   const BIG_ART_SIZE = width - 60;
   const MINI_ART_SIZE = 44;
   const TARGET_SCALE = MINI_ART_SIZE / BIG_ART_SIZE;
-  const TARGET_DELTA_X = 52 - (width / 2);
+  const TARGET_DELTA_X = 52 - width / 2;
 
   // Morphing calculations: mini-player to full-player
   const miniScale = MINI_ART_SIZE / BIG_ART_SIZE;
@@ -662,7 +689,7 @@ const FullPlayerModal = ({
 
   const fullArtTopY = effectiveTopInset + 71; // safeArea paddingTop (effectiveTopInset + 6) + grabber 19 + header 40 + marginTop 6
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
-  const TARGET_DELTA_Y = (effectiveTopInset + 32) - fullArtCenterY;
+  const TARGET_DELTA_Y = effectiveTopInset + 32 - fullArtCenterY;
 
   const miniArtTopY = height - effectiveBottomBarHeight + 10;
   const miniArtCenterY = miniArtTopY + MINI_ART_SIZE / 2; // height - effectiveBottomBarHeight + 32
@@ -681,115 +708,113 @@ const FullPlayerModal = ({
       expandProgress.value,
       [0, 1],
       [miniScale, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const expandTranslateX = interpolate(
       expandProgress.value,
       [0, 1],
       [expandDeltaX, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const expandTranslateY = interpolate(
       expandProgress.value,
       [0, 1],
       [expandDeltaY, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     const lyricsScale = interpolate(
       lyricsTransition.value,
       [0, 1],
       [1, TARGET_SCALE],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const lyricsTranslateX = interpolate(
       lyricsTransition.value,
       [0, 1],
       [0, TARGET_DELTA_X],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const lyricsTranslateY = interpolate(
       lyricsTransition.value,
       [0, 1],
       [0, TARGET_DELTA_Y],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     const swipeScale = interpolate(
       Math.abs(albumSwipeX.value),
       [0, width],
       [1, 0.92],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const swipeOpacity = interpolate(
       Math.abs(albumSwipeX.value),
       [0, width * 0.75],
       [1, 0.75],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
-    const swipeTranslateX = albumSwipeX.value * interpolate(
-      expandProgress.value,
-      [0.9, 1],
-      [0, 1],
-      Extrapolation.CLAMP
-    ) * (1 - lyricsTransition.value);
+    const swipeTranslateX =
+      albumSwipeX.value *
+      interpolate(expandProgress.value, [0.9, 1], [0, 1], Extrapolation.CLAMP) *
+      (1 - lyricsTransition.value);
 
-    const scale = expandScale * lyricsScale * (expandProgress.value > 0.9 ? swipeScale : 1);
+    const scale =
+      expandScale * lyricsScale * (expandProgress.value > 0.9 ? swipeScale : 1);
     const translateX = expandTranslateX + lyricsTranslateX + swipeTranslateX;
     const translateY = expandTranslateY + lyricsTranslateY;
 
-    const dismissY = ((dismissDragY ? dismissDragY.value : 0) +
-      interpolate(
-        dismissProgress ? dismissProgress.value : 0,
-        [0, 1],
-        [0, effectiveBottomBarHeight + 20],
-        Extrapolation.CLAMP
-      )) * (1 - expandProgress.value);
+    const dismissY =
+      ((dismissDragY ? dismissDragY.value : 0) +
+        interpolate(
+          dismissProgress ? dismissProgress.value : 0,
+          [0, 1],
+          [0, effectiveBottomBarHeight + 20],
+          Extrapolation.CLAMP,
+        )) *
+      (1 - expandProgress.value);
     const dismissOpacity = interpolate(
       dismissProgress ? dismissProgress.value : 0,
       [0, 0.7],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
-    const shadowOpacity = interpolate(
-      expandProgress.value,
-      [0, 1],
-      [0, 0.5],
-      Extrapolation.CLAMP
-    ) * interpolate(
-      lyricsTransition.value,
-      [0, 1],
-      [1, 0.3],
-      Extrapolation.CLAMP
-    );
-    const shadowRadius = interpolate(
-      expandProgress.value,
-      [0, 1],
-      [0, 15],
-      Extrapolation.CLAMP
-    ) * interpolate(
-      lyricsTransition.value,
-      [0, 1],
-      [1, 4 / 15],
-      Extrapolation.CLAMP
-    );
+    const shadowOpacity =
+      interpolate(expandProgress.value, [0, 1], [0, 0.5], Extrapolation.CLAMP) *
+      interpolate(
+        lyricsTransition.value,
+        [0, 1],
+        [1, 0.3],
+        Extrapolation.CLAMP,
+      );
+    const shadowRadius =
+      interpolate(expandProgress.value, [0, 1], [0, 15], Extrapolation.CLAMP) *
+      interpolate(
+        lyricsTransition.value,
+        [0, 1],
+        [1, 4 / 15],
+        Extrapolation.CLAMP,
+      );
     const elevation = interpolate(
       expandProgress.value,
       [0, 1],
       [0, 10],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     const expandOpacity = interpolate(
       expandProgress.value,
       [0, 0.005],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     return {
-      opacity: expandOpacity * dismissOpacity * (expandProgress.value > 0.9 ? swipeOpacity : 1),
+      opacity:
+        expandOpacity *
+        dismissOpacity *
+        (expandProgress.value > 0.9 ? swipeOpacity : 1),
       shadowOpacity,
       shadowRadius,
       elevation,
@@ -808,13 +833,13 @@ const FullPlayerModal = ({
       expandProgress.value,
       [0, 1],
       [8 / miniScale, 12],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const radius = interpolate(
       lyricsTransition.value,
       [0, 1],
       [baseRadius, 6 / TARGET_SCALE],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       borderRadius: radius,
@@ -826,7 +851,7 @@ const FullPlayerModal = ({
       lyricsRotation.value,
       [0, 90, 180, 270, 360],
       [0, 0.35, 0, 0.35, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity: sheen,
@@ -838,59 +863,61 @@ const FullPlayerModal = ({
       expandProgress.value,
       [0, 1],
       [expandDeltaTextX, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const expandTranslateY = interpolate(
       expandProgress.value,
       [0, 1],
       [expandDeltaTextY, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const expandScale = interpolate(
       expandProgress.value,
       [0, 1],
       [15 / 24, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     const lyricsTranslateY = interpolate(
       lyricsTransition.value,
       [0, 0.55],
       [0, -45],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const lyricsOpacity = interpolate(
       lyricsTransition.value,
       [0, 0.38],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const lyricsScale = interpolate(
       lyricsTransition.value,
       [0, 0.45],
       [1, 0.94],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
-    const dismissY = ((dismissDragY ? dismissDragY.value : 0) +
-      interpolate(
-        dismissProgress ? dismissProgress.value : 0,
-        [0, 1],
-        [0, effectiveBottomBarHeight + 20],
-        Extrapolation.CLAMP
-      )) * (1 - expandProgress.value);
+    const dismissY =
+      ((dismissDragY ? dismissDragY.value : 0) +
+        interpolate(
+          dismissProgress ? dismissProgress.value : 0,
+          [0, 1],
+          [0, effectiveBottomBarHeight + 20],
+          Extrapolation.CLAMP,
+        )) *
+      (1 - expandProgress.value);
     const dismissOpacity = interpolate(
       dismissProgress ? dismissProgress.value : 0,
       [0, 0.7],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     const expandOpacity = interpolate(
       expandProgress.value,
       [0, 0.005],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
 
     return {
@@ -909,7 +936,7 @@ const FullPlayerModal = ({
       lyricsTransition.value,
       [0, 0.45],
       [0, 16],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       transform: [{ translateX }],
@@ -917,22 +944,24 @@ const FullPlayerModal = ({
   });
 
   const trackInfoHeartAnimatedStyle = useAnimatedStyle(() => {
-    const scale = interpolate(
-      expandProgress.value,
-      [0.65, 1],
-      [0.1, 1],
-      Extrapolation.CLAMP
-    ) * interpolate(
-      lyricsTransition.value,
-      [0, 0.38],
-      [1, 0.88],
-      Extrapolation.CLAMP
-    );
+    const scale =
+      interpolate(
+        expandProgress.value,
+        [0.65, 1],
+        [0.1, 1],
+        Extrapolation.CLAMP,
+      ) *
+      interpolate(
+        lyricsTransition.value,
+        [0, 0.38],
+        [1, 0.88],
+        Extrapolation.CLAMP,
+      );
     const opacity = interpolate(
       expandProgress.value,
       [0.65, 0.95],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -951,13 +980,13 @@ const FullPlayerModal = ({
       lyricsTransition.value,
       [0, 1],
       [140, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const opacity = interpolate(
       lyricsTransition.value,
       [0.08, 0.65, 1],
       [0, 0.85, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -970,13 +999,13 @@ const FullPlayerModal = ({
       lyricsTransition.value,
       [0.72, 0.98],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const translateY = interpolate(
       lyricsTransition.value,
       [0.72, 0.98],
       [12, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -989,13 +1018,13 @@ const FullPlayerModal = ({
       lyricsTransition.value,
       [0.72, 0.98],
       [0, 1],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const translateY = interpolate(
       lyricsTransition.value,
       [0.72, 0.98],
       [12, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -1009,12 +1038,15 @@ const FullPlayerModal = ({
     };
   });
 
-  const fallbackTrack = useMemo(() => ({
-    id: 'placeholder',
-    title: 'Puuk Music',
-    artist: 'Select a track to start',
-    coverArt: null,
-  }), []);
+  const fallbackTrack = useMemo(
+    () => ({
+      id: 'placeholder',
+      title: 'Puuk Music',
+      artist: 'Select a track to start',
+      coverArt: null,
+    }),
+    [],
+  );
 
   const activeTrack = currentTrack || fallbackTrack;
 
@@ -1022,47 +1054,56 @@ const FullPlayerModal = ({
     if (!track) return { displayTitle: '', displayArtist: '' };
     return {
       displayTitle: track.title || 'Puuk Music',
-      displayArtist: track.artist || 'Select a track to start'
+      displayArtist: track.artist || 'Select a track to start',
     };
   };
 
   const { displayTitle, displayArtist } = getTrackDetails(activeTrack);
 
-  const handleMenuAction = useCallback(({ nativeEvent }) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
+  const handleMenuAction = useCallback(
+    ({ nativeEvent }) => {
+      try {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {}
 
-    if (nativeEvent.event === 'add_to_playlist') {
-      if (onAddToPlaylist) onAddToPlaylist(activeTrack);
-    } else if (nativeEvent.event === 'edit_track') {
-      if (onEditTrack) onEditTrack(activeTrack);
-    }
-  }, [activeTrack, onAddToPlaylist, onEditTrack]);
-
-  const menuActions = useMemo(() => [
-    {
-      id: 'add_to_playlist',
-      title: 'Add to Playlist',
-      image: Platform.select({ ios: 'plus.circle' }),
+      if (nativeEvent.event === 'add_to_playlist') {
+        if (onAddToPlaylist) onAddToPlaylist(activeTrack);
+      } else if (nativeEvent.event === 'edit_track') {
+        if (onEditTrack) onEditTrack(activeTrack);
+      }
     },
-    ...(onEditTrack
-      ? [
-          {
-            id: 'edit_track',
-            title: 'Edit Track',
-            image: Platform.select({ ios: 'pencil' }),
-          },
-        ]
-      : []),
-  ], [onEditTrack]);
+    [activeTrack, onAddToPlaylist, onEditTrack],
+  );
+
+  const menuActions = useMemo(
+    () => [
+      {
+        id: 'add_to_playlist',
+        title: 'Add to Playlist',
+        image: Platform.select({ ios: 'plus.circle' }),
+      },
+      ...(onEditTrack
+        ? [
+            {
+              id: 'edit_track',
+              title: 'Edit Track',
+              image: Platform.select({ ios: 'pencil' }),
+            },
+          ]
+        : []),
+    ],
+    [onEditTrack],
+  );
 
   return (
     <Animated.View
       style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
       pointerEvents={isPlayerVisible ? 'auto' : 'none'}
     >
-      <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <GestureHandlerRootView
+        style={StyleSheet.absoluteFill}
+        pointerEvents="box-none"
+      >
         <View style={styles.container} pointerEvents="auto">
           <AppleLyricsView
             isLyricsView={isLyricsView}
@@ -1113,62 +1154,65 @@ const FullPlayerModal = ({
             ]}
             pointerEvents={isPlayerVisible ? 'box-none' : 'none'}
           >
-
             {/* Middle container: Cover art & info when NOT in lyrics view, or queue view */}
-            <View style={{ flex: 1, width: '100%', justifyContent: 'flex-start' }} pointerEvents={isLyricsView ? 'box-none' : 'auto'}>
+            <View
+              style={{ flex: 1, width: '100%', justifyContent: 'flex-start' }}
+              pointerEvents={isLyricsView ? 'box-none' : 'auto'}
+            >
               <Animated.View
-                style={[playerAnimatedStyle, { width: '100%', alignItems: 'center', flex: 1 }]}
+                style={[
+                  playerAnimatedStyle,
+                  { width: '100%', alignItems: 'center', flex: 1 },
+                ]}
                 pointerEvents={isLyricsView || isQueueVisible ? 'none' : 'auto'}
               >
                 <GestureDetector gesture={mainSwipeGesture}>
-                  <Animated.View style={{ width: '100%', flex: 1, alignItems: 'center', backgroundColor: 'transparent' }}>
+                  <Animated.View
+                    style={{
+                      width: '100%',
+                      flex: 1,
+                      alignItems: 'center',
+                      backgroundColor: 'transparent',
+                    }}
+                  >
                     {/* Top Grabber / Pull Trigger & Sub-header */}
-                    <Animated.View style={[{ width: '100%' }, topGrabberAnimatedStyle]}>
-                      <TouchableOpacity
-                        onPress={handleClose}
-                        hitSlop={{ top: 15, bottom: 20, left: 40, right: 40 }}
-                        activeOpacity={0.6}
-                        style={styles.topGrabberContainer}
-                      >
-                        <View style={styles.topGrabberPill} />
-                      </TouchableOpacity>
-
-                      <View style={styles.topHeaderRow}>
-                        <View style={{ flex: 1 }} />
-                        <View style={styles.topHeaderRight}>
-                          <TrackLoadingBadge
-                            isLoading={isLoading}
-                            isBufferingSlow={isBufferingSlow}
-                            networkStatus={networkStatus}
-                            nextTrackStatus={nextTrackStatus}
-                          />
-
-                          <MenuView
-                            title={displayTitle}
-                            onPressAction={handleMenuAction}
-                            actions={menuActions}
-                            shouldOpenOnLongPress={false}
-                          >
-                            <View
-                              style={styles.topMenuButton}
-                              accessibilityRole="button"
-                              accessibilityLabel="Track options"
-                            >
-                              <Ionicons name="ellipsis-horizontal" size={17} color="#ffffff" />
-                            </View>
-                          </MenuView>
-                        </View>
-                      </View>
+                    <Animated.View
+                      style={[{ width: '100%' }, topGrabberAnimatedStyle]}
+                    >
+                      <PlayerHeader
+                        styles={styles}
+                        handleClose={handleClose}
+                        isLoading={isLoading}
+                        isBufferingSlow={isBufferingSlow}
+                        networkStatus={networkStatus}
+                        nextTrackStatus={nextTrackStatus}
+                        displayTitle={displayTitle}
+                        handleMenuAction={handleMenuAction}
+                        menuActions={menuActions}
+                      />
                     </Animated.View>
 
                     <GestureDetector gesture={albumHorizontalGesture}>
                       <Animated.View
                         style={[styles.artContainer, albumArtFlipStyle]}
                         accessibilityRole="image"
-                        accessibilityLabel={displayTitle ? `${displayTitle} by ${displayArtist}, album cover` : 'Album cover'}
+                        accessibilityLabel={
+                          displayTitle
+                            ? `${displayTitle} by ${displayArtist}, album cover`
+                            : 'Album cover'
+                        }
                         accessibilityHint="Swipe left for next track, swipe right for previous track, swipe down to close"
                       >
-                        <Animated.View style={[{ width: '100%', height: '100%', overflow: 'hidden' }, albumArtRadiusStyle]}>
+                        <Animated.View
+                          style={[
+                            {
+                              width: '100%',
+                              height: '100%',
+                              overflow: 'hidden',
+                            },
+                            albumArtRadiusStyle,
+                          ]}
+                        >
                           <CoverImage
                             source={activeTrack?.coverArt}
                             style={{ width: '100%', height: '100%' }}
@@ -1185,22 +1229,41 @@ const FullPlayerModal = ({
                       </Animated.View>
                     </GestureDetector>
 
-                    <Animated.View style={[styles.trackInfoContainer, trackInfoAnimatedStyle]}>
+                    <Animated.View
+                      style={[
+                        styles.trackInfoContainer,
+                        trackInfoAnimatedStyle,
+                      ]}
+                    >
                       <View style={styles.titleRow}>
-                        <Animated.View style={[styles.textContainer, trackInfoTextAnimatedStyle]}>
-                          <Text style={styles.titleText} numberOfLines={1}>{displayTitle}</Text>
-                          <Text style={styles.artistText} numberOfLines={1}>{displayArtist}</Text>
+                        <Animated.View
+                          style={[
+                            styles.textContainer,
+                            trackInfoTextAnimatedStyle,
+                          ]}
+                        >
+                          <Text style={styles.titleText} numberOfLines={1}>
+                            {displayTitle}
+                          </Text>
+                          <Text style={styles.artistText} numberOfLines={1}>
+                            {displayArtist}
+                          </Text>
                         </Animated.View>
                         <Animated.View style={trackInfoHeartAnimatedStyle}>
                           <TouchableOpacity
                             onPress={() => onToggleLike && onToggleLike()}
-                            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+                            hitSlop={{
+                              top: 15,
+                              bottom: 15,
+                              left: 15,
+                              right: 15,
+                            }}
                             style={styles.heartBtn}
                           >
                             <Ionicons
-                              name={trackIsLiked ? "heart" : "heart-outline"}
+                              name={trackIsLiked ? 'heart' : 'heart-outline'}
                               size={28}
-                              color={trackIsLiked ? "#ff2d55" : "#e5e5ea"}
+                              color={trackIsLiked ? '#ff2d55' : '#e5e5ea'}
                             />
                           </TouchableOpacity>
                         </Animated.View>
@@ -1208,7 +1271,13 @@ const FullPlayerModal = ({
                     </Animated.View>
 
                     {/* Spacer view covering the entire empty space between trackInfo and progress bar */}
-                    <View style={{ flex: 1, width: '100%', backgroundColor: 'transparent' }} />
+                    <View
+                      style={{
+                        flex: 1,
+                        width: '100%',
+                        backgroundColor: 'transparent',
+                      }}
+                    />
                   </Animated.View>
                 </GestureDetector>
               </Animated.View>
@@ -1226,7 +1295,9 @@ const FullPlayerModal = ({
             </View>
 
             {/* Bottom controls container */}
-            <Animated.View style={[{ width: '100%' }, playerControlsAnimatedStyle]}>
+            <Animated.View
+              style={[{ width: '100%' }, playerControlsAnimatedStyle]}
+            >
               <PlayerNetworkBanner
                 networkStatus={networkStatus}
                 nextTrackStatus={nextTrackStatus}
@@ -1272,13 +1343,11 @@ const FullPlayerModal = ({
                 />
               </GestureDetector>
             </Animated.View>
-
           </Animated.View>
         </View>
       </GestureHandlerRootView>
     </Animated.View>
   );
 };
-
 
 export default FullPlayerModal;

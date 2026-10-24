@@ -12,7 +12,7 @@ import Animated, {
   Extrapolation,
 } from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
-import CoverImage from '../../shared/media/CoverImage';
+import MiniPlayerTrackCard from './MiniPlayerTrackCard';
 import defaultStyles from './playerStyles';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -100,38 +100,6 @@ const MiniPlayerBar = ({
     };
   });
 
-  const renderTrackCard = (track, trackTitle, trackArtist, animatedStyle) => {
-    if (!track && !trackTitle) return null;
-    return (
-      <Animated.View
-        style={[
-          {
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: trackWidth,
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingLeft: 16,
-          },
-          animatedStyle,
-        ]}
-        pointerEvents="none"
-      >
-        <CoverImage source={track?.coverArt} style={styles.miniPlayerImage} />
-        <View style={styles.miniPlayerInfo}>
-          <Text style={styles.miniPlayerTitle} numberOfLines={1}>
-            {trackTitle || track?.title || 'Puuk Music'}
-          </Text>
-          <Text style={styles.miniPlayerArtist} numberOfLines={1}>
-            {trackArtist || track?.artist || 'Select a track to start'}
-          </Text>
-        </View>
-      </Animated.View>
-    );
-  };
-
   const content = (
     <Animated.View
       style={[
@@ -149,13 +117,13 @@ const MiniPlayerBar = ({
       >
         <Animated.View style={[{ flex: 1, height: 44 }, trackMediaVisibilityStyle]}>
           {/* Подготовленный предыдущий трек слева */}
-          {renderTrackCard(previousTrack, previousTrack?.title, previousTrack?.artist, prevTrackAnimatedStyle)}
+          <MiniPlayerTrackCard track={previousTrack} title={previousTrack?.title} artist={previousTrack?.artist} width={trackWidth} style={prevTrackAnimatedStyle} styles={styles} />
 
           {/* Текущий трек по центру */}
-          {renderTrackCard(currentTrack, title, artist, currentTrackAnimatedStyle)}
+          <MiniPlayerTrackCard track={currentTrack} title={title} artist={artist} width={trackWidth} style={currentTrackAnimatedStyle} styles={styles} />
 
           {/* Подготовленный следующий трек справа */}
-          {renderTrackCard(nextTrack, nextTrack?.title, nextTrack?.artist, nextTrackAnimatedStyle)}
+          <MiniPlayerTrackCard track={nextTrack} title={nextTrack?.title} artist={nextTrack?.artist} width={trackWidth} style={nextTrackAnimatedStyle} styles={styles} />
         </Animated.View>
 
       </TouchableOpacity>

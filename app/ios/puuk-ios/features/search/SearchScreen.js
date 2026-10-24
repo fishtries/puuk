@@ -20,26 +20,55 @@ import Animated, {
   LinearTransition,
 } from 'react-native-reanimated';
 import { authFetch, SERVER_URL } from '../../shared/api/api';
-import { getSettings, addSettingsListener } from '../../shared/storage/settings';
+import {
+  getSettings,
+  addSettingsListener,
+} from '../../shared/storage/settings';
+import {
+  getTrackId,
+  areTrackIdsEqual,
+  normalizeTrack,
+} from '../../shared/domain/trackAdapter';
 
 const { width } = Dimensions.get('window');
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 // ─── Search Result Track Row ─────────────────────────────────────────────
-const SearchResultRow = ({ track, onPress, index, onPressEllipsis, isCurrentPlaying, isPlaying, accentColor }) => (
+const SearchResultRow = ({
+  track,
+  onPress,
+  index,
+  onPressEllipsis,
+  isCurrentPlaying,
+  isPlaying,
+  accentColor,
+}) => (
   <AnimatedTouchable
     entering={FadeInDown.delay(index * 25).duration(250)}
-    style={[styles.resultRow, isCurrentPlaying && { backgroundColor: '#181614', borderLeftWidth: 3, borderLeftColor: accentColor }]}
+    style={[
+      styles.resultRow,
+      isCurrentPlaying && {
+        backgroundColor: '#181614',
+        borderLeftWidth: 3,
+        borderLeftColor: accentColor,
+      },
+    ]}
     activeOpacity={0.65}
     onPress={() => onPress(track)}
   >
     <CoverImage source={track.coverArt} style={styles.resultImage} />
     <View style={styles.resultInfo}>
-      <Text style={[styles.resultTitle, isCurrentPlaying && { color: accentColor }]} numberOfLines={1}>
+      <Text
+        style={[styles.resultTitle, isCurrentPlaying && { color: accentColor }]}
+        numberOfLines={1}
+      >
         {track.title}
       </Text>
       <Text style={styles.resultArtist} numberOfLines={1}>
-        {track.artist} {track.album && track.album !== 'Unknown Album' ? `• ${track.album}` : ''}
+        {track.artist}{' '}
+        {track.album && track.album !== 'Unknown Album'
+          ? `• ${track.album}`
+          : ''}
       </Text>
     </View>
 
@@ -52,7 +81,7 @@ const SearchResultRow = ({ track, onPress, index, onPressEllipsis, isCurrentPlay
       />
     )}
 
-    <TouchableOpacity 
+    <TouchableOpacity
       hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
       onPress={() => onPressEllipsis && onPressEllipsis(track)}
       style={styles.ellipsisBtn}
@@ -121,9 +150,15 @@ export default function SearchScreen({
   currentTrack,
   isPlaying,
 }) {
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
   const [searchQuery, setSearchQuery] = useState('');
-  const [results, setResults] = useState({ tracks: [], albums: [], artists: [] });
+  const [results, setResults] = useState({
+    tracks: [],
+    albums: [],
+    artists: [],
+  });
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const searchTimerRef = useRef(null);
@@ -138,9 +173,12 @@ export default function SearchScreen({
   }, []);
 
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener('PUUK_SCROLL_TO_TOP_SEARCH', () => {
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    });
+    const sub = DeviceEventEmitter.addListener(
+      'PUUK_SCROLL_TO_TOP_SEARCH',
+      () => {
+        scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+      },
+    );
     return () => sub.remove();
   }, []);
 
@@ -172,7 +210,7 @@ export default function SearchScreen({
     setIsSearching(true);
     try {
       const response = await authFetch(
-        `/api/search?q=${encodeURIComponent(trimmed)}&limit=30`
+        `/api/search?q=${encodeURIComponent(trimmed)}&limit=30`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
@@ -182,15 +220,13 @@ export default function SearchScreen({
       let artists = [];
 
       if (Array.isArray(data)) {
-        tracks = data.map((t) => ({
-          ...t,
-          coverArt: t.coverArt || `${SERVER_URL}/api/cover/${t.id}`,
-        }));
+        tracks = data
+          .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+          .filter(Boolean);
       } else if (data && typeof data === 'object') {
-        tracks = (data.tracks || []).map((t) => ({
-          ...t,
-          coverArt: t.coverArt || `${SERVER_URL}/api/cover/${t.id}`,
-        }));
+        tracks = (data.tracks || [])
+          .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+          .filter(Boolean);
         albums = data.albums || [];
         artists = data.artists || [];
       }
@@ -205,20 +241,23 @@ export default function SearchScreen({
     }
   }, []);
 
-  const handleSearchChange = useCallback((text) => {
-    setSearchQuery(text);
-    if (searchTimerRef.current) {
-      clearTimeout(searchTimerRef.current);
-    }
-    if (!text.trim()) {
-      setResults({ tracks: [], albums: [], artists: [] });
-      setHasSearched(false);
-      return;
-    }
-    searchTimerRef.current = setTimeout(() => {
-      performSearch(text);
-    }, 350);
-  }, [performSearch]);
+  const handleSearchChange = useCallback(
+    (text) => {
+      setSearchQuery(text);
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+      if (!text.trim()) {
+        setResults({ tracks: [], albums: [], artists: [] });
+        setHasSearched(false);
+        return;
+      }
+      searchTimerRef.current = setTimeout(() => {
+        performSearch(text);
+      }, 350);
+    },
+    [performSearch],
+  );
 
   const clearSearch = useCallback(() => {
     setSearchQuery('');
@@ -227,28 +266,38 @@ export default function SearchScreen({
     searchInputRef.current?.focus();
   }, []);
 
-  const handleTrackPress = useCallback((track) => {
-    onPlayTrack(track);
-    Keyboard.dismiss();
-  }, [onPlayTrack]);
+  const handleTrackPress = useCallback(
+    (track) => {
+      onPlayTrack(track);
+      Keyboard.dismiss();
+    },
+    [onPlayTrack],
+  );
 
-  const handleAlbumPress = useCallback((album) => {
-    Keyboard.dismiss();
-    navigation.navigate('Album', {
-      albumId: album.id,
-      albumTitle: album.title,
-      coverArt: album.coverArt,
-    });
-  }, [navigation]);
+  const handleAlbumPress = useCallback(
+    (album) => {
+      Keyboard.dismiss();
+      navigation.navigate('Album', {
+        albumId: album.id,
+        albumTitle: album.title,
+        coverArt: album.coverArt,
+      });
+    },
+    [navigation],
+  );
 
-  const handleArtistPress = useCallback((artist) => {
-    // Fill search bar with artist name and trigger search
-    setSearchQuery(artist.name);
-    performSearch(artist.name);
-    Keyboard.dismiss();
-  }, [performSearch]);
+  const handleArtistPress = useCallback(
+    (artist) => {
+      // Fill search bar with artist name and trigger search
+      setSearchQuery(artist.name);
+      performSearch(artist.name);
+      Keyboard.dismiss();
+    },
+    [performSearch],
+  );
 
-  const totalResults = results.tracks.length + results.albums.length + results.artists.length;
+  const totalResults =
+    results.tracks.length + results.albums.length + results.artists.length;
 
   const showArtists = results.artists.length > 0;
   const showAlbums = results.albums.length > 0;
@@ -257,9 +306,17 @@ export default function SearchScreen({
   return (
     <View style={styles.container}>
       {/* ── Search Bar ── */}
-      <Animated.View entering={FadeInDown.duration(400)} style={styles.searchBarSection}>
+      <Animated.View
+        entering={FadeInDown.duration(400)}
+        style={styles.searchBarSection}
+      >
         <View style={styles.searchBarContainer}>
-          <Ionicons name="search" size={18} color="#8e8e93" style={styles.searchIcon} />
+          <Ionicons
+            name="search"
+            size={18}
+            color="#8e8e93"
+            style={styles.searchIcon}
+          />
           <TextInput
             ref={searchInputRef}
             style={styles.searchInput}
@@ -272,7 +329,11 @@ export default function SearchScreen({
             autoCapitalize="none"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={clearSearch} style={styles.searchClearBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity
+              onPress={clearSearch}
+              style={styles.searchClearBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Ionicons name="close-circle" size={18} color="#8E8E93" />
             </TouchableOpacity>
           )}
@@ -285,7 +346,7 @@ export default function SearchScreen({
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: currentTrack ? 100 : 70 }
+          { paddingBottom: currentTrack ? 100 : 70 },
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -293,18 +354,26 @@ export default function SearchScreen({
       >
         {/* Initial state — no query */}
         {!searchQuery.trim() && !hasSearched && (
-          <Animated.View entering={FadeIn.duration(500)} style={styles.initialState}>
+          <Animated.View
+            entering={FadeIn.duration(500)}
+            style={styles.initialState}
+          >
             <View style={styles.initialIconContainer}>
               <Ionicons name="search" size={44} color="#444" />
             </View>
             <Text style={styles.initialTitle}>Find your music</Text>
-            <Text style={styles.initialHint}>Search by track, artist name, or album title</Text>
+            <Text style={styles.initialHint}>
+              Search by track, artist name, or album title
+            </Text>
           </Animated.View>
         )}
 
         {/* Loading */}
         {isSearching && (
-          <Animated.View entering={FadeIn.duration(200)} style={styles.loadingState}>
+          <Animated.View
+            entering={FadeIn.duration(200)}
+            style={styles.loadingState}
+          >
             <ActivityIndicator color={accentColor} size="small" />
             <Text style={styles.loadingText}>Searching...</Text>
           </Animated.View>
@@ -317,7 +386,11 @@ export default function SearchScreen({
             {showArtists && (
               <View style={styles.sectionBlock}>
                 <Text style={styles.sectionTitle}>Artists</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.horizontalScroll}
+                >
                   {results.artists.map((artist, idx) => (
                     <ArtistCard
                       key={`art-${artist.name}-${idx}`}
@@ -335,7 +408,11 @@ export default function SearchScreen({
             {showAlbums && (
               <View style={styles.sectionBlock}>
                 <Text style={styles.sectionTitle}>Albums</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.horizontalScroll}
+                >
                   {results.albums.map((album, idx) => (
                     <AlbumCard
                       key={`alb-${album.id}-${idx}`}
@@ -355,12 +432,12 @@ export default function SearchScreen({
                 <View style={styles.resultsList}>
                   {results.tracks.map((track, index) => (
                     <SearchResultRow
-                      key={`search-${track.id}`}
+                      key={`search-${getTrackId(track) ?? index}`}
                       track={track}
                       onPress={handleTrackPress}
                       index={index}
                       onPressEllipsis={onAddToPlaylist}
-                      isCurrentPlaying={currentTrack?.id === track.id}
+                      isCurrentPlaying={areTrackIdsEqual(currentTrack, track)}
                       isPlaying={isPlaying}
                       accentColor={accentColor}
                     />
@@ -373,10 +450,16 @@ export default function SearchScreen({
 
         {/* Empty results */}
         {!isSearching && hasSearched && totalResults === 0 && (
-          <Animated.View entering={FadeIn.duration(400)} style={styles.emptyState}>
+          <Animated.View
+            entering={FadeIn.duration(400)}
+            style={styles.emptyState}
+          >
             <Ionicons name="musical-notes-outline" size={48} color="#333" />
             <Text style={styles.emptyTitle}>No results found</Text>
-            <Text style={styles.emptyHint}>Try checking spelling or searching for another artist, track, or album</Text>
+            <Text style={styles.emptyHint}>
+              Try checking spelling or searching for another artist, track, or
+              album
+            </Text>
           </Animated.View>
         )}
 

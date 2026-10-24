@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { DeviceEventEmitter } from 'react-native';
 import { DEFAULT_SERVER_URL } from '../api/api';
+import { normalizeTrack } from '../domain/trackAdapter';
 
 const SETTINGS_KEY = 'puuk_app_settings';
 
@@ -153,10 +154,29 @@ let cachedLastTrack = null;
 export const getSavedLastTrack = async () => {
   if (cachedLastTrack) return cachedLastTrack;
   try {
-    const raw = await SecureStore.getItemAsync(LAST_TRACK_KEY, SECURE_STORE_OPTIONS);
+    const raw = await SecureStore.getItemAsync(
+      LAST_TRACK_KEY,
+      SECURE_STORE_OPTIONS,
+    );
     if (raw) {
-      cachedLastTrack = JSON.parse(raw);
-      return cachedLastTrack;
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (parseErr) {
+        console.warn('[Last track parse error]', parseErr);
+        await clearSavedLastTrack();
+        return null;
+      }
+      const normalized = normalizeTrack(parsed, {
+        serverUrl: cachedSettings.serverUrl || DEFAULT_SERVER_URL,
+      });
+      if (normalized) {
+        cachedLastTrack = normalized;
+        return cachedLastTrack;
+      }
+      // If stored data has no valid identifier, clear corrupt record
+      await clearSavedLastTrack();
+      return null;
     }
   } catch (e) {
     console.warn('[Last track read error]', e);
@@ -174,14 +194,22 @@ export const clearSavedLastTrack = async () => {
 };
 
 export const setSavedLastTrack = async (track) => {
-  if (!track || !track.id) {
+  const normalized = normalizeTrack(track, {
+    serverUrl: cachedSettings.serverUrl || DEFAULT_SERVER_URL,
+  });
+  if (!normalized) {
     await clearSavedLastTrack();
-    return;
+    return null;
   }
-  cachedLastTrack = track;
+  cachedLastTrack = normalized;
   try {
-    await SecureStore.setItemAsync(LAST_TRACK_KEY, JSON.stringify(track), SECURE_STORE_OPTIONS);
+    await SecureStore.setItemAsync(
+      LAST_TRACK_KEY,
+      JSON.stringify(normalized),
+      SECURE_STORE_OPTIONS,
+    );
   } catch (e) {
     console.warn('[Last track save error]', e);
   }
+  return cachedLastTrack;
 };

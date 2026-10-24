@@ -50,7 +50,9 @@ let mockPanGestures = [];
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
   return {
-    GestureDetector: ({ children, gesture }) => <View testID="gesture-detector">{children}</View>,
+    GestureDetector: ({ children, gesture }) => (
+      <View testID="gesture-detector">{children}</View>
+    ),
     GestureHandlerRootView: ({ children }) => <View>{children}</View>,
     Gesture: {
       Simultaneous: () => ({}),
@@ -63,10 +65,22 @@ jest.mock('react-native-gesture-handler', () => {
           activeOffsetX: jest.fn(() => gesture),
           failOffsetX: jest.fn(() => gesture),
           failOffsetY: jest.fn(() => gesture),
-          onStart: jest.fn((cb) => { gesture._onStart = cb; return gesture; }),
-          onUpdate: jest.fn((cb) => { gesture._onUpdate = cb; return gesture; }),
-          onEnd: jest.fn((cb) => { gesture._onEnd = cb; return gesture; }),
-          onFinalize: jest.fn((cb) => { gesture._onFinalize = cb; return gesture; }),
+          onStart: jest.fn((cb) => {
+            gesture._onStart = cb;
+            return gesture;
+          }),
+          onUpdate: jest.fn((cb) => {
+            gesture._onUpdate = cb;
+            return gesture;
+          }),
+          onEnd: jest.fn((cb) => {
+            gesture._onEnd = cb;
+            return gesture;
+          }),
+          onFinalize: jest.fn((cb) => {
+            gesture._onFinalize = cb;
+            return gesture;
+          }),
         };
         mockPanGestures.push(gesture);
         return gesture;
@@ -109,7 +123,9 @@ jest.mock('react-native-reanimated', () => {
     },
     FadeIn: { duration: () => ({}) },
     FadeOut: { duration: () => ({}) },
-    LinearTransition: { springify: () => ({ damping: () => ({ stiffness: () => ({}) }) }) },
+    LinearTransition: {
+      springify: () => ({ damping: () => ({ stiffness: () => ({}) }) }),
+    },
   };
 });
 
@@ -153,13 +169,15 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           currentTrack={mockCurrentTrack}
           nextTrack={mockNextTrack}
           previousTrack={mockPrevTrack}
-        />
+        />,
       );
     });
 
     const root = renderer.root;
     const albumView = root.find(
-      (n) => n.props?.accessibilityRole === 'image' && n.props?.accessibilityHint?.includes('Swipe left')
+      (n) =>
+        n.props?.accessibilityRole === 'image' &&
+        n.props?.accessibilityHint?.includes('Swipe left'),
     );
     expect(albumView).toBeTruthy();
     expect(albumView.props.accessibilityLabel).toContain('Current Song');
@@ -174,12 +192,16 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           currentTrack={mockCurrentTrack}
           nextTrack={mockNextTrack}
           previousTrack={mockPrevTrack}
-        />
+        />,
       );
     });
 
-    expect(CoverImageModule.prefetchCover).toHaveBeenCalledWith('https://puuk.app/cover2.jpg');
-    expect(CoverImageModule.prefetchCover).toHaveBeenCalledWith('https://puuk.app/cover0.jpg');
+    expect(CoverImageModule.prefetchCover).toHaveBeenCalledWith(
+      'https://puuk.app/cover2.jpg',
+    );
+    expect(CoverImageModule.prefetchCover).toHaveBeenCalledWith(
+      'https://puuk.app/cover0.jpg',
+    );
   });
 
   it('swiping left on album triggers fetchNextTrack and light haptic feedback', async () => {
@@ -195,13 +217,15 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           previousTrack={mockPrevTrack}
           fetchNextTrack={fetchNextTrack}
           playPreviousTrack={playPreviousTrack}
-        />
+        />,
       );
     });
 
     // Find the horizontal album swipe gesture (has activeOffsetX([-12, 12]))
-    const horizontalGesture = mockPanGestures.find(
-      (g) => g.activeOffsetX.mock.calls.some((c) => Array.isArray(c[0]) && c[0][0] === -12)
+    const horizontalGesture = mockPanGestures.find((g) =>
+      g.activeOffsetX.mock.calls.some(
+        (c) => Array.isArray(c[0]) && c[0][0] === -12,
+      ),
     );
     expect(horizontalGesture).toBeTruthy();
 
@@ -234,12 +258,14 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           history={[mockPrevTrack]}
           fetchNextTrack={fetchNextTrack}
           playPreviousTrack={playPreviousTrack}
-        />
+        />,
       );
     });
 
-    const horizontalGesture = mockPanGestures.find(
-      (g) => g.activeOffsetX.mock.calls.some((c) => Array.isArray(c[0]) && c[0][0] === -12)
+    const horizontalGesture = mockPanGestures.find((g) =>
+      g.activeOffsetX.mock.calls.some(
+        (c) => Array.isArray(c[0]) && c[0][0] === -12,
+      ),
     );
     expect(horizontalGesture).toBeTruthy();
 
@@ -267,12 +293,14 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           history={[]}
           previousTrack={null}
           playPreviousTrack={playPreviousTrack}
-        />
+        />,
       );
     });
 
-    const horizontalGesture = mockPanGestures.find(
-      (g) => g.activeOffsetX.mock.calls.some((c) => Array.isArray(c[0]) && c[0][0] === -12)
+    const horizontalGesture = mockPanGestures.find((g) =>
+      g.activeOffsetX.mock.calls.some(
+        (c) => Array.isArray(c[0]) && c[0][0] === -12,
+      ),
     );
     expect(horizontalGesture).toBeTruthy();
 
@@ -294,12 +322,14 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           isPlayerVisible={true}
           currentTrack={mockCurrentTrack}
           nextTrack={mockNextTrack}
-        />
+        />,
       );
     });
 
-    const horizontalGesture = mockPanGestures.find(
-      (g) => g.activeOffsetX.mock.calls.some((c) => Array.isArray(c[0]) && c[0][0] === -12)
+    const horizontalGesture = mockPanGestures.find((g) =>
+      g.activeOffsetX.mock.calls.some(
+        (c) => Array.isArray(c[0]) && c[0][0] === -12,
+      ),
     );
     expect(horizontalGesture).toBeTruthy();
 
@@ -317,15 +347,154 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
           currentTrack={mockNextTrack}
           nextTrack={null}
           previousTrack={mockCurrentTrack}
-        />
+        />,
       );
     });
 
     const root = renderer.root;
     const albumView = root.find(
-      (n) => n.props?.accessibilityRole === 'image' && n.props?.accessibilityHint?.includes('Swipe left')
+      (n) =>
+        n.props?.accessibilityRole === 'image' &&
+        n.props?.accessibilityHint?.includes('Swipe left'),
     );
     expect(albumView.props.accessibilityLabel).toContain('Next Song');
     expect(albumView.props.accessibilityLabel).toContain('Artist Two');
+  });
+
+  it('does not create duplicate adjacent cards when nextTrack has equivalent numeric/string ID', async () => {
+    const fetchNextTrack = jest.fn();
+    const currentTrackNumeric = {
+      id: 42,
+      title: 'Track 42',
+      artist: 'Artist',
+      coverArt: 'https://puuk.app/cover42.jpg',
+    };
+    const nextTrackString = {
+      id: '42',
+      title: 'Track 42 String',
+      artist: 'Artist',
+      coverArt: 'https://puuk.app/cover42_str.jpg',
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        <FullPlayerModal
+          isPlayerVisible={true}
+          currentTrack={currentTrackNumeric}
+          nextTrack={nextTrackString}
+          upNextQueue={[]}
+          fetchNextTrack={fetchNextTrack}
+        />,
+      );
+    });
+
+    // nextTrackString should NOT be prefetched because it's equivalent to currentTrack
+    expect(CoverImageModule.prefetchCover).not.toHaveBeenCalledWith(
+      'https://puuk.app/cover42_str.jpg',
+    );
+
+    const horizontalGesture = mockPanGestures.find((g) =>
+      g.activeOffsetX.mock.calls.some(
+        (c) => Array.isArray(c[0]) && c[0][0] === -12,
+      ),
+    );
+    expect(horizontalGesture).toBeTruthy();
+
+    horizontalGesture._onStart?.();
+    horizontalGesture._onUpdate?.({ translationX: -150 });
+    act(() => {
+      horizontalGesture._onEnd?.({ translationX: -150, velocityX: -400 });
+    });
+
+    // Swiping left should not trigger fetchNextTrack because effectiveNextTrack is null
+    expect(fetchNextTrack).not.toHaveBeenCalled();
+  });
+
+  it('recognizes legacy track_id with blank id and treats matching nextTrack as duplicate', async () => {
+    const currentLegacyTrack = {
+      id: '   ',
+      track_id: 'legacy-99',
+      title: 'Legacy Current',
+      artist: 'Artist',
+    };
+    const nextCanonicalTrack = {
+      id: 'legacy-99',
+      title: 'Canonical Next',
+      artist: 'Artist',
+      coverArt: 'https://puuk.app/cover-dup.jpg',
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        <FullPlayerModal
+          isPlayerVisible={true}
+          currentTrack={currentLegacyTrack}
+          nextTrack={nextCanonicalTrack}
+          upNextQueue={[]}
+        />,
+      );
+    });
+
+    expect(CoverImageModule.prefetchCover).not.toHaveBeenCalledWith(
+      'https://puuk.app/cover-dup.jpg',
+    );
+  });
+
+  it('preserves numeric zero in identity equivalence and avoids duplicate adjacent cards', async () => {
+    const currentZero = {
+      id: 0,
+      title: 'Zero Current',
+      artist: 'Artist',
+    };
+    const nextZero = {
+      track_id: '0',
+      title: 'Zero Next',
+      artist: 'Artist',
+      coverArt: 'https://puuk.app/cover-zero.jpg',
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        <FullPlayerModal
+          isPlayerVisible={true}
+          currentTrack={currentZero}
+          nextTrack={nextZero}
+          upNextQueue={[]}
+        />,
+      );
+    });
+
+    expect(CoverImageModule.prefetchCover).not.toHaveBeenCalledWith(
+      'https://puuk.app/cover-zero.jpg',
+    );
+  });
+
+  it('allows nextTrack when IDs are distinct even if one uses legacy track_id with blank id', async () => {
+    const currentLegacy = {
+      id: '   ',
+      track_id: 'legacy-alpha',
+      title: 'Alpha',
+      artist: 'Artist',
+    };
+    const nextDistinct = {
+      id: 'canonical-beta',
+      title: 'Beta',
+      artist: 'Artist',
+      coverArt: 'https://puuk.app/cover-beta.jpg',
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        <FullPlayerModal
+          isPlayerVisible={true}
+          currentTrack={currentLegacy}
+          nextTrack={nextDistinct}
+        />,
+      );
+    });
+
+    expect(CoverImageModule.prefetchCover).toHaveBeenCalledWith(
+      'https://puuk.app/cover-beta.jpg',
+    );
   });
 });

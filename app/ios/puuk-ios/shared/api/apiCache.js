@@ -6,6 +6,7 @@
 
 import { File, Directory, Paths } from 'expo-file-system';
 import { authFetch, SERVER_URL, getSavedUser, addAuthListener } from './api';
+import { getTrackId, normalizeTrack } from '../domain/trackAdapter';
 
 if (typeof addAuthListener === 'function') {
   addAuthListener((user) => {
@@ -62,8 +63,12 @@ export const hashString = (str, seed = 0) => {
     h1 = Math.imul(h1 ^ ch, 2654435761);
     h2 = Math.imul(h2 ^ ch, 1597334677);
   }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  h1 =
+    Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+    Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 =
+    Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+    Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   const combined = 4294967296 * (2097151 & h2) + (h1 >>> 0);
   return combined.toString(16).padStart(14, '0');
 };
@@ -77,12 +82,17 @@ const sanitizeForFilename = (str) => {
 };
 
 export const getCacheKey = (key, serverUrl, userId) => {
-  const normServer = normalizeServerUrl(serverUrl || SERVER_URL || 'default_server');
+  const normServer = normalizeServerUrl(
+    serverUrl || SERVER_URL || 'default_server',
+  );
   const serverHash = hashString(normServer);
   const serverHash2 = hashString(normServer, 1337);
   const safeServerPrefix = sanitizeForFilename(normServer).slice(0, 30);
   const safeServer = `${safeServerPrefix}_${serverHash}_${serverHash2}`;
-  const safeUser = userId !== undefined && userId !== null ? `user_${String(userId).trim()}` : 'anon';
+  const safeUser =
+    userId !== undefined && userId !== null
+      ? `user_${String(userId).trim()}`
+      : 'anon';
   const safeKey = sanitizeForFilename(key);
   return `puuk_cache__${safeServer}__${safeUser}__${safeKey}`;
 };
@@ -91,7 +101,8 @@ let cacheDirectoryInstance = null;
 
 export const getCacheDirectory = () => {
   if (!cacheDirectoryInstance) {
-    const baseDir = (Paths && (Paths.document || Paths.cache)) || 'file://documents';
+    const baseDir =
+      (Paths && (Paths.document || Paths.cache)) || 'file://documents';
     cacheDirectoryInstance = new Directory(baseDir, CATALOG_CACHE_DIR_NAME);
   }
   return cacheDirectoryInstance;
@@ -180,7 +191,10 @@ export const getCachedCatalog = async (key, options = {}) => {
     try {
       parsed = JSON.parse(text);
     } catch (parseErr) {
-      console.warn(`[apiCache] Corrupted JSON in cache file for ${key}, deleting:`, parseErr?.message);
+      console.warn(
+        `[apiCache] Corrupted JSON in cache file for ${key}, deleting:`,
+        parseErr?.message,
+      );
       try {
         file.delete();
       } catch {}
@@ -229,18 +243,27 @@ export const setCachedCatalog = async (key, data, options = {}) => {
     userId = saved?.id ?? null;
   }
 
-  const userKeyStr = userId !== undefined && userId !== null ? String(userId).trim() : null;
-  const startGlobalGen = typeof options.expectedClearGeneration === 'number'
-    ? options.expectedClearGeneration
-    : cacheClearGeneration;
-  const startUserGen = typeof options.expectedUserClearGeneration === 'number'
-    ? options.expectedUserClearGeneration
-    : (userKeyStr ? (userClearGenerations.get(userKeyStr) || 0) : 0);
+  const userKeyStr =
+    userId !== undefined && userId !== null ? String(userId).trim() : null;
+  const startGlobalGen =
+    typeof options.expectedClearGeneration === 'number'
+      ? options.expectedClearGeneration
+      : cacheClearGeneration;
+  const startUserGen =
+    typeof options.expectedUserClearGeneration === 'number'
+      ? options.expectedUserClearGeneration
+      : userKeyStr
+        ? userClearGenerations.get(userKeyStr) || 0
+        : 0;
 
   const isInvalidated = () => {
     if (options.signal?.aborted) return true;
     if (cacheClearGeneration !== startGlobalGen) return true;
-    if (userKeyStr && (userClearGenerations.get(userKeyStr) || 0) !== startUserGen) return true;
+    if (
+      userKeyStr &&
+      (userClearGenerations.get(userKeyStr) || 0) !== startUserGen
+    )
+      return true;
     return false;
   };
 
@@ -340,7 +363,10 @@ export const removeCachedCatalog = async (key, options = {}) => {
       file.delete();
     }
   } catch (err) {
-    console.warn(`[apiCache] Error deleting cache file for ${key}:`, err?.message);
+    console.warn(
+      `[apiCache] Error deleting cache file for ${key}:`,
+      err?.message,
+    );
   }
 };
 
@@ -354,14 +380,19 @@ export const clearCatalogCache = async (options = {}) => {
 
   if (targetUserId !== undefined && targetUserId !== null) {
     const userStr = String(targetUserId).trim();
-    userClearGenerations.set(userStr, (userClearGenerations.get(userStr) || 0) + 1);
+    userClearGenerations.set(
+      userStr,
+      (userClearGenerations.get(userStr) || 0) + 1,
+    );
 
     // Delete in-memory keys for this user and abort active in-flight network requests
     const userPattern = `__user_${userStr}__`;
     for (const k of Array.from(memoryCache.keys())) {
       if (k.includes(userPattern)) memoryCache.delete(k);
     }
-    for (const [k, controller] of Array.from(inFlightAbortControllers.entries())) {
+    for (const [k, controller] of Array.from(
+      inFlightAbortControllers.entries(),
+    )) {
       if (k.includes(userPattern)) {
         try {
           controller.abort();
@@ -422,7 +453,10 @@ export const clearCatalogCache = async (options = {}) => {
       }
     }
   } catch (err) {
-    console.warn('[apiCache] Error clearing entire cache directory:', err?.message);
+    console.warn(
+      '[apiCache] Error clearing entire cache directory:',
+      err?.message,
+    );
   }
 };
 
@@ -453,11 +487,18 @@ export const mergeTracks = (current = [], incoming = []) => {
   const currentList = Array.isArray(current) ? current : [];
   const incomingList = Array.isArray(incoming) ? incoming : [];
 
-  const byId = new Map(currentList.map((track) => [track.id, track]));
+  const byId = new Map();
+  for (const track of currentList) {
+    const id = getTrackId(track);
+    if (id !== null) {
+      byId.set(String(id).trim(), track);
+    }
+  }
 
   for (const track of incomingList) {
-    if (track?.id != null) {
-      byId.set(track.id, track);
+    const id = getTrackId(track);
+    if (id !== null) {
+      byId.set(String(id).trim(), track);
     }
   }
 
@@ -487,13 +528,20 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
   const forceRefresh = Boolean(options.forceRefresh);
   const cacheKey = getCacheKey(key, serverUrl, userId);
 
-  const userKeyStr = userId !== undefined && userId !== null ? String(userId).trim() : null;
-  const startUserGen = userKeyStr ? (userClearGenerations.get(userKeyStr) || 0) : 0;
+  const userKeyStr =
+    userId !== undefined && userId !== null ? String(userId).trim() : null;
+  const startUserGen = userKeyStr
+    ? userClearGenerations.get(userKeyStr) || 0
+    : 0;
   const startGlobalGen = cacheClearGeneration;
 
   const isCacheCleared = () => {
     if (cacheClearGeneration !== startGlobalGen) return true;
-    if (userKeyStr && (userClearGenerations.get(userKeyStr) || 0) !== startUserGen) return true;
+    if (
+      userKeyStr &&
+      (userClearGenerations.get(userKeyStr) || 0) !== startUserGen
+    )
+      return true;
     return false;
   };
 
@@ -549,7 +597,10 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
         try {
           sharedResult = await Promise.race([pendingPromise, abortPromise]);
         } finally {
-          if (onAbort && typeof options.signal.removeEventListener === 'function') {
+          if (
+            onAbort &&
+            typeof options.signal.removeEventListener === 'function'
+          ) {
             options.signal.removeEventListener('abort', onAbort);
           }
         }
@@ -558,9 +609,16 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
       }
 
       // Вызываем onData / onFreshData для второго/последующих подписчиков свежего результата
-      if (!options.signal?.aborted && !sharedResult?.fromCache && sharedResult?.data !== undefined) {
+      if (
+        !options.signal?.aborted &&
+        !sharedResult?.fromCache &&
+        sharedResult?.data !== undefined
+      ) {
         if (typeof options.onData === 'function') {
-          options.onData(sharedResult.data, { fromCache: false, isStale: false });
+          options.onData(sharedResult.data, {
+            fromCache: false,
+            isStale: false,
+          });
         }
         if (typeof options.onFreshData === 'function') {
           options.onFreshData(sharedResult.data);
@@ -696,7 +754,10 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
       }
       throw err;
     } finally {
-      if (onExternalAbort && typeof options.signal?.removeEventListener === 'function') {
+      if (
+        onExternalAbort &&
+        typeof options.signal?.removeEventListener === 'function'
+      ) {
         options.signal.removeEventListener('abort', onExternalAbort);
       }
       // Удаляем только если запись всё ещё указывает на текущий promise
@@ -719,7 +780,11 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
  * @param {number} limit
  * @param {object} options
  */
-export const fetchTracksPage = async (offset = 0, limit = TRACKS_PAGE_SIZE, options = {}) => {
+export const fetchTracksPage = async (
+  offset = 0,
+  limit = TRACKS_PAGE_SIZE,
+  options = {},
+) => {
   const pageIndex = Math.floor(offset / limit);
   const endpoint = `/api/tracks?limit=${limit}&offset=${offset}`;
   const key = options.key || `tracks_page_${offset}`;
@@ -733,10 +798,9 @@ export const fetchTracksPage = async (offset = 0, limit = TRACKS_PAGE_SIZE, opti
       rawItems = raw.items;
     }
 
-    const normalizedItems = rawItems.map((t) => ({
-      ...t,
-      coverArt: t.coverArt || `${serverUrl}/api/cover/${t.id}`,
-    }));
+    const normalizedItems = rawItems
+      .map((t) => normalizeTrack(t, { serverUrl }))
+      .filter(Boolean);
 
     return {
       page: pageIndex,

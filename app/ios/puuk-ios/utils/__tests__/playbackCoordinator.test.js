@@ -1,4 +1,9 @@
-import { PlaybackCoordinator, normalizeStreamUrl, PlaybackError, classifyPlaybackError } from '../playbackCoordinator';
+import {
+  PlaybackCoordinator,
+  normalizeStreamUrl,
+  PlaybackError,
+  classifyPlaybackError,
+} from '../playbackCoordinator';
 import { TRACK_STATUS } from '../preloadScheduler';
 
 describe('PlaybackCoordinator', () => {
@@ -23,8 +28,11 @@ describe('PlaybackCoordinator', () => {
       cached: new Map(),
       getCachedUri: jest.fn((id) => mockCache.cached.get(String(id)) || null),
       isCached: jest.fn((id) => mockCache.cached.has(String(id))),
-      getOrFetch: jest.fn((id, url) => Promise.resolve(`file:///mock/${id}.audio`)),
+      getOrFetch: jest.fn((id, url) =>
+        Promise.resolve(`file:///mock/${id}.audio`),
+      ),
       cancel: jest.fn(),
+      setProtectedTrackIds: jest.fn(),
     };
 
     schedulerListeners = new Set();
@@ -62,45 +70,70 @@ describe('PlaybackCoordinator', () => {
 
     expect(res.isLocal).toBe(true);
     expect(res.uri).toBe('file:///mock/1.mp3');
-    expect(mockPlayer.replace).toHaveBeenCalledWith({ uri: 'file:///mock/1.mp3' });
+    expect(mockPlayer.replace).toHaveBeenCalledWith({
+      uri: 'file:///mock/1.mp3',
+    });
     expect(mockPlayer.play).toHaveBeenCalled();
     expect(mockPlayer.setActiveForLockScreen).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ title: 'Cached Song' }),
-      expect.any(Object)
+      expect.any(Object),
     );
   });
 
   test('play() falls back to remote stream URL and launches background cache if track is not cached', async () => {
-    const track = { id: 2, title: 'Remote Song', stream_url: 'https://puuk.app/api/stream/2' };
+    const track = {
+      id: 2,
+      title: 'Remote Song',
+      stream_url: 'https://puuk.app/api/stream/2',
+    };
     const headers = { Authorization: 'Bearer token123' };
 
     const res = await coordinator.play(mockPlayer, track, { headers });
 
     expect(res.isLocal).toBe(false);
     expect(res.uri).toBe('https://puuk.app/api/stream/2');
-    expect(mockPlayer.replace).toHaveBeenCalledWith({ uri: 'https://puuk.app/api/stream/2', headers });
+    expect(mockPlayer.replace).toHaveBeenCalledWith({
+      uri: 'https://puuk.app/api/stream/2',
+      headers,
+    });
     expect(mockPlayer.play).toHaveBeenCalled();
     // Cache was triggered in background
-    expect(mockCache.getOrFetch).toHaveBeenCalledWith('2', 'https://puuk.app/api/stream/2', { headers });
+    expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+      '2',
+      'https://puuk.app/api/stream/2',
+      { headers },
+    );
   });
 
   test('play() plays cached track without calling getHeadersAsync, and calls getHeadersAsync only for remote stream', async () => {
-    const getHeadersAsyncMock = jest.fn().mockResolvedValue({ Authorization: 'Bearer async_token' });
+    const getHeadersAsyncMock = jest
+      .fn()
+      .mockResolvedValue({ Authorization: 'Bearer async_token' });
 
     // 1. Local track
     mockCache.cached.set('10', 'file:///mock/10.mp3');
     const localTrack = { id: 10, title: 'Local Song' };
-    const localRes = await coordinator.play(mockPlayer, localTrack, { getHeadersAsync: getHeadersAsyncMock });
+    const localRes = await coordinator.play(mockPlayer, localTrack, {
+      getHeadersAsync: getHeadersAsyncMock,
+    });
 
     expect(localRes.isLocal).toBe(true);
-    expect(mockPlayer.replace).toHaveBeenCalledWith({ uri: 'file:///mock/10.mp3' });
+    expect(mockPlayer.replace).toHaveBeenCalledWith({
+      uri: 'file:///mock/10.mp3',
+    });
     expect(getHeadersAsyncMock).not.toHaveBeenCalled();
 
     // 2. Remote track
     mockPlayer.replace.mockClear();
-    const remoteTrack = { id: 20, title: 'Remote Song', stream_url: 'https://puuk.app/api/stream/20' };
-    const remoteRes = await coordinator.play(mockPlayer, remoteTrack, { getHeadersAsync: getHeadersAsyncMock });
+    const remoteTrack = {
+      id: 20,
+      title: 'Remote Song',
+      stream_url: 'https://puuk.app/api/stream/20',
+    };
+    const remoteRes = await coordinator.play(mockPlayer, remoteTrack, {
+      getHeadersAsync: getHeadersAsyncMock,
+    });
 
     expect(remoteRes.isLocal).toBe(false);
     expect(getHeadersAsyncMock).toHaveBeenCalledTimes(1);
@@ -118,7 +151,9 @@ describe('PlaybackCoordinator', () => {
     const res = await coordinator.play(mockPlayer, track);
     expect(coordinator.currentTrackId).toBe('0');
     expect(res.uri).toBe('https://puuk.app/api/stream/0');
-    expect(mockPlayer.replace).toHaveBeenCalledWith(expect.objectContaining({ uri: 'https://puuk.app/api/stream/0' }));
+    expect(mockPlayer.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: 'https://puuk.app/api/stream/0' }),
+    );
   });
 
   test('play() accepts track DTO with track_id instead of id', async () => {
@@ -127,7 +162,9 @@ describe('PlaybackCoordinator', () => {
 
     expect(coordinator.currentTrackId).toBe('42');
     expect(res.uri).toBe('https://puuk.app/api/stream/42');
-    expect(mockPlayer.replace).toHaveBeenCalledWith(expect.objectContaining({ uri: 'https://puuk.app/api/stream/42' }));
+    expect(mockPlayer.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: 'https://puuk.app/api/stream/42' }),
+    );
   });
 
   test('updateQueue() handles next track with id: 0 and track_id', () => {
@@ -136,11 +173,41 @@ describe('PlaybackCoordinator', () => {
     // Track with id: 0
     coordinator.updateQueue({ id: 1 }, [{ id: 0, title: 'Zero Track' }]);
     expect(mockScheduler.getStatus).toHaveBeenCalledWith('0');
-    expect(coordinator.getState().nextTrackStatus).toBe(TRACK_STATUS.DOWNLOADING);
+    expect(coordinator.getState().nextTrackStatus).toBe(
+      TRACK_STATUS.DOWNLOADING,
+    );
 
     // Track with track_id
     coordinator.updateQueue({ id: 1 }, [{ track_id: 99, title: 'Track 99' }]);
     expect(mockScheduler.getStatus).toHaveBeenCalledWith('99');
+  });
+
+  test('updateQueue protects currentTrack and queue IDs including legacy track_id and ID 0', () => {
+    coordinator.updateQueue({ track_id: 'legacy-cur' }, [
+      { track_id: 'legacy-q1' },
+      { id: 0 },
+    ]);
+
+    expect(mockCache.setProtectedTrackIds).toHaveBeenCalledWith([
+      'legacy-cur',
+      'legacy-q1',
+      0,
+    ]);
+  });
+
+  test('scheduler events match next track canonical identity across id and track_id forms', () => {
+    coordinator.updateQueue({ id: 1 }, [
+      { track_id: 'q-status-1', title: 'Next' },
+    ]);
+
+    // Trigger scheduler event with canonical ID
+    coordinator._handleSchedulerEvent({
+      trackId: 'q-status-1',
+      status: TRACK_STATUS.READY,
+    });
+
+    expect(coordinator.getState().nextTrackStatus).toBe(TRACK_STATUS.READY);
+    expect(coordinator.getState().networkStatus).toBe('good');
   });
 
   test('updateQueue() syncs scheduler without calling native preload', () => {
@@ -152,7 +219,11 @@ describe('PlaybackCoordinator', () => {
 
     coordinator.updateQueue(currentTrack, upNext);
 
-    expect(mockScheduler.syncQueue).toHaveBeenCalledWith(currentTrack, upNext, {});
+    expect(mockScheduler.syncQueue).toHaveBeenCalledWith(
+      currentTrack,
+      upNext,
+      {},
+    );
     expect(mockPreloadNative).not.toHaveBeenCalled();
   });
 
@@ -211,7 +282,11 @@ describe('PlaybackCoordinator', () => {
       throw new Error('AVPlayer cannot read file');
     });
 
-    const track = { id: 1, title: 'Corrupt Local Song', stream_url: 'https://puuk.app/api/stream/1' };
+    const track = {
+      id: 1,
+      title: 'Corrupt Local Song',
+      stream_url: 'https://puuk.app/api/stream/1',
+    };
     const res = await coordinator.play(mockPlayer, track);
 
     expect(res.isLocal).toBe(false);
@@ -224,18 +299,28 @@ describe('PlaybackCoordinator', () => {
     mockCache.cached.set('1', 'file:///mock/1.mp3');
     coordinator.bypassCache = true;
 
-    const track = { id: 1, title: 'Bypassed Cache Song', stream_url: 'https://puuk.app/api/stream/1' };
+    const track = {
+      id: 1,
+      title: 'Bypassed Cache Song',
+      stream_url: 'https://puuk.app/api/stream/1',
+    };
     const res = await coordinator.play(mockPlayer, track);
 
     expect(res.isLocal).toBe(false);
     expect(res.uri).toBe('https://puuk.app/api/stream/1');
-    expect(mockPlayer.replace).toHaveBeenCalledWith({ uri: 'https://puuk.app/api/stream/1' });
+    expect(mockPlayer.replace).toHaveBeenCalledWith({
+      uri: 'https://puuk.app/api/stream/1',
+    });
     expect(mockCache.getCachedUri).not.toHaveBeenCalled();
   });
 
   describe('Idempotent playback', () => {
     test('does not re-run replace or trigger background cache when same track and source are re-played', async () => {
-      const track = { id: 10, title: 'Idempotent Song', stream_url: 'https://puuk.app/api/stream/10' };
+      const track = {
+        id: 10,
+        title: 'Idempotent Song',
+        stream_url: 'https://puuk.app/api/stream/10',
+      };
       const firstRes = await coordinator.play(mockPlayer, track);
 
       expect(firstRes.reused).toBeUndefined();
@@ -257,18 +342,28 @@ describe('PlaybackCoordinator', () => {
     });
 
     test('reloads track when force: true is provided', async () => {
-      const track = { id: 10, title: 'Forced Song', stream_url: 'https://puuk.app/api/stream/10' };
+      const track = {
+        id: 10,
+        title: 'Forced Song',
+        stream_url: 'https://puuk.app/api/stream/10',
+      };
       await coordinator.play(mockPlayer, track);
 
       mockPlayer.replace.mockClear();
-      const forcedRes = await coordinator.play(mockPlayer, track, { force: true });
+      const forcedRes = await coordinator.play(mockPlayer, track, {
+        force: true,
+      });
 
       expect(forcedRes.reused).toBeUndefined();
       expect(mockPlayer.replace).toHaveBeenCalledTimes(1);
     });
 
     test('reloads if source URI changes between play calls', async () => {
-      const track = { id: 10, title: 'Cache Transition Song', stream_url: 'https://puuk.app/api/stream/10' };
+      const track = {
+        id: 10,
+        title: 'Cache Transition Song',
+        stream_url: 'https://puuk.app/api/stream/10',
+      };
       const remoteRes = await coordinator.play(mockPlayer, track);
       expect(remoteRes.isLocal).toBe(false);
 
@@ -280,12 +375,20 @@ describe('PlaybackCoordinator', () => {
       expect(localRes.reused).toBeUndefined();
       expect(localRes.isLocal).toBe(true);
       expect(localRes.uri).toBe('file:///mock/10.mp3');
-      expect(mockPlayer.replace).toHaveBeenCalledWith({ uri: 'file:///mock/10.mp3' });
+      expect(mockPlayer.replace).toHaveBeenCalledWith({
+        uri: 'file:///mock/10.mp3',
+      });
     });
 
     test('reloads if auth headers change between play calls for remote stream', async () => {
-      const track = { id: 10, title: 'Header Change Song', stream_url: 'https://puuk.app/api/stream/10' };
-      const res1 = await coordinator.play(mockPlayer, track, { headers: { Authorization: 'Bearer token_v1' } });
+      const track = {
+        id: 10,
+        title: 'Header Change Song',
+        stream_url: 'https://puuk.app/api/stream/10',
+      };
+      const res1 = await coordinator.play(mockPlayer, track, {
+        headers: { Authorization: 'Bearer token_v1' },
+      });
       expect(res1.reused).toBeUndefined();
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://puuk.app/api/stream/10',
@@ -295,7 +398,9 @@ describe('PlaybackCoordinator', () => {
       mockPlayer.replace.mockClear();
 
       // Play with changed headers: must re-replace source
-      const res2 = await coordinator.play(mockPlayer, track, { headers: { Authorization: 'Bearer token_v2' } });
+      const res2 = await coordinator.play(mockPlayer, track, {
+        headers: { Authorization: 'Bearer token_v2' },
+      });
       expect(res2.reused).toBeUndefined();
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://puuk.app/api/stream/10',
@@ -305,13 +410,19 @@ describe('PlaybackCoordinator', () => {
       mockPlayer.replace.mockClear();
 
       // Play again with identical headers: must reuse source
-      const res3 = await coordinator.play(mockPlayer, track, { headers: { Authorization: 'Bearer token_v2' } });
+      const res3 = await coordinator.play(mockPlayer, track, {
+        headers: { Authorization: 'Bearer token_v2' },
+      });
       expect(res3.reused).toBe(true);
       expect(mockPlayer.replace).not.toHaveBeenCalled();
     });
 
     test('throws classified play_error and updates coordinator state if player.play fails during idempotent resume', async () => {
-      const track = { id: 10, title: 'Resume Fail Song', stream_url: 'https://puuk.app/api/stream/10' };
+      const track = {
+        id: 10,
+        title: 'Resume Fail Song',
+        stream_url: 'https://puuk.app/api/stream/10',
+      };
       await coordinator.play(mockPlayer, track);
 
       mockPlayer.play.mockImplementationOnce(() => {
@@ -329,7 +440,9 @@ describe('PlaybackCoordinator', () => {
       expect(thrownErr.type).toBe('play_error');
       expect(thrownErr.trackId).toBe('10');
       expect(coordinator.getState().networkStatus).toBe('error');
-      expect(coordinator.getState().networkError).toBe('Audio session disrupted');
+      expect(coordinator.getState().networkError).toBe(
+        'Audio session disrupted',
+      );
       expect(coordinator.lastErrorType).toBe('play_error');
     });
 
@@ -338,7 +451,11 @@ describe('PlaybackCoordinator', () => {
         throw new Error('Corrupt cache entry');
       });
 
-      const track = { id: 42, title: 'Cache Error Track', stream_url: 'https://puuk.app/api/stream/42' };
+      const track = {
+        id: 42,
+        title: 'Cache Error Track',
+        stream_url: 'https://puuk.app/api/stream/42',
+      };
       const res = await coordinator.play(mockPlayer, track);
 
       expect(res.isLocal).toBe(false);
@@ -351,12 +468,23 @@ describe('PlaybackCoordinator', () => {
   describe('Generation token and rapid track switching', () => {
     test('supersedes slow track A when track B is requested concurrently', async () => {
       let resolveA;
-      mockPlayer.replace.mockImplementationOnce(() => new Promise((resolve) => {
-        resolveA = resolve;
-      }));
+      mockPlayer.replace.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
 
-      const trackA = { id: 100, title: 'Track A', stream_url: 'https://puuk.app/api/stream/100' };
-      const trackB = { id: 200, title: 'Track B', stream_url: 'https://puuk.app/api/stream/200' };
+      const trackA = {
+        id: 100,
+        title: 'Track A',
+        stream_url: 'https://puuk.app/api/stream/100',
+      };
+      const trackB = {
+        id: 200,
+        title: 'Track B',
+        stream_url: 'https://puuk.app/api/stream/200',
+      };
 
       const playPromiseA = coordinator.play(mockPlayer, trackA);
       const playPromiseB = coordinator.play(mockPlayer, trackB);
@@ -373,18 +501,29 @@ describe('PlaybackCoordinator', () => {
       expect(mockPlayer.setActiveForLockScreen).toHaveBeenLastCalledWith(
         true,
         expect.objectContaining({ title: 'Track B' }),
-        expect.any(Object)
+        expect.any(Object),
       );
     });
 
     test('re-applies current track source if slow track A replace finishes after track B has already played', async () => {
       let resolveA;
-      mockPlayer.replace.mockImplementationOnce(() => new Promise((resolve) => {
-        resolveA = resolve;
-      }));
+      mockPlayer.replace.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
 
-      const trackA = { id: 100, title: 'Slow Track A', stream_url: 'https://puuk.app/api/stream/100' };
-      const trackB = { id: 200, title: 'Fast Track B', stream_url: 'https://puuk.app/api/stream/200' };
+      const trackA = {
+        id: 100,
+        title: 'Slow Track A',
+        stream_url: 'https://puuk.app/api/stream/100',
+      };
+      const trackB = {
+        id: 200,
+        title: 'Fast Track B',
+        stream_url: 'https://puuk.app/api/stream/200',
+      };
 
       const playPromiseA = coordinator.play(mockPlayer, trackA);
       const playPromiseB = coordinator.play(mockPlayer, trackB);
@@ -401,18 +540,29 @@ describe('PlaybackCoordinator', () => {
 
       // Final call on mockPlayer.replace MUST be Track B, not Track A!
       expect(mockPlayer.replace).toHaveBeenLastCalledWith(
-        expect.objectContaining({ uri: 'https://puuk.app/api/stream/200' })
+        expect.objectContaining({ uri: 'https://puuk.app/api/stream/200' }),
       );
     });
 
     test('suppresses error and network state pollution from superseded track A', async () => {
       let rejectA;
-      mockPlayer.replace.mockImplementationOnce(() => new Promise((_, reject) => {
-        rejectA = reject;
-      }));
+      mockPlayer.replace.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectA = reject;
+          }),
+      );
 
-      const trackA = { id: 100, title: 'Slow Failing Track A', stream_url: 'https://puuk.app/api/stream/100' };
-      const trackB = { id: 200, title: 'Healthy Track B', stream_url: 'https://puuk.app/api/stream/200' };
+      const trackA = {
+        id: 100,
+        title: 'Slow Failing Track A',
+        stream_url: 'https://puuk.app/api/stream/100',
+      };
+      const trackB = {
+        id: 200,
+        title: 'Healthy Track B',
+        stream_url: 'https://puuk.app/api/stream/200',
+      };
 
       const stateListener = jest.fn();
       coordinator.subscribe(stateListener);
@@ -429,16 +579,25 @@ describe('PlaybackCoordinator', () => {
       expect(resA.superseded).toBe(true);
       expect(coordinator.getState().networkStatus).toBe('good');
       expect(coordinator.getState().networkError).toBeNull();
-      expect(stateListener).not.toHaveBeenCalledWith(expect.objectContaining({ networkStatus: 'error' }));
+      expect(stateListener).not.toHaveBeenCalledWith(
+        expect.objectContaining({ networkStatus: 'error' }),
+      );
     });
 
     test('destroy() invalidates and supersedes in-flight play operation', async () => {
       let resolveA;
-      mockPlayer.replace.mockImplementationOnce(() => new Promise((resolve) => {
-        resolveA = resolve;
-      }));
+      mockPlayer.replace.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
 
-      const trackA = { id: 100, title: 'In Flight Song', stream_url: 'https://puuk.app/api/stream/100' };
+      const trackA = {
+        id: 100,
+        title: 'In Flight Song',
+        stream_url: 'https://puuk.app/api/stream/100',
+      };
       const playPromiseA = coordinator.play(mockPlayer, trackA);
 
       coordinator.destroy();
@@ -453,17 +612,26 @@ describe('PlaybackCoordinator', () => {
 
   describe('Error classification (classifyPlaybackError & PlaybackError)', () => {
     test('returns existing PlaybackError unchanged', () => {
-      const existing = new PlaybackError('Original', { type: 'local_cache_error', trackId: '5' });
+      const existing = new PlaybackError('Original', {
+        type: 'local_cache_error',
+        trackId: '5',
+      });
       expect(classifyPlaybackError(existing)).toBe(existing);
     });
 
     test('classifies 401 and auth messages as auth_error', () => {
-      const err1 = classifyPlaybackError({ status: 401, message: 'Forbidden' }, '1');
+      const err1 = classifyPlaybackError(
+        { status: 401, message: 'Forbidden' },
+        '1',
+      );
       expect(err1.type).toBe('auth_error');
       expect(err1.code).toBe('auth_error');
       expect(err1.trackId).toBe('1');
 
-      const err2 = classifyPlaybackError(new Error('Unauthorized request'), '2');
+      const err2 = classifyPlaybackError(
+        new Error('Unauthorized request'),
+        '2',
+      );
       expect(err2.type).toBe('auth_error');
 
       const err3 = classifyPlaybackError(new Error('JWT auth expired'));
@@ -474,10 +642,15 @@ describe('PlaybackCoordinator', () => {
       const err1 = classifyPlaybackError({ status: 408 }, '1');
       expect(err1.type).toBe('network_timeout');
 
-      const err2 = classifyPlaybackError(new Error('Network connection timed out'));
+      const err2 = classifyPlaybackError(
+        new Error('Network connection timed out'),
+      );
       expect(err2.type).toBe('network_timeout');
 
-      const err3 = classifyPlaybackError({ name: 'TimeoutError', message: 'The operation timed out' });
+      const err3 = classifyPlaybackError({
+        name: 'TimeoutError',
+        message: 'The operation timed out',
+      });
       expect(err3.type).toBe('network_timeout');
     });
 
@@ -485,12 +658,16 @@ describe('PlaybackCoordinator', () => {
       const err1 = classifyPlaybackError(new Error('Failed to play sound'));
       expect(err1.type).toBe('play_error');
 
-      const err2 = classifyPlaybackError(new Error('Audio playback device lost'));
+      const err2 = classifyPlaybackError(
+        new Error('Audio playback device lost'),
+      );
       expect(err2.type).toBe('play_error');
     });
 
     test('classifies cache/local issues as local_cache_error', () => {
-      const err1 = classifyPlaybackError(new Error('Local file does not exist'));
+      const err1 = classifyPlaybackError(
+        new Error('Local file does not exist'),
+      );
       expect(err1.type).toBe('local_cache_error');
 
       const err2 = classifyPlaybackError(new Error('Cache read failure'));
@@ -498,7 +675,10 @@ describe('PlaybackCoordinator', () => {
     });
 
     test('classifies unhandled errors as remote_replace_error by default', () => {
-      const err = classifyPlaybackError(new Error('HTTP 500 Internal Server Error'), '7');
+      const err = classifyPlaybackError(
+        new Error('HTTP 500 Internal Server Error'),
+        '7',
+      );
       expect(err.type).toBe('remote_replace_error');
       expect(err.cause).toBeDefined();
       expect(err.trackId).toBe('7');
@@ -509,9 +689,15 @@ describe('PlaybackCoordinator', () => {
         throw new Error('Remote item failed to load: HTTP 503');
       });
 
-      const track = { id: 300, title: 'Broken Remote Song', stream_url: 'https://puuk.app/api/stream/300' };
+      const track = {
+        id: 300,
+        title: 'Broken Remote Song',
+        stream_url: 'https://puuk.app/api/stream/300',
+      };
 
-      await expect(coordinator.play(mockPlayer, track)).rejects.toThrow(PlaybackError);
+      await expect(coordinator.play(mockPlayer, track)).rejects.toThrow(
+        PlaybackError,
+      );
       expect(coordinator.getState().networkStatus).toBe('error');
       expect(coordinator.getState().lastErrorType).toBe('remote_replace_error');
       expect(coordinator.getState().networkError).toContain('HTTP 503');
@@ -522,9 +708,15 @@ describe('PlaybackCoordinator', () => {
         throw new Error('AVPlayerItem playback failed');
       });
 
-      const track = { id: 400, title: 'Broken Play Song', stream_url: 'https://puuk.app/api/stream/400' };
+      const track = {
+        id: 400,
+        title: 'Broken Play Song',
+        stream_url: 'https://puuk.app/api/stream/400',
+      };
 
-      await expect(coordinator.play(mockPlayer, track)).rejects.toThrow(PlaybackError);
+      await expect(coordinator.play(mockPlayer, track)).rejects.toThrow(
+        PlaybackError,
+      );
       expect(coordinator.getState().networkStatus).toBe('error');
       expect(coordinator.getState().lastErrorType).toBe('play_error');
     });
@@ -552,7 +744,11 @@ describe('PlaybackCoordinator', () => {
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
       coordinator.debug = false;
-      const track = { id: 600, title: 'Silent Song', stream_url: 'https://puuk.app/api/stream/600' };
+      const track = {
+        id: 600,
+        title: 'Silent Song',
+        stream_url: 'https://puuk.app/api/stream/600',
+      };
       await coordinator.play(mockPlayer, track);
 
       expect(logSpy).not.toHaveBeenCalled();
@@ -566,16 +762,20 @@ describe('PlaybackCoordinator', () => {
       const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
       coordinator.debug = true;
-      const track = { id: 700, title: 'Verbose Song', stream_url: 'https://puuk.app/api/stream/700' };
+      const track = {
+        id: 700,
+        title: 'Verbose Song',
+        stream_url: 'https://puuk.app/api/stream/700',
+      };
       await coordinator.play(mockPlayer, track);
 
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('[Coordinator][Stage 1: normalize_url]'),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('[Coordinator][Stage 4: player_play]'),
-        expect.any(Object)
+        expect.any(Object),
       );
 
       logSpy.mockRestore();
@@ -588,19 +788,30 @@ describe('PlaybackCoordinator', () => {
       coordinator.currentTrack = { id: 2, title: 'Newer Track' };
 
       // Older track 1 attempts to update lock screen
-      await coordinator.updateLockScreenMetadata(mockPlayer, { id: 1, title: 'Older Track' });
+      await coordinator.updateLockScreenMetadata(mockPlayer, {
+        id: 1,
+        title: 'Older Track',
+      });
       expect(mockPlayer.setActiveForLockScreen).not.toHaveBeenCalled();
 
       // isCurrent check returning false
-      await coordinator.updateLockScreenMetadata(mockPlayer, { id: 2, title: 'Newer Track' }, () => false);
+      await coordinator.updateLockScreenMetadata(
+        mockPlayer,
+        { id: 2, title: 'Newer Track' },
+        () => false,
+      );
       expect(mockPlayer.setActiveForLockScreen).not.toHaveBeenCalled();
 
       // Current track updates successfully
-      await coordinator.updateLockScreenMetadata(mockPlayer, { id: 2, title: 'Newer Track' }, () => true);
+      await coordinator.updateLockScreenMetadata(
+        mockPlayer,
+        { id: 2, title: 'Newer Track' },
+        () => true,
+      );
       expect(mockPlayer.setActiveForLockScreen).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ title: 'Newer Track' }),
-        expect.any(Object)
+        expect.any(Object),
       );
     });
   });
@@ -608,9 +819,12 @@ describe('PlaybackCoordinator', () => {
   describe('Immediate lock screen metadata on track transition', () => {
     test('play() applies lock screen metadata immediately before replace() resolves', async () => {
       let resolveReplace;
-      mockPlayer.replace.mockImplementationOnce(() => new Promise((resolve) => {
-        resolveReplace = resolve;
-      }));
+      mockPlayer.replace.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReplace = resolve;
+          }),
+      );
 
       const track = {
         id: 999,
@@ -631,7 +845,7 @@ describe('PlaybackCoordinator', () => {
           albumTitle: 'Instant Album',
           artworkUrl: expect.stringContaining('/api/cover/999'),
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
 
       // Now resolve replace and complete playback
@@ -643,11 +857,17 @@ describe('PlaybackCoordinator', () => {
 
     test('updateQueue() prefetches cover art for the upcoming track in queue', () => {
       const CoverImage = require('../../shared/media/CoverImage');
-      const prefetchSpy = jest.spyOn(CoverImage, 'prefetchCover').mockImplementation(() => {});
+      const prefetchSpy = jest
+        .spyOn(CoverImage, 'prefetchCover')
+        .mockImplementation(() => {});
 
       const current = { id: 1, title: 'Current' };
       const upNext = [
-        { id: 2, title: 'Next Track', coverArt: 'https://puuk.app/api/cover/2' },
+        {
+          id: 2,
+          title: 'Next Track',
+          coverArt: 'https://puuk.app/api/cover/2',
+        },
       ];
 
       coordinator.updateQueue(current, upNext);
@@ -669,22 +889,34 @@ describe('PlaybackCoordinator', () => {
     });
 
     test('normalizes relative /api/stream path', () => {
-      const url = normalizeStreamUrl({ id: 42, stream_url: '/api/stream/42' }, 'https://web.puuk.fun');
+      const url = normalizeStreamUrl(
+        { id: 42, stream_url: '/api/stream/42' },
+        'https://web.puuk.fun',
+      );
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
     test('replaces host with active serverUrl if stream_url contains different host', () => {
-      const url = normalizeStreamUrl({ id: 42, stream_url: 'http://127.0.0.1:8000/api/stream/42' }, 'https://web.puuk.fun');
+      const url = normalizeStreamUrl(
+        { id: 42, stream_url: 'http://127.0.0.1:8000/api/stream/42' },
+        'https://web.puuk.fun',
+      );
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
     test('trims quotes and whitespace', () => {
-      const url = normalizeStreamUrl({ id: ' 42 ', stream_url: ' "/api/stream/42" ' }, ' https://web.puuk.fun ');
+      const url = normalizeStreamUrl(
+        { id: ' 42 ', stream_url: ' "/api/stream/42" ' },
+        ' https://web.puuk.fun ',
+      );
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
     test('cleans double slashes in path', () => {
-      const url = normalizeStreamUrl({ id: 42, stream_url: '/api/stream//42' }, 'https://web.puuk.fun//');
+      const url = normalizeStreamUrl(
+        { id: 42, stream_url: '/api/stream//42' },
+        'https://web.puuk.fun//',
+      );
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
@@ -694,7 +926,10 @@ describe('PlaybackCoordinator', () => {
       expect(httpsUrl.startsWith('https://')).toBe(true);
       expect(httpsUrl.includes('https:/w')).toBe(false);
 
-      const httpUrl = normalizeStreamUrl({ id: 123 }, 'http://192.168.1.50:8000');
+      const httpUrl = normalizeStreamUrl(
+        { id: 123 },
+        'http://192.168.1.50:8000',
+      );
       expect(httpUrl).toBe('http://192.168.1.50:8000/api/stream/123');
       expect(httpUrl.startsWith('http://')).toBe(true);
       expect(httpUrl.includes('http:/1')).toBe(false);
