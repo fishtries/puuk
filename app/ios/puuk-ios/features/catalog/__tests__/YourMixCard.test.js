@@ -32,6 +32,10 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+}));
+
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(() => Promise.resolve()),
   ImpactFeedbackStyle: {
@@ -101,5 +105,67 @@ describe('YourMixCard', () => {
     });
 
     expect(onPressMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('renders top-to-bottom base gradient with sunset flame palette', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
+    });
+
+    const root = renderer.root;
+    const baseGradient = root.findByProps({ testID: 'your-mix-base-gradient' });
+    expect(baseGradient).toBeDefined();
+    expect(baseGradient.props.start).toEqual({ x: 0.5, y: 0 });
+    expect(baseGradient.props.end).toEqual({ x: 0.5, y: 1 });
+    expect(baseGradient.props.colors[0]).toBe('#FF4A0A');
+    expect(
+      baseGradient.props.colors[baseGradient.props.colors.length - 1],
+    ).toBe('#000000');
+  });
+
+  test('renders animated gradient overlay flowing top to bottom', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
+    });
+
+    const root = renderer.root;
+    const animGradient = root.findByProps({
+      testID: 'your-mix-animated-gradient',
+    });
+    expect(animGradient).toBeDefined();
+    expect(animGradient.props.start).toEqual({ x: 0.5, y: 0 });
+    expect(animGradient.props.end).toEqual({ x: 0.5, y: 1 });
+    expect(animGradient.props.colors[0]).toBe('#FFA040');
+  });
+
+  test('renders inner glow halo covering entire border perimeter', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
+    });
+
+    const root = renderer.root;
+    const innerGlow = root.findByProps({ testID: 'your-mix-inner-glow' });
+    expect(innerGlow).toBeDefined();
+    expect(innerGlow.props.pointerEvents).toBe('none');
+
+    // Inner glow contains directional gradients for top, bottom, left, right edges
+    const gradients = innerGlow.findAll(
+      (n) => n.props.testID === 'linear-gradient',
+    );
+    expect(gradients.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test('does not render any blob, orb or blur view elements', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
+    });
+
+    const root = renderer.root;
+    const blurViews = root.findAll((n) => n.props.testID === 'blur-view');
+    expect(blurViews.length).toBe(0);
   });
 });
