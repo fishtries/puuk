@@ -4,6 +4,7 @@ import Animated, {
   LinearTransition,
   FadeIn,
   FadeOut,
+  Easing,
 } from 'react-native-reanimated';
 import { TRACK_STATUS } from '../../utils/preloadScheduler';
 
@@ -23,7 +24,7 @@ export default function TrackLoadingBadge({
 
   return (
     <Animated.View
-      layout={LinearTransition.springify().damping(18).stiffness(160)}
+      layout={LinearTransition.duration(200).easing(Easing.bezier(0.25, 1, 0.5, 1))}
       entering={FadeIn.duration(200)}
       exiting={FadeOut.duration(150)}
       style={[

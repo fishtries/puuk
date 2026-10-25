@@ -32,6 +32,7 @@ jest.mock('../PlayerNetworkBanner', () => 'PlayerNetworkBanner');
 jest.mock('../ChasingArrowsIcon', () => 'ChasingArrowsIcon');
 jest.mock('../ProgressBar', () => 'ProgressBar');
 jest.mock('../TrackLoadingBadge', () => 'TrackLoadingBadge');
+jest.mock('../AmbientBackground', () => 'AmbientBackground');
 
 jest.mock('@react-native-menu/menu', () => {
   const { View } = require('react-native');
@@ -91,6 +92,16 @@ jest.mock('react-native-gesture-handler', () => {
 
 jest.mock('react-native-reanimated', () => {
   const { View, Text } = require('react-native');
+  const createChain = () => {
+    const chain = {
+      springify: () => chain,
+      damping: () => chain,
+      stiffness: () => chain,
+      duration: () => chain,
+      easing: () => chain,
+    };
+    return chain;
+  };
   return {
     __esModule: true,
     default: {
@@ -123,9 +134,7 @@ jest.mock('react-native-reanimated', () => {
     },
     FadeIn: { duration: () => ({}) },
     FadeOut: { duration: () => ({}) },
-    LinearTransition: {
-      springify: () => ({ damping: () => ({ stiffness: () => ({}) }) }),
-    },
+    LinearTransition: createChain(),
   };
 });
 

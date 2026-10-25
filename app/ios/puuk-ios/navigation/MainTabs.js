@@ -1,20 +1,18 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, StyleSheet, DeviceEventEmitter, Platform } from 'react-native';
 import {
-  View,
-  StyleSheet,
-  DeviceEventEmitter,
-  Platform,
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { SymbolView } from 'expo-symbols';
 import * as Haptics from 'expo-haptics';
-import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
-import Animated, {
-  useAnimatedStyle,
-  interpolate,
-  Extrapolation,
+import {
+  createBottomTabNavigator,
+  BottomTabBar,
+} from '@react-navigation/bottom-tabs';
+import {
   withSpring,
   withTiming,
   runOnJS,
@@ -52,29 +50,37 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   onRefreshTracks,
 }) {
   const [activeTab, setActiveTab] = useState('Home');
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
-  const [hapticsEnabled, setHapticsEnabled] = useState(() => getSettings().hapticsEnabled ?? true);
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
+  const [hapticsEnabled, setHapticsEnabled] = useState(
+    () => getSettings().hapticsEnabled ?? true,
+  );
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
       if (s.accentColor) setAccentColor(s.accentColor);
-      if (typeof s.hapticsEnabled === 'boolean') setHapticsEnabled(s.hapticsEnabled);
+      if (typeof s.hapticsEnabled === 'boolean')
+        setHapticsEnabled(s.hapticsEnabled);
     });
     return unsub;
   }, []);
 
-  const handleTabPress = useCallback((tabName) => {
-    if (hapticsEnabled) {
-      Haptics.selectionAsync().catch(() => {});
-    }
-    if (activeTab === tabName) {
-      DeviceEventEmitter.emit(`PUUK_SCROLL_TO_TOP_${tabName.toUpperCase()}`);
-    }
-    setActiveTab(tabName);
-  }, [activeTab, hapticsEnabled]);
+  const handleTabPress = useCallback(
+    (tabName) => {
+      if (hapticsEnabled) {
+        Haptics.selectionAsync().catch(() => {});
+      }
+      if (activeTab === tabName) {
+        DeviceEventEmitter.emit(`PUUK_SCROLL_TO_TOP_${tabName.toUpperCase()}`);
+      }
+      setActiveTab(tabName);
+    },
+    [activeTab, hapticsEnabled],
+  );
 
   const renderHome = useCallback(
-    tabProps => (
+    (tabProps) => (
       <HomeScreen
         {...tabProps}
         tracks={tracks}
@@ -104,11 +110,11 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
       hasMoreTracks,
       isLoadingMoreTracks,
       onRefreshTracks,
-    ]
+    ],
   );
 
   const renderSearch = useCallback(
-    tabProps => (
+    (tabProps) => (
       <SearchScreen
         {...tabProps}
         isPlaying={isPlaying}
@@ -120,11 +126,18 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         onOpenAuthModal={onOpenAuthModal}
       />
     ),
-    [isPlaying, currentTrack, playTrack, setTrackToManage, currentUser, onOpenAuthModal]
+    [
+      isPlaying,
+      currentTrack,
+      playTrack,
+      setTrackToManage,
+      currentUser,
+      onOpenAuthModal,
+    ],
   );
 
   const renderLibrary = useCallback(
-    tabProps => (
+    (tabProps) => (
       <LibraryScreen
         {...tabProps}
         isPlaying={isPlaying}
@@ -136,18 +149,16 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         onOpenAuthModal={onOpenAuthModal}
       />
     ),
-    [isPlaying, currentTrack, playTrack, playTrackList, setTrackToManage, currentUser, onOpenAuthModal]
+    [
+      isPlaying,
+      currentTrack,
+      playTrack,
+      playTrackList,
+      setTrackToManage,
+      currentUser,
+      onOpenAuthModal,
+    ],
   );
-
-  const animatedTabBarStyle = useAnimatedStyle(() => {
-    if (!expandProgress) return {};
-    const opacity = interpolate(expandProgress.value, [0, 0.15], [1, 0], Extrapolation.CLAMP);
-    const translateY = interpolate(expandProgress.value, [0, 0.15], [0, 15], Extrapolation.CLAMP);
-    return {
-      opacity,
-      transform: [{ translateY }],
-    };
-  });
 
   const insets = useSafeAreaInsets();
 
@@ -211,11 +222,29 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
           }
         }
       });
-  }, [currentTrack, expandProgress, onExpand, dismissProgress, dismissDragY, onDismiss]);
+  }, [
+    currentTrack,
+    expandProgress,
+    onExpand,
+    dismissProgress,
+    dismissDragY,
+    onDismiss,
+  ]);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: '#000' }}>
+      <SafeAreaView
+        edges={['top']}
+        style={{
+          backgroundColor: activeTab === 'Home' ? 'transparent' : '#000',
+          position: activeTab === 'Home' ? 'absolute' : 'relative',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 10,
+        }}
+        pointerEvents={activeTab === 'Home' ? 'box-none' : 'auto'}
+      >
         <AppHeader
           activeTab={activeTab}
           currentUser={currentUser}
@@ -224,17 +253,14 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         />
       </SafeAreaView>
       <Tab.Navigator
-        tabBar={props => (
-          <Animated.View
-            style={[
-              animatedTabBarStyle,
-              {
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-              },
-            ]}
+        tabBar={(props) => (
+          <View
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+            }}
             pointerEvents={isPlayerVisible ? 'none' : 'auto'}
           >
             <GestureDetector gesture={tabBarSwipeGesture}>
@@ -242,13 +268,13 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
                 <BottomTabBar {...props} />
               </View>
             </GestureDetector>
-          </Animated.View>
+          </View>
         )}
         screenOptions={{
           lazy: false,
           detachInactiveScreens: false,
           headerShown: false,
-          safeAreaInsets: { bottom: currentTrack ? 6 : (insets?.bottom || 16) },
+          safeAreaInsets: { bottom: currentTrack ? 6 : insets?.bottom || 16 },
           tabBarStyle: {
             borderTopColor: 'rgba(255, 255, 255, 0.15)',
             borderTopWidth: StyleSheet.hairlineWidth,
@@ -258,7 +284,9 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
           tabBarBackground: () => (
             <View style={StyleSheet.absoluteFill}>
               <BlurView
-                tint={Platform.OS === 'ios' ? 'systemChromeMaterialDark' : 'dark'}
+                tint={
+                  Platform.OS === 'ios' ? 'systemChromeMaterialDark' : 'dark'
+                }
                 intensity={95}
                 style={StyleSheet.absoluteFill}
               />
@@ -283,14 +311,14 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
           },
         }}
       >
-        <Tab.Screen 
-          name="Home" 
+        <Tab.Screen
+          name="Home"
           listeners={{
             tabPress: () => handleTabPress('Home'),
             focus: () => setActiveTab('Home'),
           }}
-          options={{ 
-            tabBarLabel: 'Home', 
+          options={{
+            tabBarLabel: 'Home',
             tabBarIcon: ({ focused, color }) => (
               <SymbolView
                 name={focused ? 'house.fill' : 'house'}
@@ -309,14 +337,14 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         >
           {renderHome}
         </Tab.Screen>
-        <Tab.Screen 
-          name="Search" 
+        <Tab.Screen
+          name="Search"
           listeners={{
             tabPress: () => handleTabPress('Search'),
             focus: () => setActiveTab('Search'),
           }}
-          options={{ 
-            tabBarLabel: 'Search', 
+          options={{
+            tabBarLabel: 'Search',
             tabBarIcon: ({ focused, color }) => (
               <SymbolView
                 name="magnifyingglass"
@@ -336,14 +364,14 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         >
           {renderSearch}
         </Tab.Screen>
-        <Tab.Screen 
-          name="Library" 
+        <Tab.Screen
+          name="Library"
           listeners={{
             tabPress: () => handleTabPress('Library'),
             focus: () => setActiveTab('Library'),
           }}
-          options={{ 
-            tabBarLabel: 'Library', 
+          options={{
+            tabBarLabel: 'Library',
             tabBarIcon: ({ focused, color }) => (
               <SymbolView
                 name={focused ? 'square.stack.fill' : 'square.stack'}

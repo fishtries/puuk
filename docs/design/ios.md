@@ -10,12 +10,14 @@
 |---|---|
 | Вкладки, акцент навигации, связь с раскрытием плеера | `navigation/MainTabs.js` |
 | Раскрытие плеера, жест закрытия, свайп обложки для смены трека, получение цвета | `components/FullPlayerModal.js` |
+| Эмбиент-фон полного плеера (дыхание, орбы, blur, кроссфейд) | `components/fullplayer/AmbientBackground.js` |
 | Элементы управления и press feedback | `components/fullplayer/PlayerControls.js` |
 | Стили полного плеера | `components/fullplayer/playerStyles.js` |
 | Blur и маски | `components/fullplayer/BlurOverlays.js` |
 | Очередь | `components/fullplayer/QueuePanel.js` |
 | Тексты и движение строк | `components/fullplayer/lyrics/AppleLyricsView.js`, `AnimatedLyricLine.js` |
 | Загрузка обложки | `components/CoverImage.js` |
+| Карточка «your mix» на главном экране (градиент сверху вниз, внутренний ореол глоу, анимация) | `features/catalog/YourMixCard.js` |
 | Управление аудио | `hooks/usePlayerController.js` |
 
 ## Компоненты и стили
@@ -49,6 +51,6 @@ Shared values и worklets использовать для покадрового
 
 ## Тема и материалы
 
-`FullPlayerModal.js` читает `cover_color` и `/api/color/{id}`. Проверить fallback и устаревшие ответы при изменении этой логики. Blur реализуется через `expo-blur`, градиенты через `expo-linear-gradient`; числовую интенсивность нельзя считать эквивалентом CSS blur.
+Эмбиент-фон в полном плеере (`components/fullplayer/AmbientBackground.js`) реализован по модели Apple Music: увеличенная обложка с мягким дыханием (scale 1.45 ↔ 1.65), два плавающих световых орба, аппаратный `BlurView` (`intensity={80..95}`, `tint="dark"`) и трёхточечный виньеточный градиент `expo-linear-gradient` для сохранения контраста текстов и контролов. Смена трека выполняет двухбуферный кроссфейд (650ms), а при паузе анимация плавно возвращается в состояние покоя (1200ms). При `!isPlayerVisible` анимации останавливаются. Цвет читается из `cover_color` трека либо асинхронно запрашивается с `/api/color/{id}` с отменой устаревших ответов.
 
 Проверка плавности и материалов выполняется на устройстве. Jest и экспорт bundle полезны для технических ошибок, но не заменяют эту проверку.

@@ -5,6 +5,16 @@ import TrackLoadingBadge from '../TrackLoadingBadge';
 
 jest.mock('react-native-reanimated', () => {
   const { View, Text } = require('react-native');
+  const createChain = () => {
+    const chain = {
+      springify: () => chain,
+      damping: () => chain,
+      stiffness: () => chain,
+      duration: () => chain,
+      easing: () => chain,
+    };
+    return chain;
+  };
   return {
     __esModule: true,
     default: {
@@ -12,10 +22,11 @@ jest.mock('react-native-reanimated', () => {
       View,
       Text,
     },
-    LinearTransition: {
-      springify: () => ({
-        damping: () => ({ stiffness: () => ({}) }),
-      }),
+    LinearTransition: createChain(),
+    Easing: {
+      bezier: () => () => {},
+      inOut: () => () => {},
+      ease: () => {},
     },
     FadeIn: {
       duration: () => ({}),

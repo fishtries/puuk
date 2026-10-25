@@ -52,6 +52,7 @@ jest.mock('react-native-reanimated', () => {
     withSpring: (to) => to,
     withTiming: (to) => to,
     withDelay: (_delay, anim) => anim,
+    withDecay: (config) => config?.velocity || 0,
     interpolateColor: () => '#ffffff',
     cancelAnimation: jest.fn(),
     runOnJS: (fn) => fn,
@@ -360,5 +361,33 @@ describe('AppleLyricsView', () => {
     });
 
     expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics');
+  });
+
+  it('does not invoke onClose when panning or ending pan on synced lyrics', async () => {
+    const mockOnClose = jest.fn();
+    const lrcContent = [
+      '[00:05.00]Line 1',
+      '[00:10.00]Line 2',
+      '[00:15.00]Line 3',
+    ].join('\n');
+
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({
+        lyrics: lrcContent,
+        isSynced: true,
+      }),
+    });
+
+    await act(async () => {
+      TestRenderer.create(
+        <AppleLyricsView {...defaultProps} onClose={mockOnClose} />,
+      );
+    });
+
+    await act(async () => {
+      jest.runAllTimers();
+    });
+
+    expect(mockOnClose).not.toHaveBeenCalled();
   });
 });

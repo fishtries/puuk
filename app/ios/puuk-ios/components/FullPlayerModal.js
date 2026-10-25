@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import CoverImage, { prefetchCover } from '../shared/media/CoverImage';
 import { areTrackIdsEqual, getTrackId } from '../shared/domain/trackAdapter';
+import { authFetch } from '../shared/api/api';
 
 import Animated, {
   useSharedValue,
@@ -43,6 +44,7 @@ import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
 import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
 import PlayerHeader from './fullplayer/PlayerHeader';
+import AmbientBackground from './fullplayer/AmbientBackground';
 import styles from './fullplayer/playerStyles';
 
 const { width, height } = Dimensions.get('window');
@@ -97,6 +99,61 @@ const FullPlayerModal = ({
   const [isLyricsMounted, setIsLyricsMounted] = useState(false);
   const lyricsTransition = useSharedValue(0);
   const lyricsRotation = useSharedValue(0);
+
+  const trackId = getTrackId(currentTrack);
+
+  const initialHasLyrics = useMemo(() => {
+    if (!currentTrack) return false;
+    if (currentTrack.has_lyrics !== undefined)
+      return Boolean(currentTrack.has_lyrics);
+    if (typeof currentTrack.lyrics === 'string')
+      return currentTrack.lyrics.trim().length > 0;
+    return false;
+  }, [currentTrack]);
+
+  const [hasLyrics, setHasLyrics] = useState(initialHasLyrics);
+
+  useEffect(() => {
+    if (trackId === null) {
+      setHasLyrics(false);
+      return;
+    }
+
+    if (currentTrack?.has_lyrics !== undefined) {
+      setHasLyrics(Boolean(currentTrack.has_lyrics));
+    } else if (typeof currentTrack?.lyrics === 'string') {
+      setHasLyrics(currentTrack.lyrics.trim().length > 0);
+    }
+
+    let isMounted = true;
+    authFetch(`/api/tracks/${encodeURIComponent(String(trackId))}/lyrics`)
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isMounted) return;
+        const exists = Boolean(
+          data && data.lyrics && data.lyrics.trim().length > 0,
+        );
+        setHasLyrics(exists);
+        if (!exists && isLyricsView) {
+          setIsLyricsView(false);
+          setIsLyricsMounted(false);
+          cancelAnimation(lyricsTransition);
+          cancelAnimation(lyricsRotation);
+          lyricsTransition.value = 0;
+          lyricsRotation.value = 0;
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        if (currentTrack?.has_lyrics === undefined && !currentTrack?.lyrics) {
+          setHasLyrics(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [trackId]);
 
   const [isLyricsCompact, setIsLyricsCompact] = useState(false);
   const isEffectivelyCompact = isLyricsView && isLyricsCompact;
@@ -649,6 +706,7 @@ const FullPlayerModal = ({
   }, [isLyricsView, lyricsTransition, lyricsRotation, queueTransition]);
 
   const handleToggleLyrics = useCallback(() => {
+    if (!hasLyrics) return;
     setIsLyricsView((prev) => {
       if (prev) {
         return false;
@@ -660,7 +718,7 @@ const FullPlayerModal = ({
         return true;
       }
     });
-  }, [queueTransition]);
+  }, [hasLyrics, queueTransition]);
 
   const playerAnimatedStyle = useAnimatedStyle(() => {
     return {
@@ -1108,6 +1166,13 @@ const FullPlayerModal = ({
         pointerEvents="box-none"
       >
         <View style={styles.container} pointerEvents="auto">
+          <AmbientBackground
+            currentTrack={activeTrack}
+            isPlaying={isPlaying}
+            isPlayerVisible={isPlayerVisible}
+            expandProgress={expandProgress}
+          />
+
           <AppleLyricsView
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
@@ -1321,6 +1386,7 @@ const FullPlayerModal = ({
                 playPreviousTrack={playPreviousTrack}
                 seekTo={seekTo}
                 isLyricsView={isLyricsView}
+                hasLyrics={hasLyrics}
                 isQueueVisible={isQueueVisible}
                 isSlidingShared={isSlidingShared}
                 sliderWidthShared={sliderWidthShared}

@@ -23,8 +23,11 @@ import { authFetch } from '../../../shared/api/api';
 import { getTrackId } from '../../../shared/domain/trackAdapter';
 
 import Animated, {
+  useSharedValue,
   useAnimatedStyle,
+  withSpring,
   withTiming,
+  withDecay,
   runOnJS,
   Easing,
   cancelAnimation,
@@ -182,9 +185,15 @@ const AppleLyricsView = ({
 
   // Wave motion states & refs matching web version (AppleLyricsStream.tsx)
   const [baseTargetY, setBaseTargetY] = useState(0);
-  const [userScrollOffset, setUserScrollOffset] = useState(0);
-  const userScrollOffsetRef = useRef(0);
-  userScrollOffsetRef.current = userScrollOffset;
+  const baseTargetYShared = useSharedValue(0);
+  const manualScrollY = useSharedValue(0);
+  const dragStartY = useSharedValue(0);
+  const contentHeight = useSharedValue(800);
+  const heightShared = useSharedValue(height);
+
+  useEffect(() => {
+    heightShared.value = height;
+  }, [height]);
 
   const [isManualScrolling, setIsManualScrolling] = useState(false);
   const isManualScrollingRef = useRef(false);
@@ -299,11 +308,12 @@ const AppleLyricsView = ({
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
     }
+    cancelAnimation(manualScrollY);
+    manualScrollY.value = 0;
     setIsManualScrolling(false);
     isManualScrollingRef.current = false;
-    setUserScrollOffset(0);
-    userScrollOffsetRef.current = 0;
     setBaseTargetY(0);
+    baseTargetYShared.value = 0;
     setIsInitialMount(true);
     lyricLayouts.current = {};
   }, [trackId]);
@@ -396,9 +406,11 @@ const AppleLyricsView = ({
     const lineTop = layout ? layout.y : activeIndex * 80;
     const lineHeight = layout ? layout.height : 44;
     const newTarget = -(lineTop - focalY + lineHeight / 2);
-    setBaseTargetY((prev) =>
-      Math.abs(prev - newTarget) > 0.5 ? newTarget : prev,
-    );
+    setBaseTargetY((prev) => {
+      const next = Math.abs(prev - newTarget) > 0.5 ? newTarget : prev;
+      baseTargetYShared.value = next;
+      return next;
+    });
   }, [activeIndex, isManualScrolling, height, hasSyncedLyrics]);
 
   // Record line layout from children
@@ -407,50 +419,16 @@ const AppleLyricsView = ({
     if (index === activeIndexRef.current && !isManualScrollingRef.current) {
       const focalY = Math.max(160, heightRef.current * 0.4);
       const newTarget = -(y - focalY + (lineHeight || 44) / 2);
-      setBaseTargetY((prev) =>
-        Math.abs(prev - newTarget) > 0.5 ? newTarget : prev,
-      );
+      setBaseTargetY((prev) => {
+        const next = Math.abs(prev - newTarget) > 0.5 ? newTarget : prev;
+        baseTargetYShared.value = next;
+        return next;
+      });
     }
   }, []);
 
-  // Schedule resumption of autoscroll after exactly 3.0 seconds of manual inactivity
-  const scheduleManualScrollResume = useCallback(() => {
-    if (manualScrollTimeoutRef.current) {
-      clearTimeout(manualScrollTimeoutRef.current);
-    }
-    manualScrollTimeoutRef.current = setTimeout(() => {
-      setIsManualScrolling(false);
-      isManualScrollingRef.current = false;
-      setUserScrollOffset(0);
-      userScrollOffsetRef.current = 0;
-    }, 3000);
-  }, []);
-
-  // Handle line click: cancel manual scroll, reset offset, and seek
-  const handleLineClick = useCallback(
-    (time) => {
-      if (manualScrollTimeoutRef.current) {
-        clearTimeout(manualScrollTimeoutRef.current);
-      }
-      setIsManualScrolling(false);
-      isManualScrollingRef.current = false;
-      setUserScrollOffset(0);
-      userScrollOffsetRef.current = 0;
-      if (time !== null && seekTo) {
-        seekTo(time);
-      }
-      if (isLyricsCompactRef.current) {
-        exitCompactMode();
-      }
-      resetInactivityTimer();
-    },
-    [seekTo, exitCompactMode, resetInactivityTimer],
-  );
-
-  // Manual drag gesture with traffic-jam parity
-  const dragStartYRef = useRef(0);
-
-  const handlePanBegin = useCallback(() => {
+  // Manual scroll gesture handlers with full 60/120fps UI-thread momentum
+  const handleManualScrollStart = useCallback(() => {
     if (manualScrollTimeoutRef.current) {
       clearTimeout(manualScrollTimeoutRef.current);
     }
@@ -460,59 +438,140 @@ const AppleLyricsView = ({
     if (isLyricsCompactRef.current) {
       exitCompactMode();
     }
-    dragStartYRef.current = userScrollOffsetRef.current;
-    setIsManualScrolling(true);
-    isManualScrollingRef.current = true;
+    if (!isManualScrollingRef.current) {
+      setIsManualScrolling(true);
+      isManualScrollingRef.current = true;
+    }
   }, [exitCompactMode]);
 
-  const handlePanUpdate = useCallback(
-    (translationY) => {
-      const next = dragStartYRef.current + translationY;
-      const clamped = Math.max(-4000, Math.min(4000, next));
-      setUserScrollOffset(clamped);
-      userScrollOffsetRef.current = clamped;
-      scheduleManualScrollResume();
-    },
-    [scheduleManualScrollResume],
-  );
+  const handleManualScrollFinished = useCallback(() => {
+    setIsManualScrolling(false);
+    isManualScrollingRef.current = false;
+  }, []);
 
-  const handlePanEnd = useCallback(
-    (translationY, velocityY) => {
-      // If pulled down strongly when near top, close lyrics view
-      if (
-        (dragStartYRef.current >= -20 && translationY > 60) ||
-        velocityY > 800
-      ) {
-        if (onCloseRef.current) {
-          onCloseRef.current();
-          return;
-        }
+  const scheduleManualScrollResume = useCallback(() => {
+    if (manualScrollTimeoutRef.current) {
+      clearTimeout(manualScrollTimeoutRef.current);
+    }
+    resetInactivityTimer();
+    manualScrollTimeoutRef.current = setTimeout(() => {
+      manualScrollY.value = withSpring(
+        0,
+        {
+          damping: 26,
+          stiffness: 200,
+          mass: 0.8,
+        },
+        (finished) => {
+          'worklet';
+          if (finished) {
+            runOnJS(handleManualScrollFinished)();
+          }
+        },
+      );
+    }, 3000);
+  }, [resetInactivityTimer, handleManualScrollFinished, manualScrollY]);
+
+  // Handle line click: cancel manual scroll, reset offset, and seek
+  const handleLineClick = useCallback(
+    (time) => {
+      if (manualScrollTimeoutRef.current) {
+        clearTimeout(manualScrollTimeoutRef.current);
+      }
+      cancelAnimation(manualScrollY);
+      manualScrollY.value = withSpring(0, {
+        damping: 26,
+        stiffness: 220,
+        mass: 0.8,
+      });
+      setIsManualScrolling(false);
+      isManualScrollingRef.current = false;
+      if (time !== null && seekTo) {
+        seekTo(time);
+      }
+      if (isLyricsCompactRef.current) {
+        exitCompactMode();
       }
       resetInactivityTimer();
-      scheduleManualScrollResume();
     },
-    [resetInactivityTimer, scheduleManualScrollResume],
+    [seekTo, exitCompactMode, resetInactivityTimer, manualScrollY],
   );
 
   const panGesture = useMemo(() => {
     return Gesture.Pan()
-      .activeOffsetY([-8, 8])
-      .failOffsetX([-25, 25])
-      .onBegin(() => {
+      .activeOffsetY([-6, 6])
+      .failOffsetX([-35, 35])
+      .onStart(() => {
         'worklet';
-        runOnJS(handlePanBegin)();
+        cancelAnimation(manualScrollY);
+        dragStartY.value = manualScrollY.value;
+        runOnJS(handleManualScrollStart)();
       })
       .onUpdate((event) => {
         'worklet';
-        runOnJS(handlePanUpdate)(event.translationY);
+        const focalY = Math.max(160, heightShared.value * 0.4);
+        const cHeight = Math.max(heightShared.value, contentHeight.value);
+        const maxS = Math.max(0, -baseTargetYShared.value + 60);
+        const minS = Math.min(
+          0,
+          -(cHeight - focalY) - baseTargetYShared.value - 120,
+        );
+
+        const next = dragStartY.value + event.translationY;
+        if (next > maxS) {
+          manualScrollY.value = maxS + (next - maxS) * 0.35;
+        } else if (next < minS) {
+          manualScrollY.value = minS + (next - minS) * 0.35;
+        } else {
+          manualScrollY.value = next;
+        }
       })
       .onEnd((event) => {
         'worklet';
-        runOnJS(handlePanEnd)(event.translationY, event.velocityY);
-      });
-  }, [handlePanBegin, handlePanUpdate, handlePanEnd]);
+        const focalY = Math.max(160, heightShared.value * 0.4);
+        const cHeight = Math.max(heightShared.value, contentHeight.value);
+        const maxS = Math.max(0, -baseTargetYShared.value + 60);
+        const minS = Math.min(
+          0,
+          -(cHeight - focalY) - baseTargetYShared.value - 120,
+        );
 
-  const computedTargetY = baseTargetY + userScrollOffset;
+        if (manualScrollY.value > maxS) {
+          manualScrollY.value = withSpring(maxS, {
+            damping: 24,
+            stiffness: 200,
+          });
+        } else if (manualScrollY.value < minS) {
+          manualScrollY.value = withSpring(minS, {
+            damping: 24,
+            stiffness: 200,
+          });
+        } else {
+          manualScrollY.value = withDecay({
+            velocity: event.velocityY,
+            clamp: [minS, maxS],
+            rubberBandEffect: true,
+            rubberBandFactor: 0.6,
+            deceleration: 0.998,
+          });
+        }
+        runOnJS(scheduleManualScrollResume)();
+      });
+  }, [
+    handleManualScrollStart,
+    scheduleManualScrollResume,
+    manualScrollY,
+    dragStartY,
+    heightShared,
+    contentHeight,
+    baseTargetYShared,
+  ]);
+
+  const animatedListStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateY: manualScrollY.value }],
+    };
+  });
 
   const internalLyricsOverlaysStyle = useAnimatedStyle(() => {
     if (!lyricsTransition) return { opacity: 1 };
@@ -544,7 +603,7 @@ const AppleLyricsView = ({
           text={line.text}
           index={idx}
           activeIndex={activeIndex}
-          targetY={computedTargetY}
+          targetY={baseTargetY}
           isActive={isActive}
           isInitial={isInitialMount}
           isManualScrolling={isManualScrolling}
@@ -558,7 +617,7 @@ const AppleLyricsView = ({
     hasSyncedLyrics,
     lyrics,
     activeIndex,
-    computedTargetY,
+    baseTargetY,
     isInitialMount,
     isManualScrolling,
     styles.lyricLine,
@@ -690,9 +749,14 @@ const AppleLyricsView = ({
               /* Synced Lyrics with Staggered Traffic-Jam Wave Propagation */
               <GestureDetector gesture={panGesture}>
                 <Animated.View style={styles.syncedLyricsWrapper}>
-                  <View style={styles.syncedLyricsList}>
+                  <Animated.View
+                    style={[styles.syncedLyricsList, animatedListStyle]}
+                    onLayout={(e) => {
+                      contentHeight.value = e.nativeEvent.layout.height;
+                    }}
+                  >
                     {renderedSyncedLyrics}
-                  </View>
+                  </Animated.View>
                 </Animated.View>
               </GestureDetector>
             ) : plainLyricsText && plainLyricsText.trim().length > 0 ? (
