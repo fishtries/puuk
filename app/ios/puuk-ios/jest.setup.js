@@ -43,3 +43,20 @@ try {
 } catch {
   // Ignore
 }
+
+// Mock expo-symbols for Jest
+try {
+  jest.mock('expo-symbols', () => {
+    const React = require('react');
+    return {
+      SymbolView: ({ fallback, name, size, tintColor, style, ...rest }) => {
+        if (fallback) return fallback;
+        const { View } = require('react-native');
+        return React.createElement(View, { testID: name, style, ...rest });
+      },
+    };
+  });
+} catch {
+  // Ignore
+}
+

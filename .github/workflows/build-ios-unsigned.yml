@@ -55,6 +55,9 @@ jobs:
       - name: Patch react-native-menu for React Native 0.88 header compatibility
         run: node scripts/patch-react-native-menu.js
 
+      - name: Patch expo-symbols for iOS 17 SF Symbol magic replace transitions
+        run: node scripts/patch-expo-symbols.js
+
       - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
