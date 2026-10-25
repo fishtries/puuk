@@ -11,7 +11,7 @@
     "lint": "eslint",
     "format": "prettier --write",
     "format:check": "prettier --check",
-    "postinstall": "node scripts/patch-expo-audio.js"
+    "postinstall": "node scripts/patch-expo-audio.js && node scripts/patch-react-native-menu.js"
   },
   "jest": {
     "preset": "jest-expo",

@@ -52,6 +52,9 @@ jobs:
       - name: Patch expo-audio for lock screen next/prev controls
         run: node scripts/patch-expo-audio.js
 
+      - name: Patch react-native-menu for React Native 0.88 header compatibility
+        run: node scripts/patch-react-native-menu.js
+
       - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --no-install --non-interactive
 
@@ -62,6 +65,7 @@ jobs:
 
       - name: Build unsigned archive
         run: |
+          set -eo pipefail
           mkdir -p build
           ARCHIVE_LOG="$(pwd)/build/archive.log"
 
@@ -105,13 +109,20 @@ jobs:
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
-        if: always()
+        if: success()
         with:
           name: puuk-ios-unsigned-ipa
           path: |
             app/ios/puuk-ios/build/Puuk-unsigned.ipa
             app/ios/puuk-ios/build/Puuk-unsigned.ipa.sha256
-            app/ios/puuk-ios/build/archive.log
+          retention-days: 7
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: puuk-ios-build-log
+          path: app/ios/puuk-ios/build/archive.log
           retention-days: 7
           if-no-files-found: ignore
 
