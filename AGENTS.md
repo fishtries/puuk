@@ -6,7 +6,7 @@
 
 - **`brain/`** — FastAPI + SQLite (WAL) + Qdrant. Сканирование музыки (`mutagen`), стриминг, рекомендации («Моя Волна»), JWT auth.
 - **`tg_music_bot/`** — aiogram. Загрузка треков Spotify/YouTube, генерация одноразовых кодов авторизации.
-- **`app/ios/puuk-ios/`** — React Native (Expo SDK 57). Клиент для iOS.
+- **`app/ios/puuk-ios/`** — React Native (Expo SDK 58). Клиент для iOS.
 - **`app/web/`** — React + TypeScript. Веб-клиент.
 - **`docs/`** — Спецификации архитектуры.
 

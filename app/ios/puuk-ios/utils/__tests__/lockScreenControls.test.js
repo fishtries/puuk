@@ -8,7 +8,7 @@ describe('lock screen media controls patch', () => {
     'node_modules',
     'expo-audio',
     'ios',
-    'MediaController.swift'
+    'MediaController.swift',
   );
   const patchScriptPath = path.join(rootDir, 'scripts', 'patch-expo-audio.js');
 
@@ -22,19 +22,33 @@ describe('lock screen media controls patch', () => {
 
     // Remote commands added
     expect(content).toContain('remoteCommandCenter.nextTrackCommand.addTarget');
-    expect(content).toContain('remoteCommandCenter.previousTrackCommand.addTarget');
+    expect(content).toContain(
+      'remoteCommandCenter.previousTrackCommand.addTarget',
+    );
     expect(content).toContain('player.emit(event: "nextTrack")');
     expect(content).toContain('player.emit(event: "previousTrack")');
 
     // Enabled state tied to !showSeekForward / !showSeekBackward
-    expect(content).toContain('remoteCommandCenter.nextTrackCommand.isEnabled = !showSeekForward');
-    expect(content).toContain('remoteCommandCenter.previousTrackCommand.isEnabled = !showSeekBackward');
+    expect(content).toContain(
+      'remoteCommandCenter.nextTrackCommand.isEnabled = !showSeekForward',
+    );
+    expect(content).toContain(
+      'remoteCommandCenter.previousTrackCommand.isEnabled = !showSeekBackward',
+    );
 
     // Cleaned up on disable
-    expect(content).toContain('remoteCommandCenter.nextTrackCommand.isEnabled = false');
-    expect(content).toContain('remoteCommandCenter.previousTrackCommand.isEnabled = false');
-    expect(content).toContain('remoteCommandCenter.nextTrackCommand.removeTarget(self)');
-    expect(content).toContain('remoteCommandCenter.previousTrackCommand.removeTarget(self)');
+    expect(content).toContain(
+      'remoteCommandCenter.nextTrackCommand.isEnabled = false',
+    );
+    expect(content).toContain(
+      'remoteCommandCenter.previousTrackCommand.isEnabled = false',
+    );
+    expect(content).toContain(
+      'remoteCommandCenter.nextTrackCommand.removeTarget(self)',
+    );
+    expect(content).toContain(
+      'remoteCommandCenter.previousTrackCommand.removeTarget(self)',
+    );
   });
 
   test('MediaController.swift clears previous artwork immediately and uses cache policy', () => {
@@ -42,12 +56,33 @@ describe('lock screen media controls patch', () => {
     const content = fs.readFileSync(mediaControllerPath, 'utf8');
 
     // Immediately removes previous artwork when artworkUrl changes
-    expect(content).toContain('info.removeValue(forKey: MPMediaItemPropertyArtwork)');
+    expect(content).toContain(
+      'info.removeValue(forKey: MPMediaItemPropertyArtwork)',
+    );
 
     // Uses cache-first policy for artwork loading
     expect(content).toContain('request.cachePolicy = .returnCacheDataElseLoad');
 
     // Preserves in-flight/cached artwork across AVPlayer currentItem transitions
-    expect(content).toContain('if player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl');
+    expect(content).toContain(
+      'if playable.metadata?.artworkUrl == nil || playable.metadata?.artworkUrl != currentArtworkUrl',
+    );
+  });
+
+  test('AudioUtils.swift does not use synchronous automaticallyLoadedAssetKeys on AVPlayerItem creation', () => {
+    const audioUtilsPath = path.join(
+      rootDir,
+      'node_modules',
+      'expo-audio',
+      'ios',
+      'AudioUtils.swift',
+    );
+    expect(fs.existsSync(audioUtilsPath)).toBe(true);
+    const content = fs.readFileSync(audioUtilsPath, 'utf8');
+
+    expect(content).not.toContain(
+      'automaticallyLoadedAssetKeys: [.tracks, .duration]',
+    );
+    expect(content).toContain('return AVPlayerItem(asset: asset)');
   });
 });

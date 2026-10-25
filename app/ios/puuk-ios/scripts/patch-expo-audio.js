@@ -19,10 +19,15 @@ function patchMediaController() {
   let content = fs.readFileSync(targetFile, 'utf8');
   let modified = false;
 
-  const isRemoteCommandsPatched = content.includes('nextTrackCommand.addTarget') && content.includes('beginBackgroundTaskIfNeeded');
-  const isArtworkPatched = content.includes('info.removeValue(forKey: MPMediaItemPropertyArtwork)') &&
+  const isRemoteCommandsPatched =
+    content.includes('player.emit(event: "nextTrack")') &&
+    content.includes('beginBackgroundTaskIfNeeded');
+  const isArtworkPatched =
+    content.includes('info.removeValue(forKey: MPMediaItemPropertyArtwork)') &&
     content.includes('returnCacheDataElseLoad') &&
-    content.includes('player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl');
+    content.includes(
+      'playable.metadata?.artworkUrl == nil || playable.metadata?.artworkUrl != currentArtworkUrl',
+    );
 
   if (isRemoteCommandsPatched && isArtworkPatched) {
     console.log('[patch-expo-audio] MediaController.swift already patched.');
@@ -31,101 +36,119 @@ function patchMediaController() {
 
   // A. Remote commands
   if (!isRemoteCommandsPatched) {
-    if (content.includes('nextTrackCommand.addTarget') && !content.includes('beginBackgroundTaskIfNeeded')) {
-      content = content.replace(
-        `      player.emit(event: "nextTrack")`,
-        `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "nextTrack")`
-      );
-      content = content.replace(
-        `      player.emit(event: "previousTrack")`,
-        `      player.beginBackgroundTaskIfNeeded()\n      player.emit(event: "previousTrack")`
-      );
-      modified = true;
-    } else {
-      const oldEnableTarget = `    remoteCommandCenter.playCommand.isEnabled = true
-    remoteCommandCenter.pauseCommand.isEnabled = true
-    remoteCommandCenter.togglePlayPauseCommand.isEnabled = true
-    remoteCommandCenter.changePlaybackPositionCommand.isEnabled = !isLiveStream
-    remoteCommandCenter.skipForwardCommand.isEnabled = options?.showSeekForward ?? false
-    remoteCommandCenter.skipBackwardCommand.isEnabled = options?.showSeekBackward ?? false`;
-
-      const newEnableReplacement = `    remoteCommandCenter.nextTrackCommand.addTarget { [weak self] _ in
-      guard let player = self?.activePlayer else {
+    const oldNextTarget = `    let nextTrackTarget = remoteCommandCenter.nextTrackCommand.addTarget { [weak self] _ in
+      guard let playable = self?.activePlayable,
+            playable.supportsNextTrack else {
         return .commandFailed
       }
-      player.beginBackgroundTaskIfNeeded()
-      player.emit(event: "nextTrack")
+
+      playable.nextTrack()
       return .success
     }
+    remoteCommandTargets.append((remoteCommandCenter.nextTrackCommand, nextTrackTarget))
 
-    remoteCommandCenter.previousTrackCommand.addTarget { [weak self] _ in
-      guard let player = self?.activePlayer else {
+    let previousTrackTarget = remoteCommandCenter.previousTrackCommand.addTarget { [weak self] _ in
+      guard let playable = self?.activePlayable,
+            playable.supportsPreviousTrack else {
         return .commandFailed
       }
-      player.beginBackgroundTaskIfNeeded()
-      player.emit(event: "previousTrack")
+
+      playable.previousTrack()
       return .success
     }
+    remoteCommandTargets.append((remoteCommandCenter.previousTrackCommand, previousTrackTarget))`;
 
-    let showSeekForward = options?.showSeekForward ?? false
+    const newNextTarget = `    let nextTrackTarget = remoteCommandCenter.nextTrackCommand.addTarget { [weak self] _ in
+      guard let playable = self?.activePlayable else {
+        return .commandFailed
+      }
+      if let player = playable as? AudioPlayer {
+        player.beginBackgroundTaskIfNeeded()
+        player.emit(event: "nextTrack")
+      } else {
+        guard playable.supportsNextTrack else { return .commandFailed }
+        playable.nextTrack()
+      }
+      return .success
+    }
+    remoteCommandTargets.append((remoteCommandCenter.nextTrackCommand, nextTrackTarget))
+
+    let previousTrackTarget = remoteCommandCenter.previousTrackCommand.addTarget { [weak self] _ in
+      guard let playable = self?.activePlayable else {
+        return .commandFailed
+      }
+      if let player = playable as? AudioPlayer {
+        player.beginBackgroundTaskIfNeeded()
+        player.emit(event: "previousTrack")
+      } else {
+        guard playable.supportsPreviousTrack else { return .commandFailed }
+        playable.previousTrack()
+      }
+      return .success
+    }
+    remoteCommandTargets.append((remoteCommandCenter.previousTrackCommand, previousTrackTarget))`;
+
+    const oldEnableLogic = `    let supportsNextTrack = activePlayable?.supportsNextTrack ?? false
+    let supportsPreviousTrack = activePlayable?.supportsPreviousTrack ?? false
+    let showNextTrack = (options?.showNextTrack ?? false) && supportsNextTrack
+    let showPreviousTrack = (options?.showPreviousTrack ?? false) && supportsPreviousTrack
+
+    remoteCommandCenter.skipForwardCommand.isEnabled = (options?.showSeekForward ?? false) && !showNextTrack
+    remoteCommandCenter.skipBackwardCommand.isEnabled = (options?.showSeekBackward ?? false) && !showPreviousTrack
+    remoteCommandCenter.nextTrackCommand.isEnabled = showNextTrack
+    remoteCommandCenter.previousTrackCommand.isEnabled = showPreviousTrack`;
+
+    const newEnableLogic = `    let showSeekForward = options?.showSeekForward ?? false
     let showSeekBackward = options?.showSeekBackward ?? false
-    remoteCommandCenter.playCommand.isEnabled = true
-    remoteCommandCenter.pauseCommand.isEnabled = true
-    remoteCommandCenter.togglePlayPauseCommand.isEnabled = true
-    remoteCommandCenter.changePlaybackPositionCommand.isEnabled = !isLiveStream
     remoteCommandCenter.skipForwardCommand.isEnabled = showSeekForward
     remoteCommandCenter.skipBackwardCommand.isEnabled = showSeekBackward
     remoteCommandCenter.nextTrackCommand.isEnabled = !showSeekForward
     remoteCommandCenter.previousTrackCommand.isEnabled = !showSeekBackward`;
 
-      const oldDisableTarget = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
-    remoteCommandCenter.skipBackwardCommand.isEnabled = false
-
-    // Remove event targets
-    remoteCommandCenter.playCommand.removeTarget(self)
-    remoteCommandCenter.pauseCommand.removeTarget(self)
-    remoteCommandCenter.togglePlayPauseCommand.removeTarget(self)
-    remoteCommandCenter.changePlaybackPositionCommand.removeTarget(self)
-    remoteCommandCenter.skipForwardCommand.removeTarget(self)
-    remoteCommandCenter.skipBackwardCommand.removeTarget(self)`;
-
-      const newDisableReplacement = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
+    const oldDisableLogic = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
     remoteCommandCenter.skipBackwardCommand.isEnabled = false
     remoteCommandCenter.nextTrackCommand.isEnabled = false
     remoteCommandCenter.previousTrackCommand.isEnabled = false
 
-    // Remove event targets
-    remoteCommandCenter.playCommand.removeTarget(self)
-    remoteCommandCenter.pauseCommand.removeTarget(self)
-    remoteCommandCenter.togglePlayPauseCommand.removeTarget(self)
-    remoteCommandCenter.changePlaybackPositionCommand.removeTarget(self)
-    remoteCommandCenter.skipForwardCommand.removeTarget(self)
-    remoteCommandCenter.skipBackwardCommand.removeTarget(self)
-    remoteCommandCenter.nextTrackCommand.removeTarget(self)
-    remoteCommandCenter.previousTrackCommand.removeTarget(self)`;
+    removeRemoteCommandTargets()`;
 
-      if (content.includes(oldEnableTarget) && content.includes(oldDisableTarget)) {
-        content = content.replace(oldEnableTarget, newEnableReplacement);
-        content = content.replace(oldDisableTarget, newDisableReplacement);
-        modified = true;
-      } else {
-        console.error('[patch-expo-audio] ERROR: Remote command target signatures not found in MediaController.swift.');
-      }
+    const newDisableLogic = `    remoteCommandCenter.skipForwardCommand.isEnabled = false
+    remoteCommandCenter.skipBackwardCommand.isEnabled = false
+    remoteCommandCenter.nextTrackCommand.isEnabled = false
+    remoteCommandCenter.previousTrackCommand.isEnabled = false
+
+    remoteCommandCenter.nextTrackCommand.removeTarget(self)
+    remoteCommandCenter.previousTrackCommand.removeTarget(self)
+    removeRemoteCommandTargets()`;
+
+    if (
+      content.includes(oldNextTarget) &&
+      content.includes(oldEnableLogic) &&
+      content.includes(oldDisableLogic)
+    ) {
+      content = content.replace(oldNextTarget, newNextTarget);
+      content = content.replace(oldEnableLogic, newEnableLogic);
+      content = content.replace(oldDisableLogic, newDisableLogic);
+      modified = true;
+    } else {
+      console.error(
+        '[patch-expo-audio] ERROR: Remote command target signatures not found in MediaController.swift.',
+      );
     }
   }
 
   // B. Immediate artwork clearing and cache policy
   if (!isArtworkPatched) {
-    const oldArtworkReset = `    let nextArtworkItemIdentifier = player.ref.currentItem.map { ObjectIdentifier($0) }
+    const oldArtworkReset = `    let nextArtworkItemIdentifier = playable.lockScreenPlayer.currentItem.map { ObjectIdentifier($0) }
     if currentArtworkItemIdentifier != nextArtworkItemIdentifier {
       resetArtworkState()
       currentArtworkItemIdentifier = nextArtworkItemIdentifier
     }`;
 
-    const newArtworkReset = `    let nextArtworkItemIdentifier = player.ref.currentItem.map { ObjectIdentifier($0) }
+    const newArtworkReset = `    let nextArtworkItemIdentifier = playable.lockScreenPlayer.currentItem.map { ObjectIdentifier($0) }
     if currentArtworkItemIdentifier != nextArtworkItemIdentifier {
       currentArtworkItemIdentifier = nextArtworkItemIdentifier
-      if player.metadata?.artworkUrl == nil || player.metadata?.artworkUrl != currentArtworkUrl {
+      if playable.metadata?.artworkUrl == nil || playable.metadata?.artworkUrl != currentArtworkUrl {
         resetArtworkState()
       }
     }`;
@@ -143,13 +166,13 @@ function patchMediaController() {
       info.removeValue(forKey: MPMediaItemPropertyArtwork)
     }`;
 
-    const oldArtworkGuard = `      guard self.activePlayer?.id == player.id,
+    const oldArtworkGuard = `      guard self.activePlayable?.id == playable.id,
             self.currentArtworkUrl == artworkUrl,
             self.currentArtworkItemIdentifier == currentItemIdentifier else {
         return
       }`;
 
-    const newArtworkGuard = `      guard self.activePlayer?.id == player.id,
+    const newArtworkGuard = `      guard self.activePlayable?.id == playable.id,
             self.currentArtworkUrl == artworkUrl else {
         return
       }`;
@@ -174,13 +197,17 @@ function patchMediaController() {
       content = content.replace(oldLoadArtwork, newLoadArtwork);
       modified = true;
     } else {
-      console.error('[patch-expo-audio] ERROR: Artwork target signatures not found in MediaController.swift.');
+      console.error(
+        '[patch-expo-audio] ERROR: Artwork target signatures not found in MediaController.swift.',
+      );
     }
   }
 
   if (modified) {
     fs.writeFileSync(targetFile, content, 'utf8');
-    console.log('[patch-expo-audio] Successfully patched MediaController.swift for lock screen controls and immediate artwork updates.');
+    console.log(
+      '[patch-expo-audio] Successfully patched MediaController.swift for lock screen controls and immediate artwork updates.',
+    );
   }
 }
 
@@ -225,7 +252,9 @@ function patchAudioPlayer() {
   }`;
 
   if (!content.includes(oldObservers)) {
-    console.error('[patch-expo-audio] ERROR: Observers signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: Observers signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldObservers, newObservers);
@@ -245,7 +274,9 @@ function patchAudioPlayer() {
     if isActiveForLockScreen {`;
 
   if (!content.includes(oldPlay)) {
-    console.error('[patch-expo-audio] ERROR: play signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: play signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldPlay, newPlay);
@@ -261,21 +292,29 @@ function patchAudioPlayer() {
   }`;
 
   if (!content.includes(oldPause)) {
-    console.error('[patch-expo-audio] ERROR: pause signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: pause signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldPause, newPause);
 
   // D. End background task in sharedObjectWillRelease
   const oldRelease = `  public override func sharedObjectWillRelease() {
+    onRelease?()
+    onRelease = nil
     ref.currentItem?.cancelPendingSeeks()`;
 
   const newRelease = `  public override func sharedObjectWillRelease() {
     endBackgroundTaskIfNeeded()
+    onRelease?()
+    onRelease = nil
     ref.currentItem?.cancelPendingSeeks()`;
 
   if (!content.includes(oldRelease)) {
-    console.error('[patch-expo-audio] ERROR: release signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: release signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldRelease, newRelease);
@@ -303,14 +342,17 @@ function patchAudioPlayer() {
       }`;
 
   if (!content.includes(oldPlaybackEnd)) {
-    console.error('[patch-expo-audio] ERROR: PlaybackEnd signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: PlaybackEnd signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldPlaybackEnd, newPlaybackEnd);
 
   // F. Parameterize updateStatus to avoid IPC spam on periodic time observer
   const oldUpdateStatus = `  func updateStatus(with dict: [String: Any]) {
-    var arguments = currentStatus()
+    // Reading currentTime waits on the player's lock while a source swap pauses it.
+    var arguments = currentStatus(knownCurrentTime: dict["currentTime"] as? Double)
     arguments.merge(dict) { _, new in
       new
     }
@@ -322,7 +364,8 @@ function patchAudioPlayer() {
   }`;
 
   const newUpdateStatus = `  func updateStatus(with dict: [String: Any], updateNowPlaying: Bool = true) {
-    var arguments = currentStatus()
+    // Reading currentTime waits on the player's lock while a source swap pauses it.
+    var arguments = currentStatus(knownCurrentTime: dict["currentTime"] as? Double)
     arguments.merge(dict) { _, new in
       new
     }
@@ -334,7 +377,9 @@ function patchAudioPlayer() {
   }`;
 
   if (!content.includes(oldUpdateStatus)) {
-    console.error('[patch-expo-audio] ERROR: updateStatus signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: updateStatus signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldUpdateStatus, newUpdateStatus);
@@ -361,13 +406,17 @@ function patchAudioPlayer() {
     }`;
 
   if (!content.includes(oldTimeObserver)) {
-    console.error('[patch-expo-audio] ERROR: timeObserver signature not found in AudioPlayer.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: timeObserver signature not found in AudioPlayer.swift.',
+    );
     return;
   }
   content = content.replace(oldTimeObserver, newTimeObserver);
 
   fs.writeFileSync(targetFile, content, 'utf8');
-  console.log('[patch-expo-audio] Successfully patched AudioPlayer.swift for background task assertions and IPC throttle.');
+  console.log(
+    '[patch-expo-audio] Successfully patched AudioPlayer.swift for background task assertions and IPC throttle.',
+  );
 }
 
 // 3. Patch AudioModule.swift to fix AVQueuePlayer crash and prevent background audio session deactivation
@@ -390,7 +439,7 @@ function patchAudioModule() {
 
   // A. Fix AVQueuePlayer replaceCurrentItem crash on preloaded items
   if (!content.includes('queuePlayer.removeAllItems()')) {
-    const oldReplace = `        if let uri = source.uri?.absoluteString, let cachedPlayer = self.registry.removePreloadedPlayer(forKey: uri) {
+    const oldReplace = `        if let uri = source?.uri?.absoluteString, let cachedPlayer = self.registry.removePreloadedPlayer(forKey: uri) {
           let cachedItem = cachedPlayer.currentItem
           cachedPlayer.replaceCurrentItem(with: nil)
           player.replaceWithPreloadedItem(cachedItem)
@@ -398,7 +447,7 @@ function patchAudioModule() {
           player.replaceCurrentSource(source: source)
         }`;
 
-    const newReplace = `        if let uri = source.uri?.absoluteString, let cachedPlayer = self.registry.removePreloadedPlayer(forKey: uri) {
+    const newReplace = `        if let uri = source?.uri?.absoluteString, let cachedPlayer = self.registry.removePreloadedPlayer(forKey: uri) {
           let cachedItem = cachedPlayer.currentItem
           if let queuePlayer = cachedPlayer as? AVQueuePlayer {
             queuePlayer.removeAllItems()
@@ -411,7 +460,9 @@ function patchAudioModule() {
         }`;
 
     if (!content.includes(oldReplace)) {
-      console.error('[patch-expo-audio] ERROR: Target replace signature not found in AudioModule.swift.');
+      console.error(
+        '[patch-expo-audio] ERROR: Target replace signature not found in AudioModule.swift.',
+      );
     } else {
       content = content.replace(oldReplace, newReplace);
     }
@@ -420,18 +471,20 @@ function patchAudioModule() {
   // B. Prevent deactivating audio session when shouldPlayInBackground is true
   if (!content.includes('guard !self.shouldPlayInBackground else')) {
     const oldDeactivate = `  private func deactivateSession() {
-    Task {`;
+    sessionQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in`;
 
     const newDeactivate = `  private func deactivateSession() {
     guard !self.shouldPlayInBackground else {
       return
     }
-    Task {`;
+    sessionQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in`;
 
     if (content.includes(oldDeactivate)) {
       content = content.replace(oldDeactivate, newDeactivate);
     } else {
-      console.error('[patch-expo-audio] ERROR: deactivateSession signature not found in AudioModule.swift.');
+      console.error(
+        '[patch-expo-audio] ERROR: deactivateSession signature not found in AudioModule.swift.',
+      );
     }
   }
 
@@ -458,14 +511,14 @@ function patchAudioModule() {
     const oldPauseSession = `      Function("pause") { player in
         player.ref.pause()
         if !player.keepAudioSessionActive {
-          deactivateSession()
+          self.deactivateSession()
         }
       }`;
 
     const newPauseSession = `      Function("pause") { player in
         player.ref.pause()
         if !player.keepAudioSessionActive && !self.shouldPlayInBackground {
-          deactivateSession()
+          self.deactivateSession()
         }
       }`;
 
@@ -487,7 +540,9 @@ function patchAudioComponentRegistry() {
   }
   let content = fs.readFileSync(targetFile, 'utf8');
   if (content.includes('if let queuePlayer = $0 as? AVQueuePlayer')) {
-    console.log('[patch-expo-audio] AudioComponentRegistry.swift already patched.');
+    console.log(
+      '[patch-expo-audio] AudioComponentRegistry.swift already patched.',
+    );
     return;
   }
 
@@ -512,16 +567,54 @@ function patchAudioComponentRegistry() {
   }`;
 
   if (!content.includes(oldRemoveAll)) {
-    console.error('[patch-expo-audio] ERROR: Target signature not found in AudioComponentRegistry.swift.');
+    console.error(
+      '[patch-expo-audio] ERROR: Target signature not found in AudioComponentRegistry.swift.',
+    );
     return;
   }
 
   content = content.replace(oldRemoveAll, newRemoveAll);
   fs.writeFileSync(targetFile, content, 'utf8');
-  console.log('[patch-expo-audio] Successfully patched AudioComponentRegistry.swift to prevent AVQueuePlayer crash on cleanup.');
+  console.log(
+    '[patch-expo-audio] Successfully patched AudioComponentRegistry.swift to prevent AVQueuePlayer crash on cleanup.',
+  );
+}
+
+// 5. Patch AudioUtils.swift to prevent synchronous thread blocking on AVPlayerItem creation
+function patchAudioUtils() {
+  const targetFile = path.join(iosDir, 'AudioUtils.swift');
+  if (!fs.existsSync(targetFile)) {
+    console.log('[patch-expo-audio] AudioUtils.swift not found.');
+    return;
+  }
+  let content = fs.readFileSync(targetFile, 'utf8');
+  if (!content.includes('automaticallyLoadedAssetKeys')) {
+    console.log('[patch-expo-audio] AudioUtils.swift already patched.');
+    return;
+  }
+
+  const oldItem = `    let asset = AVURLAsset(url: finalUrl, options: options)
+    return AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: [.tracks, .duration])`;
+
+  const newItem = `    let asset = AVURLAsset(url: finalUrl, options: options)
+    return AVPlayerItem(asset: asset)`;
+
+  if (!content.includes(oldItem)) {
+    console.error(
+      '[patch-expo-audio] ERROR: Target signature not found in AudioUtils.swift.',
+    );
+    return;
+  }
+
+  content = content.replace(oldItem, newItem);
+  fs.writeFileSync(targetFile, content, 'utf8');
+  console.log(
+    '[patch-expo-audio] Successfully patched AudioUtils.swift to eliminate synchronous thread blocking on item creation.',
+  );
 }
 
 patchMediaController();
 patchAudioPlayer();
 patchAudioModule();
 patchAudioComponentRegistry();
+patchAudioUtils();
