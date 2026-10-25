@@ -13,6 +13,7 @@ export interface Track {
   coverArt?: string;
   cover_color?: string;
   lyrics?: string;
+  has_lyrics?: boolean;
   is_liked?: boolean;
   bpm?: number;
   key?: string;

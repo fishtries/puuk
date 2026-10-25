@@ -31,6 +31,8 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
 
     album_name = r.get("album") or r.get("album_title") or "Unknown Album"
 
+    has_lyrics_val = bool(r.get("has_lyrics")) if "has_lyrics" in r else bool(r.get("lyrics") and str(r.get("lyrics")).strip())
+
     return {
         "id": track_id,
         "title": r.get("title", ""),
@@ -45,6 +47,7 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "album_track_position": r.get("album_track_position"),
         "comment": r.get("comment"),
         "lyrics": (r.get("lyrics") or "") if include_lyrics else "",
+        "has_lyrics": has_lyrics_val,
         "duration": r.get("duration") or 0.0,
         "bitrate": r.get("bitrate"),
         "sample_rate": r.get("sample_rate"),

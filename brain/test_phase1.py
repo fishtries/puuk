@@ -142,5 +142,47 @@ class TestPhase1(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_07_has_lyrics_serialization(self):
+        from serializers import serialize_track
+
+        t_with = "track-with-lyrics"
+        t_without = "track-without-lyrics"
+        db.add_or_update_track(
+            track_id=t_with,
+            file_path="music/with.mp3",
+            title="Song With Lyrics",
+            album_id=None,
+            artist="Artist 1",
+            lyrics="[00:01.00]Hello world",
+        )
+        db.add_or_update_track(
+            track_id=t_without,
+            file_path="music/without.mp3",
+            title="Song Without Lyrics",
+            album_id=None,
+            artist="Artist 2",
+            lyrics="",
+        )
+
+        tracks = db.get_tracks_page(limit=10, offset=0)
+        by_id = {t["id"]: t for t in tracks}
+        self.assertIn(t_with, by_id)
+        self.assertIn(t_without, by_id)
+
+        serialized_with = serialize_track(by_id[t_with], "http://localhost:8000", include_lyrics=False)
+        serialized_without = serialize_track(by_id[t_without], "http://localhost:8000", include_lyrics=False)
+
+        self.assertTrue(serialized_with["has_lyrics"])
+        self.assertFalse(serialized_without["has_lyrics"])
+        # lyrics field is empty for list endpoints, but has_lyrics is preserved
+        self.assertEqual(serialized_with["lyrics"], "")
+        self.assertEqual(serialized_without["lyrics"], "")
+
+        # Clean up
+        conn = db.get_connection()
+        conn.cursor().execute("DELETE FROM tracks WHERE id IN (?, ?)", (t_with, t_without))
+        conn.commit()
+        conn.close()
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

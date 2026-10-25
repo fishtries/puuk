@@ -4,7 +4,7 @@ import { Track } from '../types/track';
 import { audioEngine } from '../engine/AudioEngine';
 import { resolveAuthorizedAudioUrl } from '../api/media';
 import { parseLRC } from '../engine/lrcParser';
-import { parseLyricsPayload, isDemoTrack } from './playerStoreHelpers';
+import { parseLyricsPayload, isDemoTrack, hasLyricsContent } from './playerStoreHelpers';
 import {
   fetchLyrics as apiFetchLyrics,
   fetchHistory,
@@ -608,7 +608,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     toggleRightPanel: (tab?: RightPanelTab) => {
-      const { isRightPanelOpen, rightPanelTab } = get();
+      const { isRightPanelOpen, rightPanelTab, currentTrack, lyrics, rawLyricsText } = get();
+      if (tab === 'lyrics' && !hasLyricsContent(currentTrack, lyrics, rawLyricsText)) {
+        return;
+      }
       if (tab) {
         if (isRightPanelOpen && rightPanelTab === tab) {
           set({ isRightPanelOpen: false });
@@ -621,6 +624,12 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     setRightPanelTab: (rightPanelTab: RightPanelTab) => {
+      if (rightPanelTab === 'lyrics') {
+        const { currentTrack, lyrics, rawLyricsText } = get();
+        if (!hasLyricsContent(currentTrack, lyrics, rawLyricsText)) {
+          return;
+        }
+      }
       set({ rightPanelTab, isRightPanelOpen: true });
     },
 
@@ -652,16 +661,30 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         // перезаписывать текст актуального трека.
         if (get().currentTrack?.id !== trackId) return;
         const { lyrics: parsed, rawLyricsText } = parseLyricsPayload(data);
+        const hasLyrics = parsed.length > 0 || Boolean(rawLyricsText && rawLyricsText.trim().length > 0);
+
+        const currentTrack = get().currentTrack;
+        const updatedTrack = currentTrack && currentTrack.id === trackId
+          ? { ...currentTrack, has_lyrics: hasLyrics }
+          : currentTrack;
 
         set({
+          currentTrack: updatedTrack,
           lyrics: parsed,
           rawLyricsText,
           isLyricsLoading: false,
         });
+
+        if (!hasLyrics && get().isRightPanelOpen && get().rightPanelTab === 'lyrics') {
+          set({ rightPanelTab: 'queue' });
+        }
       } catch (err) {
         if (get().currentTrack?.id !== trackId) return;
         console.warn('Could not fetch lyrics:', err);
         set({ lyrics: [], rawLyricsText: '', isLyricsLoading: false });
+        if (get().isRightPanelOpen && get().rightPanelTab === 'lyrics') {
+          set({ rightPanelTab: 'queue' });
+        }
       }
     },
 
@@ -761,6 +784,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
             const rawLrc = updatedTrack.lyrics || '';
             newRawLyrics = rawLrc;
             newLyrics = parseLRC(rawLrc);
+            const hasLyrics = newLyrics.length > 0 || Boolean(rawLrc.trim().length > 0);
+            newCurrent = { ...newCurrent, has_lyrics: hasLyrics };
           }
         }
 

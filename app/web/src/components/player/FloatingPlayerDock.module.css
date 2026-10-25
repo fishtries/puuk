@@ -309,14 +309,20 @@
   transition: all 180ms ease;
 }
 
-.actionIconBtn:hover {
+.actionIconBtn:hover:not(:disabled) {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.1);
 }
 
 /* Phase 0: micro-compress on tap (WWDC25-2 tactile response) */
-.actionIconBtn:active {
+.actionIconBtn:active:not(:disabled) {
   transform: scale(0.94);
+}
+
+.actionIconBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .activeActionBtn {

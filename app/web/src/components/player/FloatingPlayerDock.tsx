@@ -17,6 +17,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { getCoverUrl, fetchPlaylists, addTrackToPlaylist } from '../../api/tracks';
 import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
+import { hasLyricsContent } from '../../store/playerStoreHelpers';
 import { LyricsQuickPeek } from './LyricsQuickPeek';
 import { DockActionsMenu } from './DockActionsMenu';
 import { DockLikeMenu } from './DockLikeMenu';
@@ -97,6 +98,8 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   const duration = usePlayerStore((state) => state.duration);
   const isShuffled = usePlayerStore((state) => state.isShuffled);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
+  const lyrics = usePlayerStore((state) => state.lyrics);
+  const rawLyricsText = usePlayerStore((state) => state.rawLyricsText);
 
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
@@ -115,6 +118,14 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
 
   const [isLyricsPeekOpen, setIsLyricsPeekOpen] = useState(false);
   const lyricsBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const hasLyrics = hasLyricsContent(currentTrack, lyrics, rawLyricsText);
+
+  useEffect(() => {
+    if (!hasLyrics && isLyricsPeekOpen) {
+      setIsLyricsPeekOpen(false);
+    }
+  }, [hasLyrics, isLyricsPeekOpen]);
 
   const { data: playlists = [], isPending: isPlaylistsPending } = useQuery({
     queryKey: ['playlists', userId],
@@ -228,8 +239,9 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
         {/* Cover thumbnail */}
         <div
           className={styles.coverWrapper}
-          onClick={onOpenLyrics}
-          title="Открыть полный плеер и текст"
+          onClick={hasLyrics ? onOpenLyrics : undefined}
+          title={hasLyrics ? "Открыть полный плеер и текст" : (currentTrack?.title || "Puuk Music")}
+          style={!hasLyrics ? { cursor: 'default' } : undefined}
         >
           {coverUrl ? (
             <AuthorizedImage
@@ -310,8 +322,9 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
             ref={lyricsBtnRef}
             type="button"
             onClick={() => setIsLyricsPeekOpen((v) => !v)}
+            disabled={!hasLyrics}
             className={`${styles.actionIconBtn} ${isLyricsPeekOpen || isLyricsActive ? styles.activeActionBtn : ''}`}
-            title={isLyricsPeekOpen ? 'Скрыть текст' : 'Текст песни'}
+            title={!hasLyrics ? 'Текст песни отсутствует' : (isLyricsPeekOpen ? 'Скрыть текст' : 'Текст песни')}
             aria-label="Toggle lyrics peek"
             aria-expanded={isLyricsPeekOpen}
           >

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { getCoverUrl } from '../../api/tracks';
+import { hasLyricsContent } from '../../store/playerStoreHelpers';
 import { AuthorizedImage } from '../common/AuthorizedImage';
 import styles from './PlayerBar.module.css';
 
@@ -38,6 +39,8 @@ export const PlayerBar: React.FC = () => {
   const isShuffled = usePlayerStore((state) => state.isShuffled);
   const isRightPanelOpen = usePlayerStore((state) => state.isRightPanelOpen);
   const rightPanelTab = usePlayerStore((state) => state.rightPanelTab);
+  const lyrics = usePlayerStore((state) => state.lyrics);
+  const rawLyricsText = usePlayerStore((state) => state.rawLyricsText);
 
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const seek = usePlayerStore((state) => state.seek);
@@ -54,6 +57,7 @@ export const PlayerBar: React.FC = () => {
   const isPlaying = status === 'playing';
   const coverUrl = getCoverUrl(currentTrack?.cover_id);
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const hasLyrics = hasLyricsContent(currentTrack, lyrics, rawLyricsText);
 
   const handleNextRepeat = () => {
     if (repeatMode === 'off') setRepeatMode('all');
@@ -205,7 +209,8 @@ export const PlayerBar: React.FC = () => {
             isRightPanelOpen && rightPanelTab === 'lyrics' ? styles.activeBtn : ''
           }`}
           onClick={() => toggleRightPanel('lyrics')}
-          title="Текст песни (L)"
+          disabled={!hasLyrics}
+          title={hasLyrics ? "Текст песни (L)" : "Текст песни отсутствует"}
           aria-label="Текст песни"
         >
           <AlignLeft size={18} />

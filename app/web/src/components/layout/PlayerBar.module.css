@@ -303,13 +303,19 @@
               transform var(--duration-press) var(--ease-spring);
 }
 
-.actionIconBtn:hover {
+.actionIconBtn:hover:not(:disabled) {
   color: var(--text-primary);
   background-color: rgba(255, 255, 255, 0.05);
 }
 
-.actionIconBtn:active {
+.actionIconBtn:active:not(:disabled) {
   transform: scale(0.9);
+}
+
+.actionIconBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .volumeGroup {

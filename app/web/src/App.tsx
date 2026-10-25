@@ -18,6 +18,7 @@ import { RightPanel } from './components/layout/RightPanel';
 
 import { useAuthStore } from './store/useAuthStore';
 import { usePlayerStore } from './store/usePlayerStore';
+import { hasLyricsContent } from './store/playerStoreHelpers';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaSession } from './hooks/useMediaSession';
 import { Track } from './types/track';
@@ -35,6 +36,20 @@ function AppContent() {
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
   const user = useAuthStore((state) => state.user);
   const isAuthChecked = useAuthStore((state) => state.isAuthChecked);
+
+  const currentTrack = usePlayerStore((state) => state.currentTrack);
+  const lyrics = usePlayerStore((state) => state.lyrics);
+  const rawLyricsText = usePlayerStore((state) => state.rawLyricsText);
+  const isLyricsLoading = usePlayerStore((state) => state.isLyricsLoading);
+
+  useEffect(() => {
+    if (viewMode === 'lyrics') {
+      const hasLyrics = hasLyricsContent(currentTrack, lyrics, rawLyricsText) || Boolean(currentTrack?.has_lyrics || isLyricsLoading);
+      if (!hasLyrics) {
+        setViewMode('home');
+      }
+    }
+  }, [viewMode, currentTrack, lyrics, rawLyricsText, isLyricsLoading]);
 
   useHotkeys(undefined, () => setIsLibraryOpen(true));
   useMediaSession();

@@ -2,6 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, AlignLeft, ListMusic } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
+import { hasLyricsContent } from '../../store/playerStoreHelpers';
 import { KaraokeLyrics } from '../lyrics/KaraokeLyrics';
 import { ClearQueueButton, QueueList } from '../queue/QueueList';
 import styles from './RightPanel.module.css';
@@ -11,6 +12,11 @@ export const RightPanel: React.FC = () => {
   const setIsRightPanelOpen = usePlayerStore((state) => state.setIsRightPanelOpen);
   const rightPanelTab = usePlayerStore((state) => state.rightPanelTab);
   const setRightPanelTab = usePlayerStore((state) => state.setRightPanelTab);
+  const currentTrack = usePlayerStore((state) => state.currentTrack);
+  const lyrics = usePlayerStore((state) => state.lyrics);
+  const rawLyricsText = usePlayerStore((state) => state.rawLyricsText);
+
+  const hasLyrics = hasLyricsContent(currentTrack, lyrics, rawLyricsText);
 
   return (
     <AnimatePresence>
@@ -30,6 +36,8 @@ export const RightPanel: React.FC = () => {
                 type="button"
                 className={`${styles.tabBtn} ${rightPanelTab === 'lyrics' ? styles.activeTab : ''}`}
                 onClick={() => setRightPanelTab('lyrics')}
+                disabled={!hasLyrics}
+                title={hasLyrics ? 'Текст песни' : 'Текст песни отсутствует'}
               >
                 <AlignLeft size={14} />
                 <span>Текст песни</span>

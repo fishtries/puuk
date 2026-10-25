@@ -43,8 +43,14 @@
               background-color var(--duration-quick) var(--ease-out);
 }
 
-.tabBtn:hover {
+.tabBtn:hover:not(:disabled) {
   color: var(--text-primary);
+}
+
+.tabBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .activeTab {
