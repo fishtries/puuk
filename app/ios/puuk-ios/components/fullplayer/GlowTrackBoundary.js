@@ -1,6 +1,15 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, Dimensions, AppState } from 'react-native';
-import Svg, { Path, Rect, G, Defs, LinearGradient, Stop, Filter, FeGaussianBlur } from 'react-native-svg';
+import React, { useMemo } from 'react';
+import { View, StyleSheet, Dimensions } from 'react-native';
+import Svg, {
+  Path,
+  Rect,
+  G,
+  Defs,
+  LinearGradient,
+  Stop,
+  Filter,
+  FeGaussianBlur,
+} from 'react-native-svg';
 
 import {
   CORNER_RADIUS,
@@ -15,75 +24,15 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
   currentTime = 0,
   duration = 0,
-  isPlaying = false,
+  isPlaying: _isPlaying = false,
   accentColor = '#FFDAB9',
   width = SCREEN_WIDTH,
 }) {
-  const [isAppActive, setIsAppActive] = useState(() => AppState.currentState === 'active');
-
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState) => {
-      setIsAppActive(nextState === 'active');
-    });
-    return () => sub.remove();
-  }, []);
-
-  // Плавный интерполированный прогресс (0..1)
-  const [displayProgress, setDisplayProgress] = useState(() => {
+  // Прогресс границы трека (0..1)
+  const displayProgress = useMemo(() => {
     if (!duration || duration <= 0) return 0;
     return Math.max(0, Math.min(1, currentTime / duration));
-  });
-
-  const playheadRef = useRef({
-    time: currentTime,
-    ts: Date.now(),
-    isPlaying,
-    duration,
-  });
-
-  // Синхронизация при приходе дискретных тиков времени от нативного плеера
-  useEffect(() => {
-    playheadRef.current = {
-      time: currentTime,
-      ts: Date.now(),
-      isPlaying,
-      duration,
-    };
-  }, [currentTime, isPlaying, duration]);
-
-  // Непрерывная 60fps интерполяция прогресса между дискретными тиками expo-audio (только при активном экране)
-  useEffect(() => {
-    let animId;
-
-    const tick = () => {
-      const { time, ts, isPlaying: playing, duration: dur } = playheadRef.current;
-      if (dur > 0) {
-        if (playing) {
-          const deltaSec = (Date.now() - ts) / 1000;
-          const current = Math.min(dur, Math.max(0, time + deltaSec));
-          setDisplayProgress(current / dur);
-        } else {
-          setDisplayProgress(Math.min(1, Math.max(0, time / dur)));
-        }
-      } else {
-        setDisplayProgress(0);
-      }
-
-      if (playing && isAppActive) {
-        animId = requestAnimationFrame(tick);
-      }
-    };
-
-    if (isPlaying && duration > 0 && isAppActive) {
-      animId = requestAnimationFrame(tick);
-    } else {
-      tick();
-    }
-
-    return () => {
-      if (animId) cancelAnimationFrame(animId);
-    };
-  }, [isPlaying, duration, isAppActive]);
+  }, [currentTime, duration]);
 
   const totalLength = useMemo(() => {
     return getBoundaryTotalLength(width, CORNER_RADIUS);
@@ -129,7 +78,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
             gradientUnits="userSpaceOnUse"
           >
             <Stop offset="0%" stopColor={accentColor} stopOpacity={0.35} />
-            <Stop offset="25%" stopColor={accentColor} stopOpacity={0.20} />
+            <Stop offset="25%" stopColor={accentColor} stopOpacity={0.2} />
             <Stop offset="50%" stopColor={accentColor} stopOpacity={0.08} />
             <Stop offset="75%" stopColor={accentColor} stopOpacity={0.02} />
             <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
@@ -145,7 +94,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
             gradientUnits="userSpaceOnUse"
           >
             <Stop offset="0%" stopColor={accentColor} stopOpacity={0.65} />
-            <Stop offset="35%" stopColor={accentColor} stopOpacity={0.40} />
+            <Stop offset="35%" stopColor={accentColor} stopOpacity={0.4} />
             <Stop offset="70%" stopColor={accentColor} stopOpacity={0.15} />
             <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
           </LinearGradient>
@@ -161,7 +110,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
           >
             <Stop offset="0%" stopColor="#ffffff" stopOpacity={0.65} />
             <Stop offset="30%" stopColor={accentColor} stopOpacity={0.85} />
-            <Stop offset="100%" stopColor={accentColor} stopOpacity={0.70} />
+            <Stop offset="100%" stopColor={accentColor} stopOpacity={0.7} />
           </LinearGradient>
         </Defs>
 

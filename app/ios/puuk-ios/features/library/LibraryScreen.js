@@ -71,6 +71,101 @@ function formatRelativeTime(dateStr) {
   }
 }
 
+const LibraryTrackItemRow = React.memo(function LibraryTrackItemRow({
+  track,
+  index,
+  showTime,
+  isCurrentPlaying,
+  isPlaying,
+  isLiked,
+  accentColor,
+  onPlayTrack,
+  onToggleFavorite,
+  onPressEllipsis,
+}) {
+  const handlePlay = useCallback(() => {
+    if (onPlayTrack) onPlayTrack(track);
+  }, [onPlayTrack, track]);
+
+  const handleFavorite = useCallback(() => {
+    if (onToggleFavorite) onToggleFavorite(track);
+  }, [onToggleFavorite, track]);
+
+  const handleEllipsis = useCallback(() => {
+    if (onPressEllipsis) onPressEllipsis(track);
+  }, [onPressEllipsis, track]);
+
+  return (
+    <AnimatedTouchable
+      layout={LinearTransition.springify()}
+      entering={FadeInDown.delay(index * 25).duration(300)}
+      style={[
+        styles.trackRow,
+        isCurrentPlaying && {
+          backgroundColor: '#1b1816',
+          borderWidth: 1,
+          borderColor: 'rgba(255, 218, 185, 0.25)',
+        },
+      ]}
+      activeOpacity={0.65}
+      onPress={handlePlay}
+    >
+      <CoverImage source={track.coverArt} style={styles.trackImage} />
+
+      <View style={styles.trackInfo}>
+        <Text
+          style={[
+            styles.trackTitle,
+            isCurrentPlaying && { color: accentColor },
+          ]}
+          numberOfLines={1}
+        >
+          {track.title}
+        </Text>
+        <View style={styles.trackMetaRow}>
+          <Text style={styles.trackArtist} numberOfLines={1}>
+            {track.artist}
+          </Text>
+          {showTime && track.played_at && (
+            <Text style={styles.trackTimeAgo}>
+              • {formatRelativeTime(track.played_at)}
+            </Text>
+          )}
+        </View>
+      </View>
+
+      {isCurrentPlaying && isPlaying && (
+        <Ionicons
+          name="volume-high"
+          size={18}
+          color={accentColor}
+          style={{ marginRight: 8 }}
+        />
+      )}
+
+      <TouchableOpacity
+        hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
+        onPress={handleFavorite}
+        style={styles.trackLikeBtn}
+      >
+        <Ionicons
+          name={isLiked ? 'heart' : 'heart-outline'}
+          size={20}
+          color={isLiked ? accentColor : '#555'}
+        />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        hitSlop={{ top: 12, bottom: 12, left: 10, right: 12 }}
+        onPress={handleEllipsis}
+        style={styles.trackEllipsisBtn}
+      >
+        <Ionicons name="ellipsis-horizontal" size={18} color="#666" />
+      </TouchableOpacity>
+    </AnimatedTouchable>
+  );
+});
+
 export default function LibraryScreen({
   navigation,
   isPlaying,
@@ -468,77 +563,22 @@ export default function LibraryScreen({
   const renderTrackItem = (track, index, showTime = false) => {
     const isCurrentPlaying = areTrackIdsEqual(currentTrack, track);
     const isLiked = favorites.some((f) => areTrackIdsEqual(f, track));
-    const trackId = getTrackId(track) ?? index;
+    const trackKey = getTrackId(track) ?? index;
 
     return (
-      <AnimatedTouchable
-        key={`${trackId}-${index}`}
-        layout={LinearTransition.springify()}
-        entering={FadeInDown.delay(index * 25).duration(300)}
-        style={[
-          styles.trackRow,
-          isCurrentPlaying && {
-            backgroundColor: '#1b1816',
-            borderWidth: 1,
-            borderColor: 'rgba(255, 218, 185, 0.25)',
-          },
-        ]}
-        activeOpacity={0.65}
-        onPress={() => onPlayTrack && onPlayTrack(track)}
-      >
-        <CoverImage source={track.coverArt} style={styles.trackImage} />
-
-        <View style={styles.trackInfo}>
-          <Text
-            style={[
-              styles.trackTitle,
-              isCurrentPlaying && { color: accentColor },
-            ]}
-            numberOfLines={1}
-          >
-            {track.title}
-          </Text>
-          <View style={styles.trackMetaRow}>
-            <Text style={styles.trackArtist} numberOfLines={1}>
-              {track.artist}
-            </Text>
-            {showTime && track.played_at && (
-              <Text style={styles.trackTimeAgo}>
-                • {formatRelativeTime(track.played_at)}
-              </Text>
-            )}
-          </View>
-        </View>
-
-        {isCurrentPlaying && isPlaying && (
-          <Ionicons
-            name="volume-high"
-            size={18}
-            color={accentColor}
-            style={{ marginRight: 8 }}
-          />
-        )}
-
-        <TouchableOpacity
-          hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
-          onPress={() => handleToggleFavorite(track)}
-          style={styles.trackLikeBtn}
-        >
-          <Ionicons
-            name={isLiked ? 'heart' : 'heart-outline'}
-            size={20}
-            color={isLiked ? accentColor : '#555'}
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          hitSlop={{ top: 12, bottom: 12, left: 10, right: 12 }}
-          onPress={() => onPressEllipsis && onPressEllipsis(track)}
-          style={styles.trackEllipsisBtn}
-        >
-          <Ionicons name="ellipsis-horizontal" size={18} color="#666" />
-        </TouchableOpacity>
-      </AnimatedTouchable>
+      <LibraryTrackItemRow
+        key={`${trackKey}-${index}`}
+        track={track}
+        index={index}
+        showTime={showTime}
+        isCurrentPlaying={isCurrentPlaying}
+        isPlaying={isPlaying}
+        isLiked={isLiked}
+        accentColor={accentColor}
+        onPlayTrack={onPlayTrack}
+        onToggleFavorite={handleToggleFavorite}
+        onPressEllipsis={onPressEllipsis}
+      />
     );
   };
 

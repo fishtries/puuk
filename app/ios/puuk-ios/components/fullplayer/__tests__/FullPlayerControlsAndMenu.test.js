@@ -4,6 +4,9 @@ import FullPlayerModal from '../../FullPlayerModal';
 import TrackLoadingBadge from '../TrackLoadingBadge';
 import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
+import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
+import { ActionSheetIOS, TouchableOpacity } from 'react-native';
+import Constants from 'expo-constants';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -84,7 +87,9 @@ jest.mock('react-native-reanimated', () => {
     },
     FadeIn: { duration: () => ({}) },
     FadeOut: { duration: () => ({}) },
-    LinearTransition: { springify: () => ({ damping: () => ({ stiffness: () => ({}) }) }) },
+    LinearTransition: {
+      springify: () => ({ damping: () => ({ stiffness: () => ({}) }) }),
+    },
   };
 });
 
@@ -107,13 +112,15 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
           currentTime={15}
           duration={354}
           isLoading={true}
-        />
+        />,
       );
     });
 
     const root = renderer.root;
     // Find the header right container
-    const headerRight = root.find((n) => n.props?.style === styles.topHeaderRight);
+    const headerRight = root.find(
+      (n) => n.props?.style === styles.topHeaderRight,
+    );
     expect(headerRight).toBeTruthy();
 
     const children = headerRight.props.children;
@@ -139,7 +146,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
           onAddToPlaylist={onAddToPlaylist}
           onEditTrack={onEditTrack}
           isLoading={false}
-        />
+        />,
       );
     });
 
@@ -157,7 +164,9 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
 
     // Select "Add to Playlist"
     act(() => {
-      menuView.props.onPressAction({ nativeEvent: { event: 'add_to_playlist' } });
+      menuView.props.onPressAction({
+        nativeEvent: { event: 'add_to_playlist' },
+      });
     });
     expect(onAddToPlaylist).toHaveBeenCalledWith(mockTrack);
 
@@ -179,14 +188,83 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
           currentTime={15}
           duration={354}
           isLoading={true}
-        />
+        />,
       );
     });
 
     const root = renderer.root;
-    const headerRight = root.find((n) => n.props?.style === styles.topHeaderRight);
+    const headerRight = root.find(
+      (n) => n.props?.style === styles.topHeaderRight,
+    );
     expect(headerRight).toBeTruthy();
     // topHeaderRight should be a standard View without layout spring transitions
     expect(headerRight.props.layout).toBeUndefined();
+  });
+
+  it('provides ActionSheet fallback in PlayerHeader when native menu is unavailable', () => {
+    const handleMenuAction = jest.fn();
+    const showActionSheetSpy = jest
+      .spyOn(ActionSheetIOS, 'showActionSheetWithOptions')
+      .mockImplementation((opts, cb) => {
+        cb(1); // Select first action: "Add to Playlist"
+      });
+
+    // Mock NODE_ENV to simulate non-test environment where native menu is missing
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    Constants.appOwnership = 'expo';
+
+    try {
+      expect(isNativeMenuAvailable()).toBe(false);
+
+      let renderer;
+      act(() => {
+        renderer = TestRenderer.create(
+          <PlayerHeader
+            styles={styles}
+            handleClose={jest.fn()}
+            isLoading={false}
+            isBufferingSlow={false}
+            networkStatus="connected"
+            nextTrackStatus="idle"
+            displayTitle="Bohemian Rhapsody"
+            handleMenuAction={handleMenuAction}
+            menuActions={[
+              { id: 'add_to_playlist', title: 'Add to Playlist' },
+              { id: 'edit_track', title: 'Edit Track' },
+            ]}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      // In fallback mode, a TouchableOpacity is rendered instead of native MenuView
+      const buttons = root.findAllByType(TouchableOpacity);
+      const menuButton = buttons.find(
+        (b) => b.props.accessibilityLabel === 'Track options',
+      );
+      expect(menuButton).toBeTruthy();
+
+      // Trigger fallback press
+      act(() => {
+        menuButton.props.onPress();
+      });
+
+      expect(showActionSheetSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Bohemian Rhapsody',
+          options: ['Cancel', 'Add to Playlist', 'Edit Track'],
+          cancelButtonIndex: 0,
+        }),
+        expect.any(Function),
+      );
+      expect(handleMenuAction).toHaveBeenCalledWith({
+        nativeEvent: { event: 'add_to_playlist' },
+      });
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      delete Constants.appOwnership;
+      showActionSheetSpy.mockRestore();
+    }
   });
 });

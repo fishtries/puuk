@@ -523,6 +523,51 @@ function AppContent() {
     }
   }, [currentTrack, tracks, playTrack, startWave, togglePlayPause]);
 
+  const handleOpenAuthModal = useCallback(() => {
+    setIsAuthModalVisible(true);
+  }, []);
+
+  const handleCloseAuthModal = useCallback(() => {
+    setIsAuthModalVisible(false);
+  }, []);
+
+  const handleLoginSuccess = useCallback((u) => {
+    setCurrentUser(u);
+  }, []);
+
+  const handleCloseManageModal = useCallback(() => {
+    setTrackToManage(null);
+  }, []);
+
+  const handleCloseAddModal = useCallback(() => {
+    setTrackToAdd(null);
+  }, []);
+
+  const handleSeekTo = useCallback(
+    (pos) => {
+      player.seekTo(pos);
+    },
+    [player],
+  );
+
+  const handleAddToPlaylist = useCallback(
+    (track) => {
+      setTrackToAdd(track || activeTrack);
+    },
+    [activeTrack],
+  );
+
+  const handleEditTrack = useCallback(
+    (track) => {
+      navigationRef.navigate('TrackEdit', { track: track || activeTrack });
+    },
+    [activeTrack, navigationRef],
+  );
+
+  const handleToggleActiveLike = useCallback(() => {
+    handleToggleLike(activeTrack);
+  }, [handleToggleLike, activeTrack]);
+
   // Последовательная инициализация настроек и авторизации при старте приложения
   useEffect(() => {
     let isMounted = true;
@@ -612,17 +657,15 @@ function AppContent() {
         fetchNextTrack={fetchNextTrack}
         playPreviousTrack={playPreviousTrack}
         isLoading={isLoading}
-        seekTo={(pos) => player.seekTo(pos)}
+        seekTo={handleSeekTo}
         upNextQueue={upNextQueue}
         history={history}
         previousTrack={previousTrack}
         nextTrack={nextTrack}
         playTrack={playTrack}
-        onAddToPlaylist={(track) => setTrackToAdd(track || activeTrack)}
-        onEditTrack={(track) => {
-          navigationRef.navigate('TrackEdit', { track: track || activeTrack });
-        }}
-        onToggleLike={() => handleToggleLike(activeTrack)}
+        onAddToPlaylist={handleAddToPlaylist}
+        onEditTrack={handleEditTrack}
+        onToggleLike={handleToggleActiveLike}
         isLiked={!!activeTrack?.is_liked}
         expandProgress={expandProgress}
         bottomBarHeight={bottomBarHeight}
@@ -659,7 +702,7 @@ function AppContent() {
             startWave={startWave}
             setTrackToManage={setTrackToManage}
             currentUser={currentUser}
-            onOpenAuthModal={() => setIsAuthModalVisible(true)}
+            onOpenAuthModal={handleOpenAuthModal}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
             onExpand={handleExpand}
@@ -678,7 +721,7 @@ function AppContent() {
           <GlowTrackBoundary
             currentTime={status.currentTime}
             duration={status.duration}
-            isPlaying={isPlaying}
+            isPlaying={isPlaying && !isPlayerVisible}
             accentColor={accentColor}
           />
         </Animated.View>
@@ -708,7 +751,7 @@ function AppContent() {
           bottomBarHeight={bottomBarHeight}
           insets={insets}
           expandProgress={expandProgress}
-          onToggleLike={() => handleToggleLike(activeTrack)}
+          onToggleLike={handleToggleActiveLike}
           isLiked={!!activeTrack?.is_liked}
         />
       </Animated.View>
@@ -717,24 +760,22 @@ function AppContent() {
       <TrackContextMenuModal
         visible={!!trackToManage}
         track={trackToManage}
-        onClose={() => setTrackToManage(null)}
-        onAddToPlaylist={(track) => setTrackToAdd(track)}
-        onEditTrack={(track) => {
-          navigationRef.navigate('TrackEdit', { track });
-        }}
+        onClose={handleCloseManageModal}
+        onAddToPlaylist={setTrackToAdd}
+        onEditTrack={handleEditTrack}
       />
 
       <AddToPlaylistModal
         visible={!!trackToAdd}
         track={trackToAdd}
-        onClose={() => setTrackToAdd(null)}
+        onClose={handleCloseAddModal}
       />
 
       <LoginModal
         visible={isAuthModalVisible}
-        onClose={() => setIsAuthModalVisible(false)}
+        onClose={handleCloseAuthModal}
         currentUser={currentUser}
-        onLoginSuccess={(u) => setCurrentUser(u)}
+        onLoginSuccess={handleLoginSuccess}
       />
     </GestureHandlerRootView>
   );

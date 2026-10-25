@@ -23,6 +23,7 @@ import { authFetch } from '../../../shared/api/api';
 import { getTrackId } from '../../../shared/domain/trackAdapter';
 
 import Animated, {
+  useAnimatedStyle,
   withTiming,
   runOnJS,
   Easing,
@@ -31,6 +32,7 @@ import Animated, {
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 
 import AnimatedLyricLine from './AnimatedLyricLine';
+import { TopBlurOverlay, BottomBlurOverlay } from '../BlurOverlays';
 import { computeActiveLyricIndex } from './lyricDepth';
 import { parsePlainLyrics } from './plainLyrics';
 
@@ -378,6 +380,7 @@ const AppleLyricsView = ({
 
   // Focal position calculation: optical center at 40% of viewport
   useEffect(() => {
+    if (!isLyricsView && !isLyricsMounted) return;
     if (activeIndex < 0 || !hasSyncedLyrics) {
       setBaseTargetY(0);
       return;
@@ -511,6 +514,15 @@ const AppleLyricsView = ({
 
   const computedTargetY = baseTargetY + userScrollOffset;
 
+  const internalLyricsOverlaysStyle = useAnimatedStyle(() => {
+    if (!lyricsTransition) return { opacity: 1 };
+    const val =
+      typeof lyricsTransition.value === 'number' ? lyricsTransition.value : 1;
+    const clamped = Math.max(0.2, Math.min(0.85, val));
+    const opacity = (clamped - 0.2) / 0.65;
+    return { opacity };
+  });
+
   const styles = useMemo(
     () =>
       createLyricsStyles({
@@ -521,6 +533,67 @@ const AppleLyricsView = ({
       }),
     [width, height, insets, isEffectivelyCompact],
   );
+
+  const renderedSyncedLyrics = useMemo(() => {
+    if (!hasSyncedLyrics || lyrics.length === 0) return null;
+    return lyrics.map((line, idx) => {
+      const isActive = activeIndex >= 0 && idx === activeIndex;
+      return (
+        <AnimatedLyricLine
+          key={idx}
+          text={line.text}
+          index={idx}
+          activeIndex={activeIndex}
+          targetY={computedTargetY}
+          isActive={isActive}
+          isInitial={isInitialMount}
+          isManualScrolling={isManualScrolling}
+          baseStyle={styles.lyricLine}
+          onLayout={handleLineLayout}
+          onPress={() => handleLineClick(line.time)}
+        />
+      );
+    });
+  }, [
+    hasSyncedLyrics,
+    lyrics,
+    activeIndex,
+    computedTargetY,
+    isInitialMount,
+    isManualScrolling,
+    styles.lyricLine,
+    handleLineLayout,
+    handleLineClick,
+  ]);
+
+  const renderedPlainLyrics = useMemo(() => {
+    if (!plainLyricsText || plainLyricsText.trim().length === 0) return null;
+    return parsePlainLyrics(
+      plainLyricsText || lyrics.map((l) => l.text).join('\n'),
+    ).map((row, idx) => {
+      if (row.type === 'stanza') {
+        return <View key={idx} style={styles.plainStanzaSpacer} />;
+      }
+      if (row.type === 'header') {
+        return (
+          <Text key={idx} style={styles.plainSectionTitle}>
+            {row.text}
+          </Text>
+        );
+      }
+      return (
+        <Text key={idx} style={styles.plainLyricText}>
+          {row.text}
+        </Text>
+      );
+    });
+  }, [
+    plainLyricsText,
+    lyrics,
+    styles.plainStanzaSpacer,
+    styles.plainSectionTitle,
+    styles.plainLyricText,
+  ]);
 
   return (
     <>
@@ -618,24 +691,7 @@ const AppleLyricsView = ({
               <GestureDetector gesture={panGesture}>
                 <Animated.View style={styles.syncedLyricsWrapper}>
                   <View style={styles.syncedLyricsList}>
-                    {lyrics.map((line, idx) => {
-                      const isActive = activeIndex >= 0 && idx === activeIndex;
-                      return (
-                        <AnimatedLyricLine
-                          key={idx}
-                          text={line.text}
-                          index={idx}
-                          activeIndex={activeIndex}
-                          targetY={computedTargetY}
-                          isActive={isActive}
-                          isInitial={isInitialMount}
-                          isManualScrolling={isManualScrolling}
-                          baseStyle={styles.lyricLine}
-                          onLayout={handleLineLayout}
-                          onPress={() => handleLineClick(line.time)}
-                        />
-                      );
-                    })}
+                    {renderedSyncedLyrics}
                   </View>
                 </Animated.View>
               </GestureDetector>
@@ -654,32 +710,21 @@ const AppleLyricsView = ({
                 }}
               >
                 <View style={styles.plainLyricsWrapper}>
-                  {parsePlainLyrics(
-                    plainLyricsText || lyrics.map((l) => l.text).join('\n'),
-                  ).map((row, idx) => {
-                    if (row.type === 'stanza') {
-                      return (
-                        <View key={idx} style={styles.plainStanzaSpacer} />
-                      );
-                    }
-                    if (row.type === 'header') {
-                      return (
-                        <Text key={idx} style={styles.plainSectionTitle}>
-                          {row.text}
-                        </Text>
-                      );
-                    }
-                    return (
-                      <Text key={idx} style={styles.plainLyricText}>
-                        {row.text}
-                      </Text>
-                    );
-                  })}
+                  {renderedPlainLyrics}
                 </View>
               </ScrollView>
             ) : (
               <Text style={styles.noLyricsText}>Lyrics not found</Text>
             )}
+          </Animated.View>
+
+          {/* Top and Bottom Blur Vignettes */}
+          <Animated.View
+            style={[StyleSheet.absoluteFill, internalLyricsOverlaysStyle]}
+            pointerEvents="none"
+          >
+            <TopBlurOverlay insets={insets} />
+            <BottomBlurOverlay insets={insets} />
           </Animated.View>
         </Animated.View>
       )}
@@ -687,4 +732,4 @@ const AppleLyricsView = ({
   );
 };
 
-export default AppleLyricsView;
+export default React.memo(AppleLyricsView);

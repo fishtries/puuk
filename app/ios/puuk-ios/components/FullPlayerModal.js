@@ -90,10 +90,8 @@ const FullPlayerModal = ({
     bottomBarHeight || 64 + (insets.bottom || 34);
   const effectiveTopInset = insets?.top || 47;
   const [isQueueVisible, setIsQueueVisible] = useState(false);
-  const [isSliding, setIsSliding] = useState(false);
   const queueTransition = useSharedValue(0);
   const queueAnimationRef = useRef(false);
-  const [slideValue, setSlideValue] = useState(0);
 
   const [isLyricsView, setIsLyricsView] = useState(false);
   const [isLyricsMounted, setIsLyricsMounted] = useState(false);
@@ -181,14 +179,15 @@ const FullPlayerModal = ({
     }
   }, [playerExpandToken, externalExpandProgress]);
 
-  // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт)
+  // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт и пользователь не тянет ползунок)
   useEffect(() => {
-    if (isPlayerVisible && !isSliding && duration > 0) {
-      slideProgressShared.value = withTiming(currentTime / duration, {
-        duration: 250,
-      });
+    if (isPlayerVisible && !isSlidingShared.value && duration > 0) {
+      slideProgressShared.value = withTiming(
+        Math.max(0, Math.min(1, currentTime / duration)),
+        { duration: 250, easing: Easing.linear },
+      );
     }
-  }, [currentTime, duration, isSliding, isPlayerVisible]);
+  }, [currentTime, duration, isPlayerVisible]);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -627,37 +626,41 @@ const FullPlayerModal = ({
     };
   });
 
-  const toggleQueue = () => {
-    const nextState = !isQueueVisible;
-    if (nextState) {
-      queueAnimationRef.current = true;
-      setTimeout(() => {
-        queueAnimationRef.current = false;
-      }, 1000);
-      if (isLyricsView) {
-        setIsLyricsView(false);
-        cancelAnimation(lyricsTransition);
-        cancelAnimation(lyricsRotation);
-        lyricsTransition.value = withTiming(0, { duration: 300 });
-        lyricsRotation.value = withTiming(0, { duration: 300 });
+  const toggleQueue = useCallback(() => {
+    setIsQueueVisible((prev) => {
+      const nextState = !prev;
+      if (nextState) {
+        queueAnimationRef.current = true;
+        setTimeout(() => {
+          queueAnimationRef.current = false;
+        }, 1000);
+        if (isLyricsView) {
+          setIsLyricsView(false);
+          cancelAnimation(lyricsTransition);
+          cancelAnimation(lyricsRotation);
+          lyricsTransition.value = withTiming(0, { duration: 300 });
+          lyricsRotation.value = withTiming(0, { duration: 300 });
+        }
       }
-    }
-    setIsQueueVisible(nextState);
-    cancelAnimation(queueTransition);
-    queueTransition.value = withTiming(nextState ? 1 : 0, { duration: 350 });
-  };
-
-  const handleToggleLyrics = () => {
-    if (isLyricsView) {
-      setIsLyricsView(false);
-    } else {
-      setIsQueueVisible(false);
       cancelAnimation(queueTransition);
-      queueTransition.value = withTiming(0, { duration: 250 });
-      setIsLyricsMounted(true);
-      setIsLyricsView(true);
-    }
-  };
+      queueTransition.value = withTiming(nextState ? 1 : 0, { duration: 350 });
+      return nextState;
+    });
+  }, [isLyricsView, lyricsTransition, lyricsRotation, queueTransition]);
+
+  const handleToggleLyrics = useCallback(() => {
+    setIsLyricsView((prev) => {
+      if (prev) {
+        return false;
+      } else {
+        setIsQueueVisible(false);
+        cancelAnimation(queueTransition);
+        queueTransition.value = withTiming(0, { duration: 250 });
+        setIsLyricsMounted(true);
+        return true;
+      }
+    });
+  }, [queueTransition]);
 
   const playerAnimatedStyle = useAnimatedStyle(() => {
     return {
@@ -1319,14 +1322,10 @@ const FullPlayerModal = ({
                 seekTo={seekTo}
                 isLyricsView={isLyricsView}
                 isQueueVisible={isQueueVisible}
-                isSliding={isSliding}
-                setIsSliding={setIsSliding}
-                setSlideValue={setSlideValue}
                 isSlidingShared={isSlidingShared}
                 sliderWidthShared={sliderWidthShared}
                 slideProgressShared={slideProgressShared}
                 durationShared={durationShared}
-                slideValue={slideValue}
                 bottomSwipeGesture={bottomSwipeGesture}
                 exitCompactMode={triggerExitCompactMode}
                 triggerExitCompactMode={triggerExitCompactMode}
@@ -1350,4 +1349,4 @@ const FullPlayerModal = ({
   );
 };
 
-export default FullPlayerModal;
+export default React.memo(FullPlayerModal);

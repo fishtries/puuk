@@ -9,7 +9,7 @@ import TrackEditScreen from '../features/library/TrackEditScreen';
 
 const Stack = createNativeStackNavigator();
 
-export default function RootNavigator({
+const RootNavigator = React.memo(function RootNavigator({
   tracks,
   isPlaying,
   currentTrack,
@@ -33,7 +33,7 @@ export default function RootNavigator({
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="MainTabs">
-        {props => (
+        {(props) => (
           <MainTabsScreen
             {...props}
             tracks={tracks}
@@ -59,13 +59,21 @@ export default function RootNavigator({
         )}
       </Stack.Screen>
       <Stack.Screen name="Album">
-        {props => <AlbumScreen {...props} onPlayTrack={playTrack} onPressEllipsis={(track) => setTrackToManage(track)} />}
+        {(props) => (
+          <AlbumScreen
+            {...props}
+            onPlayTrack={playTrack}
+            onPressEllipsis={(track) => setTrackToManage(track)}
+          />
+        )}
       </Stack.Screen>
       <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
-        {props => <PlaylistScreen {...props} onPlayTrack={playTrack} />}
+        {(props) => <PlaylistScreen {...props} onPlayTrack={playTrack} />}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>
   );
-}
+});
+
+export default RootNavigator;

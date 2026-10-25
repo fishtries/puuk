@@ -18,9 +18,18 @@ export const SAFETY_MARGIN_BYTES = 50 * 1024 * 1024; // 50 MB safety margin
 export class AudioCache {
   constructor(options = {}) {
     const baseDir = options.baseDir || Paths.document;
-    this.cacheDir = new Directory(baseDir, options.cacheDirName || CACHE_DIR_NAME);
-    this.tempDir = new Directory(this.cacheDir, options.tempDirName || TEMP_DIR_NAME);
-    this.manifestFile = new File(this.cacheDir, options.manifestFileName || MANIFEST_FILE_NAME);
+    this.cacheDir = new Directory(
+      baseDir,
+      options.cacheDirName || CACHE_DIR_NAME,
+    );
+    this.tempDir = new Directory(
+      this.cacheDir,
+      options.tempDirName || TEMP_DIR_NAME,
+    );
+    this.manifestFile = new File(
+      this.cacheDir,
+      options.manifestFileName || MANIFEST_FILE_NAME,
+    );
     this.manifest = {}; // [trackId]: { uri, size, mtime, lastAccessed }
     this.ongoingDownloads = new Map(); // trackId => { promise, task, tempFile, cancelled, generation }
     this.downloadGenerations = new Map(); // trackId => number
@@ -37,7 +46,9 @@ export class AudioCache {
    * @param {Array<string|number>} ids
    */
   setProtectedTrackIds(ids) {
-    this.protectedTrackIds = new Set((ids || []).map(id => String(id).trim()));
+    this.protectedTrackIds = new Set(
+      (ids || []).map((id) => String(id).trim()),
+    );
   }
 
   /**
@@ -85,21 +96,30 @@ export class AudioCache {
     if (!trackId && trackId !== 0) return null;
     const trackIdStr = String(trackId).trim();
     const entry = this.manifest[trackIdStr];
-    if (!entry || typeof entry !== 'object' || typeof entry.uri !== 'string') return null;
+    if (!entry || typeof entry !== 'object' || typeof entry.uri !== 'string')
+      return null;
 
     const uri = entry.uri.trim();
 
     // 1. Проверяем валидность file:// схемы
     if (!uri.startsWith('file://')) {
-      console.warn(`[AudioCache] Invalid non-file URI in manifest for track ${trackIdStr}: ${uri}`);
+      console.warn(
+        `[AudioCache] Invalid non-file URI in manifest for track ${trackIdStr}: ${uri}`,
+      );
       delete this.manifest[trackIdStr];
       this._scheduleSaveManifest();
       return null;
     }
 
     // 2. Исключаем устаревший .audio формат и временные файлы
-    if (uri.endsWith('.audio') || uri.includes('.part') || uri.includes('/.temp/')) {
-      console.warn(`[AudioCache] Cleaning up invalid/legacy format file in manifest: ${uri}`);
+    if (
+      uri.endsWith('.audio') ||
+      uri.includes('.part') ||
+      uri.includes('/.temp/')
+    ) {
+      console.warn(
+        `[AudioCache] Cleaning up invalid/legacy format file in manifest: ${uri}`,
+      );
       try {
         const legacyFile = new File(uri);
         if (legacyFile.exists) legacyFile.delete();
@@ -117,7 +137,10 @@ export class AudioCache {
       try {
         exists = Boolean(file.exists);
       } catch (err) {
-        console.warn(`[AudioCache] file.exists check failed for ${uri}:`, err?.message);
+        console.warn(
+          `[AudioCache] file.exists check failed for ${uri}:`,
+          err?.message,
+        );
         exists = false;
       }
 
@@ -132,7 +155,10 @@ export class AudioCache {
       try {
         size = file.size ?? 0;
       } catch (err) {
-        console.warn(`[AudioCache] file.size check failed for ${uri}:`, err?.message);
+        console.warn(
+          `[AudioCache] file.size check failed for ${uri}:`,
+          err?.message,
+        );
         size = 0;
       }
 
@@ -143,7 +169,9 @@ export class AudioCache {
       }
 
       // Файл пустой (0 байт) — удаляем
-      console.warn(`[AudioCache] Cached file for track ${trackIdStr} has 0 bytes, removing: ${uri}`);
+      console.warn(
+        `[AudioCache] Cached file for track ${trackIdStr} has 0 bytes, removing: ${uri}`,
+      );
       try {
         file.delete();
       } catch {}
@@ -151,7 +179,10 @@ export class AudioCache {
       this._scheduleSaveManifest();
       return null;
     } catch (err) {
-      console.error(`[AudioCache] getCachedUri unexpected error for track ${trackIdStr}:`, err);
+      console.error(
+        `[AudioCache] getCachedUri unexpected error for track ${trackIdStr}:`,
+        err,
+      );
       return null;
     }
   }
@@ -210,7 +241,9 @@ export class AudioCache {
     if (!trackId && trackId !== 0) return null;
     const trackIdStr = String(trackId).trim();
     const record = this.ongoingDownloads.get(trackIdStr);
-    return (record && record.promise && !record.cancelled) ? record.promise : null;
+    return record && record.promise && !record.cancelled
+      ? record.promise
+      : null;
   }
 
   /**
@@ -290,7 +323,12 @@ export class AudioCache {
       this._checkDiskSpace();
 
       try {
-        const fileUri = await this._downloadWithRetry(trackIdStr, remoteUri, options, downloadRecord);
+        const fileUri = await this._downloadWithRetry(
+          trackIdStr,
+          remoteUri,
+          options,
+          downloadRecord,
+        );
         return fileUri;
       } finally {
         const current = this.ongoingDownloads.get(trackIdStr);
@@ -312,7 +350,10 @@ export class AudioCache {
    */
   cancel(trackId) {
     const trackIdStr = String(trackId);
-    this.downloadGenerations.set(trackIdStr, (this.downloadGenerations.get(trackIdStr) || 0) + 1);
+    this.downloadGenerations.set(
+      trackIdStr,
+      (this.downloadGenerations.get(trackIdStr) || 0) + 1,
+    );
 
     const record = this.ongoingDownloads.get(trackIdStr);
     if (!record) return;
@@ -358,7 +399,7 @@ export class AudioCache {
         }
       } catch {}
       delete this.manifest[trackIdStr];
-      await this._saveManifest();
+      this._scheduleSaveManifest();
     }
   }
 
@@ -410,12 +451,20 @@ export class AudioCache {
     try {
       const available = Paths.availableDiskSpace;
       if (typeof available === 'number' && available < this.safetyMarginBytes) {
-        console.warn(`[AudioCache] Low disk space: ${available} bytes available`);
+        console.warn(
+          `[AudioCache] Low disk space: ${available} bytes available`,
+        );
       }
     } catch {}
   }
 
-  async _downloadWithRetry(trackIdStr, remoteUri, options, record, attempt = 0) {
+  async _downloadWithRetry(
+    trackIdStr,
+    remoteUri,
+    options,
+    record,
+    attempt = 0,
+  ) {
     if (
       record?.cancelled ||
       options.signal?.aborted ||
@@ -425,7 +474,12 @@ export class AudioCache {
     }
 
     try {
-      return await this._downloadAttempt(trackIdStr, remoteUri, options, record);
+      return await this._downloadAttempt(
+        trackIdStr,
+        remoteUri,
+        options,
+        record,
+      );
     } catch (err) {
       if (
         record?.cancelled ||
@@ -437,8 +491,14 @@ export class AudioCache {
 
       if (attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return this._downloadWithRetry(trackIdStr, remoteUri, options, record, attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return this._downloadWithRetry(
+          trackIdStr,
+          remoteUri,
+          options,
+          record,
+          attempt + 1,
+        );
       }
 
       throw err;
@@ -446,12 +506,16 @@ export class AudioCache {
   }
 
   async _downloadAttempt(trackIdStr, remoteUri, options, record) {
-    const generation = record?.generation ?? this.downloadGenerations.get(trackIdStr) ?? 0;
+    const generation =
+      record?.generation ?? this.downloadGenerations.get(trackIdStr) ?? 0;
     const tempFileName = `${trackIdStr}_${Date.now()}.part.mp3`;
     const tempFile = new File(this.tempDir, tempFileName);
     // Уникальный final-путь на поколение загрузки: отменённая/устаревшая задача
     // физически не может перезаписать или удалить файл более новой загрузки.
-    const finalFile = new File(this.cacheDir, `${trackIdStr}_${generation}.mp3`);
+    const finalFile = new File(
+      this.cacheDir,
+      `${trackIdStr}_${generation}.mp3`,
+    );
 
     if (record) {
       record.tempFile = tempFile;
@@ -566,7 +630,7 @@ export class AudioCache {
         lastAccessed: now,
       };
 
-      await this._saveManifest();
+      this._scheduleSaveManifest();
 
       // Не оставляем в manifest результат, если отмена случилась во время его записи.
       if (
@@ -576,7 +640,7 @@ export class AudioCache {
       ) {
         if (this.manifest[trackIdStr]?.uri === finalFile.uri) {
           delete this.manifest[trackIdStr];
-          await this._saveManifest();
+          this._scheduleSaveManifest();
         }
         try {
           if (finalFile.exists) finalFile.delete();
@@ -585,7 +649,11 @@ export class AudioCache {
       }
 
       // Убираем предыдущий файл только после публикации нового и если он больше не используется.
-      if (previousUri && previousUri !== finalFile.uri && this.manifest[trackIdStr]?.uri !== previousUri) {
+      if (
+        previousUri &&
+        previousUri !== finalFile.uri &&
+        this.manifest[trackIdStr]?.uri !== previousUri
+      ) {
         try {
           const previousFile = new File(previousUri);
           if (previousFile.exists) previousFile.delete();
@@ -645,13 +713,21 @@ export class AudioCache {
       // Валидация: проверяем, что указанные файлы реально есть на диске и не являются устаревшими/временными
       let hasChanges = false;
       for (const [id, entry] of Object.entries(this.manifest)) {
-        if (!entry?.uri || typeof entry.uri !== 'string' || !entry.uri.startsWith('file://')) {
+        if (
+          !entry?.uri ||
+          typeof entry.uri !== 'string' ||
+          !entry.uri.startsWith('file://')
+        ) {
           delete this.manifest[id];
           hasChanges = true;
           continue;
         }
         try {
-          if (entry.uri.endsWith('.audio') || entry.uri.includes('.part') || entry.uri.includes('/.temp/')) {
+          if (
+            entry.uri.endsWith('.audio') ||
+            entry.uri.includes('.part') ||
+            entry.uri.includes('/.temp/')
+          ) {
             try {
               const legacyFile = new File(entry.uri);
               if (legacyFile.exists) legacyFile.delete();
@@ -686,18 +762,20 @@ export class AudioCache {
     }
   }
 
-  _scheduleSaveManifest() {
-    if (this._saveManifestTimeout) return;
+  _scheduleSaveManifest(delayMs = 1000) {
+    if (this._saveManifestTimeout) {
+      clearTimeout(this._saveManifestTimeout);
+    }
     this._saveManifestTimeout = setTimeout(() => {
       this._saveManifestTimeout = null;
       this._saveManifest().catch(() => {});
-    }, 500);
+    }, delayMs);
   }
 
   async _saveManifest() {
     try {
       const data = JSON.stringify(this.manifest, null, 2);
-      this.manifestFile.write(data);
+      await this.manifestFile.write(data);
     } catch (e) {
       console.error('[AudioCache] Failed to save manifest:', e);
     }

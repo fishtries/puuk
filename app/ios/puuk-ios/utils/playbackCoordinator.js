@@ -159,6 +159,8 @@ export class PlaybackCoordinator {
     this.lastCacheError = null;
     this.isBufferingSlow = false;
     this._bufferingTimeout = null;
+    this._backgroundCacheTimer = null;
+    this.backgroundCacheDelayMs = options.backgroundCacheDelayMs ?? 5000;
 
     // Подписываемся на события планировщика предзагрузки
     this._unsubscribeScheduler = this.scheduler.addListener((event) => {
@@ -180,6 +182,10 @@ export class PlaybackCoordinator {
     }
     if (this._bufferingTimeout) {
       clearTimeout(this._bufferingTimeout);
+    }
+    if (this._backgroundCacheTimer) {
+      clearTimeout(this._backgroundCacheTimer);
+      this._backgroundCacheTimer = null;
     }
     this.listeners.clear();
   }
@@ -370,6 +376,11 @@ export class PlaybackCoordinator {
     const currentGeneration = this.playbackGeneration;
     const isCurrent = () => this.playbackGeneration === currentGeneration;
 
+    if (this._backgroundCacheTimer) {
+      clearTimeout(this._backgroundCacheTimer);
+      this._backgroundCacheTimer = null;
+    }
+
     this.currentTrack = track;
     this.currentTrackId = trackIdStr;
 
@@ -506,16 +517,33 @@ export class PlaybackCoordinator {
 
       // Запускаем фоновое кеширование (если не отключено)
       if (!this.bypassCache) {
-        this.cache
-          .getOrFetch(trackIdStr, normalizedStreamUrl, {
-            headers: cleanHeaders,
-          })
-          .catch((cacheErr) => {
-            this._warn(
-              `[Coordinator] Background cache for track ${trackIdStr} failed:`,
-              cacheErr?.message,
-            );
-          });
+        const cacheDelay =
+          options.cacheDelayMs !== undefined
+            ? options.cacheDelayMs
+            : this.backgroundCacheDelayMs;
+
+        const triggerBackgroundCache = () => {
+          if (!isCurrent()) return;
+          this.cache
+            .getOrFetch(trackIdStr, normalizedStreamUrl, {
+              headers: cleanHeaders,
+            })
+            .catch((cacheErr) => {
+              this._warn(
+                `[Coordinator] Background cache for track ${trackIdStr} failed:`,
+                cacheErr?.message,
+              );
+            });
+        };
+
+        if (cacheDelay > 0) {
+          this._backgroundCacheTimer = setTimeout(() => {
+            this._backgroundCacheTimer = null;
+            triggerBackgroundCache();
+          }, cacheDelay);
+        } else {
+          triggerBackgroundCache();
+        }
       }
     }
 

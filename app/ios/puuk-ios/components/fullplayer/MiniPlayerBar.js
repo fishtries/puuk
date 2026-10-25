@@ -1,10 +1,5 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Dimensions,
-} from 'react-native';
+import { View, Text, TouchableOpacity, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   useAnimatedStyle,
@@ -40,7 +35,8 @@ const MiniPlayerBar = ({
   const styles = propStyles || defaultStyles;
   const title = displayTitle || currentTrack?.title || 'Puuk Music';
   const artist = currentTrack?.artist || 'Select a track to start';
-  const trackIsLiked = isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
+  const trackIsLiked =
+    isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
 
   // От левого края экрана (0px) до блока кнопок справа (~100px)
   const trackWidth = SCREEN_WIDTH - 100;
@@ -86,13 +82,13 @@ const MiniPlayerBar = ({
       expandProgress.value,
       [0, 0.2],
       [1, 0],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     const translateX = interpolate(
       expandProgress.value,
       [0, 0.2],
       [0, 20],
-      Extrapolation.CLAMP
+      Extrapolation.CLAMP,
     );
     return {
       opacity,
@@ -105,7 +101,9 @@ const MiniPlayerBar = ({
       style={[
         styles.miniPlayerContainer,
         { paddingLeft: 0 },
-        bottomBarHeight ? { height: bottomBarHeight, paddingBottom: insets?.bottom || 0 } : null,
+        bottomBarHeight
+          ? { height: bottomBarHeight, paddingBottom: insets?.bottom || 0 }
+          : null,
         miniPlayerAnimatedStyle,
       ]}
       pointerEvents={isPlayerVisible ? 'none' : 'auto'}
@@ -115,17 +113,39 @@ const MiniPlayerBar = ({
         onPress={handleExpand}
         activeOpacity={0.85}
       >
-        <Animated.View style={[{ flex: 1, height: 44 }, trackMediaVisibilityStyle]}>
+        <Animated.View
+          style={[{ flex: 1, height: 44 }, trackMediaVisibilityStyle]}
+        >
           {/* Подготовленный предыдущий трек слева */}
-          <MiniPlayerTrackCard track={previousTrack} title={previousTrack?.title} artist={previousTrack?.artist} width={trackWidth} style={prevTrackAnimatedStyle} styles={styles} />
+          <MiniPlayerTrackCard
+            track={previousTrack}
+            title={previousTrack?.title}
+            artist={previousTrack?.artist}
+            width={trackWidth}
+            style={prevTrackAnimatedStyle}
+            styles={styles}
+          />
 
           {/* Текущий трек по центру */}
-          <MiniPlayerTrackCard track={currentTrack} title={title} artist={artist} width={trackWidth} style={currentTrackAnimatedStyle} styles={styles} />
+          <MiniPlayerTrackCard
+            track={currentTrack}
+            title={title}
+            artist={artist}
+            width={trackWidth}
+            style={currentTrackAnimatedStyle}
+            styles={styles}
+          />
 
           {/* Подготовленный следующий трек справа */}
-          <MiniPlayerTrackCard track={nextTrack} title={nextTrack?.title} artist={nextTrack?.artist} width={trackWidth} style={nextTrackAnimatedStyle} styles={styles} />
+          <MiniPlayerTrackCard
+            track={nextTrack}
+            title={nextTrack?.title}
+            artist={nextTrack?.artist}
+            width={trackWidth}
+            style={nextTrackAnimatedStyle}
+            styles={styles}
+          />
         </Animated.View>
-
       </TouchableOpacity>
 
       <Animated.View
@@ -150,9 +170,9 @@ const MiniPlayerBar = ({
           activeOpacity={0.7}
         >
           <Ionicons
-            name={trackIsLiked ? "heart" : "heart-outline"}
+            name={trackIsLiked ? 'heart' : 'heart-outline'}
             size={24}
-            color={trackIsLiked ? "#ff2d55" : "#ffffff"}
+            color={trackIsLiked ? '#ff2d55' : '#ffffff'}
           />
         </TouchableOpacity>
         <TouchableOpacity
@@ -165,21 +185,21 @@ const MiniPlayerBar = ({
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
         >
-          <Ionicons name={isPlaying ? "pause" : "play"} size={26} color="#ffffff" />
+          <Ionicons
+            name={isPlaying ? 'pause' : 'play'}
+            size={26}
+            color="#ffffff"
+          />
         </TouchableOpacity>
       </Animated.View>
     </Animated.View>
   );
 
   if (panGesture) {
-    return (
-      <GestureDetector gesture={panGesture}>
-        {content}
-      </GestureDetector>
-    );
+    return <GestureDetector gesture={panGesture}>{content}</GestureDetector>;
   }
 
   return content;
 };
 
-export default MiniPlayerBar;
+export default React.memo(MiniPlayerBar);

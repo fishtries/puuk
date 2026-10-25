@@ -181,11 +181,9 @@ const PlayerControls = ({
   }, [isEffectivelyCompact, triggerExitCompactMode]);
 
   return (
-    <Animated.View layout={LinearTransition.springify()} style={{ width: '100%', zIndex: 20 }}>
+    <Animated.View style={{ width: '100%', zIndex: 20 }}>
       <GestureDetector gesture={Gesture.Simultaneous(bottomSwipeGesture, swipeUpCompactGesture)}>
-        <Animated.View layout={LinearTransition.springify()} style={{ width: '100%' }}>
-
-
+        <View style={{ width: '100%' }}>
           <ProgressBar
             styles={styles}
             isSliding={isSliding}
@@ -213,7 +211,7 @@ const PlayerControls = ({
                 onPress={handleBackPress}
                 style={styles.compactBtn}
               >
-                <Animated.View layout={LinearTransition.springify()} style={backAnimatedStyle}>
+                <Animated.View style={backAnimatedStyle}>
                   <ChasingArrowsIcon progress={backChasingProgress} direction="left" size={isEffectivelyCompact ? 28 : 34} spacing={16} />
                 </Animated.View>
               </Pressable>
@@ -224,7 +222,7 @@ const PlayerControls = ({
                 onPress={togglePlayPause}
                 style={styles.compactBtn}
               >
-                <Animated.View layout={LinearTransition.springify()} style={playPauseAnimatedStyle}>
+                <Animated.View style={playPauseAnimatedStyle}>
                   <Ionicons name={renderedPlayIcon} size={isEffectivelyCompact ? 36 : 48} color="#ffffff" />
                 </Animated.View>
               </Pressable>
@@ -236,7 +234,7 @@ const PlayerControls = ({
                 disabled={isLoading}
                 style={styles.compactBtn}
               >
-                <Animated.View layout={LinearTransition.springify()} style={nextAnimatedStyle}>
+                <Animated.View style={nextAnimatedStyle}>
                   {renderedNextLoading ? (
                     <ActivityIndicator color="#ffffff" size={isEffectivelyCompact ? "small" : "large"} />
                   ) : (
@@ -247,11 +245,11 @@ const PlayerControls = ({
             </Animated.View>
 
             <Animated.View layout={LinearTransition.springify()} style={isEffectivelyCompact ? styles.compactRightControls : styles.bottomControls}>
-              <Animated.View layout={LinearTransition.springify()}>
+              <View>
                 <TouchableOpacity onPress={onToggleLyrics} style={styles.compactBtn}>
                   <Ionicons name={isLyricsView ? "text" : "text-outline"} size={isEffectivelyCompact ? 26 : 26} color={isLyricsView ? "#6C3AED" : "#e5e5ea"} />
                 </TouchableOpacity>
-              </Animated.View>
+              </View>
 
               {!isEffectivelyCompact && (
                 <Animated.View
@@ -267,10 +265,10 @@ const PlayerControls = ({
             </Animated.View>
           </Animated.View>
 
-        </Animated.View>
+        </View>
       </GestureDetector>
     </Animated.View>
   );
 };
 
-export default PlayerControls;
+export default React.memo(PlayerControls);

@@ -81,7 +81,7 @@ describe('PlaybackCoordinator', () => {
     );
   });
 
-  test('play() falls back to remote stream URL and launches background cache if track is not cached', async () => {
+  test('play() delays background cache for five seconds after starting the remote stream', async () => {
     const track = {
       id: 2,
       title: 'Remote Song',
@@ -98,7 +98,11 @@ describe('PlaybackCoordinator', () => {
       headers,
     });
     expect(mockPlayer.play).toHaveBeenCalled();
-    // Cache was triggered in background
+    // Streaming starts immediately; disk caching waits until the delay expires.
+    expect(mockCache.getOrFetch).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(4999);
+    expect(mockCache.getOrFetch).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1);
     expect(mockCache.getOrFetch).toHaveBeenCalledWith(
       '2',
       'https://puuk.app/api/stream/2',
@@ -325,7 +329,7 @@ describe('PlaybackCoordinator', () => {
 
       expect(firstRes.reused).toBeUndefined();
       expect(mockPlayer.replace).toHaveBeenCalledTimes(1);
-      expect(mockCache.getOrFetch).toHaveBeenCalledTimes(1);
+      expect(mockCache.getOrFetch).not.toHaveBeenCalled();
       expect(mockPlayer.play).toHaveBeenCalledTimes(1);
 
       mockPlayer.replace.mockClear();

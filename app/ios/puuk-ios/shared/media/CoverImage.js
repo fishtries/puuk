@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Image } from 'react-native';
 import {
-  getAuthHeaders,
   getCachedAuthHeaders,
   getCachedAuthToken,
+  addAuthListener,
   SERVER_URL,
 } from '../api/api';
 
@@ -65,7 +65,7 @@ export const prefetchCover = (rawUri, token = null) => {
   } catch {}
 };
 
-export default function CoverImage({
+function CoverImage({
   source,
   style,
   defaultSource = DEFAULT_COVER,
@@ -77,16 +77,16 @@ export default function CoverImage({
   const [authToken, setAuthToken] = useState(() => getCachedAuthToken());
 
   useEffect(() => {
-    let mounted = true;
-    getAuthHeaders().then((headers) => {
-      if (mounted && headers?.Authorization) {
-        setAuthHeaders(headers);
-        setAuthToken(getCachedAuthToken());
-      }
-    });
-    return () => {
-      mounted = false;
-    };
+    // Заголовки читаются только из памяти; обновляем их при изменении сессии.
+    const unsubscribe =
+      typeof addAuthListener === 'function'
+        ? addAuthListener(() => {
+            setAuthHeaders(getCachedAuthHeaders());
+            setAuthToken(getCachedAuthToken());
+          })
+        : () => {};
+
+    return unsubscribe;
   }, []);
 
   // Извлекаем uri, если передан объектом { uri: ... } или строкой
@@ -118,11 +118,8 @@ export default function CoverImage({
     }
   }
 
-  const imageKey = typeof source === 'number' ? `res_${source}` : (rawUri || 'default');
-
   return (
     <Image
-      key={imageKey}
       source={imageSource}
       defaultSource={defaultSource}
       onError={(e) => {
@@ -134,5 +131,7 @@ export default function CoverImage({
     />
   );
 }
+
+export default React.memo(CoverImage);
 
 export { DEFAULT_COVER };

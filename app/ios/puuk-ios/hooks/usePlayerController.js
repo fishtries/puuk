@@ -188,6 +188,17 @@ export default function usePlayerController({ setTracks }) {
   const currentTime = status.currentTime || 0;
   const duration = status.duration || 0;
 
+  const currentTimeRef = useRef(currentTime);
+  const durationRef = useRef(duration);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
   // Отслеживание смены пользователя: сброс дедупликации и таймеров повтора
   useEffect(() => {
     let isMounted = true;
@@ -648,7 +659,7 @@ export default function usePlayerController({ setTracks }) {
   const playPreviousTrack = useCallback(
     (options = {}) => {
       const force = typeof options === 'boolean' ? options : !!options?.force;
-      if (!force && currentTime > 3) {
+      if (!force && (currentTimeRef.current || 0) > 3) {
         player.seekTo(0);
         return;
       }
@@ -674,7 +685,6 @@ export default function usePlayerController({ setTracks }) {
       }
     },
     [
-      currentTime,
       history,
       currentTrack,
       upNextQueue,
@@ -720,12 +730,14 @@ export default function usePlayerController({ setTracks }) {
         }
 
         // Телеметрия волны: finish при дослушивании, иначе skip
+        const currentDur = durationRef.current || currentTrack.duration || 0;
+        const currentPos = currentTimeRef.current || 0;
         const trackMs = Math.round(
-          (currentTrack.duration || duration || 0) * 1000,
+          (currentTrack.duration || currentDur || 0) * 1000,
         );
-        const listenedMs = Math.round((currentTime || 0) * 1000);
+        const listenedMs = Math.round((currentPos || 0) * 1000);
         const eventType =
-          duration > 0 && currentTime >= duration * 0.9 ? 'finish' : 'skip';
+          currentDur > 0 && currentPos >= currentDur * 0.9 ? 'finish' : 'skip';
         if (currentTrackId !== null) {
           sendBackgroundEvent('/api/wave/feedback', {
             track_id: currentTrackId,
@@ -754,8 +766,6 @@ export default function usePlayerController({ setTracks }) {
     player,
     loadAndPlay,
     fetchQueue,
-    currentTime,
-    duration,
     history,
     sendBackgroundEvent,
     recordTrackHistory,
@@ -801,13 +811,13 @@ export default function usePlayerController({ setTracks }) {
     if (isPlaying) {
       player.pause();
     } else {
-      if (!currentTime && currentTrack) {
+      if (!currentTimeRef.current && currentTrack) {
         loadAndPlay(currentTrack);
       } else {
         player.play();
       }
     }
-  }, [isPlaying, currentTime, currentTrack, player, loadAndPlay]);
+  }, [isPlaying, currentTrack, player, loadAndPlay]);
 
   const playTrack = useCallback(
     (track) => {
