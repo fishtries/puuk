@@ -13,7 +13,7 @@
 /* Album Cover Section */
 .coverSection {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   margin: 4px 0 14px;
 }

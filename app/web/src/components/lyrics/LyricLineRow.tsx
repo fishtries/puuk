@@ -52,9 +52,9 @@ export const LyricLineRow: React.FC<LyricLineRowProps> = React.memo(
       [targetY, progressive.scale, progressive.opacity, progressive.blur]
     );
 
-    const transitionProps = useMemo(
-      () => ({
-        y: isInitial
+    const springTransition = useMemo(
+      () =>
+        isInitial
           ? { duration: 0 }
           : isManualScrolling
           ? {
@@ -71,23 +71,17 @@ export const LyricLineRow: React.FC<LyricLineRowProps> = React.memo(
               mass: springMass,
               delay: waveDelay,
             },
-        scale: {
-          duration: 0.45,
-          ease: [0.22, 1, 0.36, 1] as [number, number, number, number],
-          delay: isManualScrolling ? 0 : waveDelay * 0.6,
-        },
-        opacity: {
-          duration: 0.45,
-          ease: [0.22, 1, 0.36, 1] as [number, number, number, number],
-          delay: isManualScrolling ? 0 : waveDelay * 0.6,
-        },
-        filter: {
-          duration: isActive ? 0.2 : 0.35,
-          ease: 'easeOut' as const,
-          delay: isActive || isManualScrolling ? 0 : waveDelay * 0.4,
-        },
+      [isInitial, isManualScrolling, springStiffness, springDamping, springMass, waveDelay]
+    );
+
+    const transitionProps = useMemo(
+      () => ({
+        y: springTransition,
+        scale: springTransition,
+        opacity: springTransition,
+        filter: springTransition,
       }),
-      [isInitial, isManualScrolling, springStiffness, springDamping, springMass, waveDelay, isActive]
+      [springTransition]
     );
 
     const handleClick = React.useCallback(() => {
