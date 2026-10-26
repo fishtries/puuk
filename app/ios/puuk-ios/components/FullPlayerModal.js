@@ -32,6 +32,7 @@ import Animated, {
   Easing,
   cancelAnimation,
   ReduceMotion,
+  LinearTransition,
 } from 'react-native-reanimated';
 import {
   Gesture,
@@ -83,7 +84,39 @@ const FullPlayerModal = ({
   networkError = null,
   isBufferingSlow = false,
   onRetryPreload,
+  accentColor: propAccentColor,
 }) => {
+  const [coverAccentColor, setCoverAccentColor] = useState(
+    () => currentTrack?.cover_color || null,
+  );
+
+  useEffect(() => {
+    const tid = getTrackId(currentTrack);
+    if (!tid) {
+      setCoverAccentColor(null);
+      return;
+    }
+
+    if (currentTrack?.cover_color) {
+      setCoverAccentColor(currentTrack.cover_color);
+      return;
+    }
+
+    let isCancelled = false;
+    authFetch(`/api/color/${encodeURIComponent(String(tid))}`)
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isCancelled && data?.color) {
+          setCoverAccentColor(data.color);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentTrack]);
+
   const trackIsLiked =
     isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
   const insets = propInsets ||
@@ -164,6 +197,15 @@ const FullPlayerModal = ({
   const triggerExitCompactMode = useCallback(() => {
     if (exitCompactModeRef.current) {
       exitCompactModeRef.current();
+    }
+  }, []);
+  const resetInactivityTimerRef = useRef(null);
+  const handleRegisterResetTimer = useCallback((fn) => {
+    resetInactivityTimerRef.current = fn;
+  }, []);
+  const handleUserInteraction = useCallback(() => {
+    if (resetInactivityTimerRef.current) {
+      resetInactivityTimerRef.current();
     }
   }, []);
 
@@ -708,6 +750,7 @@ const FullPlayerModal = ({
   const handleToggleLyrics = useCallback(() => {
     if (!hasLyrics) return;
     setIsLyricsView((prev) => {
+      setIsLyricsCompact(false);
       if (prev) {
         return false;
       } else {
@@ -750,7 +793,7 @@ const FullPlayerModal = ({
 
   const fullArtTopY = effectiveTopInset + 71; // safeArea paddingTop (effectiveTopInset + 6) + grabber 19 + header 40 + marginTop 6
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
-  const TARGET_DELTA_Y = effectiveTopInset + 32 - fullArtCenterY;
+  const TARGET_DELTA_Y = effectiveTopInset + 37 - fullArtCenterY;
 
   const miniArtTopY = height - effectiveBottomBarHeight + 10;
   const miniArtCenterY = miniArtTopY + MINI_ART_SIZE / 2; // height - effectiveBottomBarHeight + 32
@@ -1202,6 +1245,7 @@ const FullPlayerModal = ({
             onClose={handleClose}
             onExitCompactMode={handleExitCompactMode}
             onLyricsCompactChange={setIsLyricsCompact}
+            onRegisterResetTimer={handleRegisterResetTimer}
           />
 
           <Animated.View
@@ -1364,6 +1408,7 @@ const FullPlayerModal = ({
 
             {/* Bottom controls container */}
             <Animated.View
+              layout={LinearTransition.springify()}
               style={[{ width: '100%' }, playerControlsAnimatedStyle]}
             >
               <PlayerNetworkBanner
@@ -1397,6 +1442,8 @@ const FullPlayerModal = ({
                 triggerExitCompactMode={triggerExitCompactMode}
                 onToggleQueue={toggleQueue}
                 onToggleLyrics={handleToggleLyrics}
+                onUserInteraction={handleUserInteraction}
+                accentColor={coverAccentColor || propAccentColor || '#FFDAB9'}
               />
               <GestureDetector gesture={bottomSwipeGesture}>
                 <View

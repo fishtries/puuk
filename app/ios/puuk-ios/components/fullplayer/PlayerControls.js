@@ -1,9 +1,5 @@
 import React, { useMemo } from 'react';
-import {
-  View,
-  Pressable,
-  TouchableOpacity,
-} from 'react-native';
+import { View, Pressable, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SymbolView } from 'expo-symbols';
 import Animated, {
@@ -49,13 +45,24 @@ const PlayerControls = ({
   onToggleQueue,
   onToggleLyrics,
   hasLyrics = false,
+  onUserInteraction,
+  accentColor,
 }) => {
+  const activeAccentColor = accentColor || '#FFDAB9';
+
+  const notifyUserInteraction = () => {
+    if (!isEffectivelyCompact && onUserInteraction) {
+      onUserInteraction();
+    }
+  };
+
   // 1. Кнопка НАЗАД (Back)
   const backPressScale = useSharedValue(1);
   const backHighlightOpacity = useSharedValue(0);
   const backChasingProgress = useSharedValue(0);
 
   const handleBackPressIn = () => {
+    notifyUserInteraction();
     backPressScale.value = withTiming(0.88, { duration: 120 });
     backHighlightOpacity.value = withTiming(1, { duration: 100 });
   };
@@ -68,6 +75,7 @@ const PlayerControls = ({
     backHighlightOpacity.value = withTiming(0, { duration: 240 });
   };
   const handleBackPress = () => {
+    notifyUserInteraction();
     cancelAnimation(backChasingProgress);
     backChasingProgress.value = 0;
     backChasingProgress.value = withTiming(
@@ -101,6 +109,7 @@ const PlayerControls = ({
   const playPauseHighlightOpacity = useSharedValue(0);
 
   const handlePlayPausePressIn = () => {
+    notifyUserInteraction();
     playPausePressScale.value = withTiming(0.88, { duration: 120 });
     playPauseHighlightOpacity.value = withTiming(1, { duration: 100 });
   };
@@ -131,6 +140,7 @@ const PlayerControls = ({
   const nextChasingProgress = useSharedValue(0);
 
   const handleNextPressIn = () => {
+    notifyUserInteraction();
     nextPressScale.value = withTiming(0.88, { duration: 120 });
     nextHighlightOpacity.value = withTiming(1, { duration: 100 });
   };
@@ -143,6 +153,7 @@ const PlayerControls = ({
     nextHighlightOpacity.value = withTiming(0, { duration: 240 });
   };
   const handleNextPress = () => {
+    notifyUserInteraction();
     cancelAnimation(nextChasingProgress);
     nextChasingProgress.value = 0;
     nextChasingProgress.value = withTiming(
@@ -170,6 +181,14 @@ const PlayerControls = ({
     };
   });
 
+  const handleExitCompact = () => {
+    if (triggerExitCompactMode) {
+      triggerExitCompactMode();
+    } else if (exitCompactMode) {
+      exitCompactMode();
+    }
+  };
+
   const swipeUpCompactGesture = useMemo(() => {
     return Gesture.Pan()
       .enabled(isEffectivelyCompact)
@@ -177,11 +196,11 @@ const PlayerControls = ({
       .failOffsetY(50)
       .onEnd((event) => {
         'worklet';
-        if (event.translationY < -10 || event.velocityY < -150) {
-          runOnJS(triggerExitCompactMode)();
+        if (event.translationY < -8 || event.velocityY < -150) {
+          runOnJS(handleExitCompact)();
         }
       });
-  }, [isEffectivelyCompact, triggerExitCompactMode]);
+  }, [isEffectivelyCompact, triggerExitCompactMode, exitCompactMode]);
 
   const sideBtnSize = isEffectivelyCompact ? 48 : 64;
   const playBtnSize = isEffectivelyCompact ? 54 : 72;
@@ -190,32 +209,71 @@ const PlayerControls = ({
   const playIconSize = isEffectivelyCompact ? 36 : 48;
 
   return (
-    <Animated.View style={{ width: '100%', zIndex: 20 }}>
+    <Animated.View
+      layout={LinearTransition.springify()}
+      style={{ width: '100%', zIndex: 20 }}
+    >
       <GestureDetector
         gesture={Gesture.Simultaneous(
           bottomSwipeGesture,
           swipeUpCompactGesture,
         )}
       >
-        <View style={{ width: '100%' }}>
-          <ProgressBar
-            styles={styles}
-            isSliding={isSliding}
-            setIsSliding={setIsSliding}
-            setSlideValue={setSlideValue}
-            seekTo={seekTo}
-            currentTime={currentTime}
-            duration={duration}
-            isSlidingShared={isSlidingShared}
-            sliderWidthShared={sliderWidthShared}
-            slideProgressShared={slideProgressShared}
-            durationShared={durationShared}
-            slideValue={slideValue}
-            isEffectivelyCompact={isEffectivelyCompact}
-          />
+        <Animated.View
+          layout={LinearTransition.springify()}
+          style={{ width: '100%' }}
+        >
+          {isEffectivelyCompact && (
+            <Animated.View
+              layout={LinearTransition.springify()}
+              entering={FadeIn.duration(300)}
+              exiting={FadeOut.duration(300)}
+            >
+              <Pressable
+                onPress={handleExitCompact}
+                hitSlop={{ top: 20, bottom: 15, left: 30, right: 30 }}
+                style={styles.compactHandleContainer}
+                accessibilityRole="button"
+                accessibilityLabel="Развернуть элементы управления"
+              >
+                {({ pressed }) => (
+                  <View
+                    style={[
+                      styles.compactHandlePill,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                  />
+                )}
+              </Pressable>
+            </Animated.View>
+          )}
+
+          {!isEffectivelyCompact && (
+            <Animated.View
+              layout={LinearTransition.springify()}
+              entering={FadeIn.duration(300)}
+              exiting={FadeOut.duration(300)}
+            >
+              <ProgressBar
+                styles={styles}
+                isSliding={isSliding}
+                setIsSliding={setIsSliding}
+                setSlideValue={setSlideValue}
+                seekTo={seekTo}
+                currentTime={currentTime}
+                duration={duration}
+                isSlidingShared={isSlidingShared}
+                sliderWidthShared={sliderWidthShared}
+                slideProgressShared={slideProgressShared}
+                durationShared={durationShared}
+                slideValue={slideValue}
+                isEffectivelyCompact={isEffectivelyCompact}
+              />
+            </Animated.View>
+          )}
 
           <Animated.View
-            layout={LinearTransition.springify()}
+            layout={LinearTransition.springify().damping(60).stiffness(250)}
             style={
               isEffectivelyCompact
                 ? styles.compactBottomRow
@@ -223,7 +281,7 @@ const PlayerControls = ({
             }
           >
             <Animated.View
-              layout={LinearTransition.springify()}
+              layout={LinearTransition.springify().damping(60).stiffness(350)}
               style={
                 isEffectivelyCompact
                   ? styles.compactMediaControls
@@ -259,7 +317,10 @@ const PlayerControls = ({
                   ]}
                   pointerEvents="none"
                 />
-                <Animated.View style={backAnimatedStyle}>
+                <Animated.View
+                  layout={LinearTransition.springify()}
+                  style={backAnimatedStyle}
+                >
                   <ChasingArrowsIcon
                     progress={backChasingProgress}
                     direction="left"
@@ -298,7 +359,10 @@ const PlayerControls = ({
                   ]}
                   pointerEvents="none"
                 />
-                <Animated.View style={playPauseAnimatedStyle}>
+                <Animated.View
+                  layout={LinearTransition.springify()}
+                  style={playPauseAnimatedStyle}
+                >
                   <SymbolView
                     name={isPlaying ? 'pause.fill' : 'play.fill'}
                     size={playIconSize}
@@ -345,7 +409,10 @@ const PlayerControls = ({
                   ]}
                   pointerEvents="none"
                 />
-                <Animated.View style={nextAnimatedStyle}>
+                <Animated.View
+                  layout={LinearTransition.springify()}
+                  style={nextAnimatedStyle}
+                >
                   <ChasingArrowsIcon
                     progress={nextChasingProgress}
                     direction="right"
@@ -364,21 +431,31 @@ const PlayerControls = ({
                   : styles.bottomControls
               }
             >
-              <View>
+              <Animated.View layout={LinearTransition.springify()}>
                 <TouchableOpacity
                   onPress={onToggleLyrics}
                   disabled={!hasLyrics}
-                  style={[styles.compactBtn, !hasLyrics && { opacity: 0.3 }]}
-                  accessibilityState={{ disabled: !hasLyrics }}
+                  activeOpacity={0.7}
+                  style={[
+                    isEffectivelyCompact
+                      ? styles.toggleSquircleBtnCompact
+                      : styles.toggleSquircleBtn,
+                    isLyricsView && styles.toggleSquircleBtnActive,
+                    !hasLyrics && { opacity: 0.3 },
+                  ]}
+                  accessibilityState={{
+                    disabled: !hasLyrics,
+                    selected: isLyricsView,
+                  }}
                   accessibilityLabel="Текст песни"
                 >
                   <Ionicons
                     name={isLyricsView ? 'text' : 'text-outline'}
-                    size={isEffectivelyCompact ? 26 : 26}
-                    color={isLyricsView ? '#6C3AED' : '#e5e5ea'}
+                    size={isEffectivelyCompact ? 22 : 24}
+                    color={isLyricsView ? '#ffffff' : '#e5e5ea'}
                   />
                 </TouchableOpacity>
-              </View>
+              </Animated.View>
 
               {!isEffectivelyCompact && (
                 <Animated.View
@@ -388,19 +465,25 @@ const PlayerControls = ({
                 >
                   <TouchableOpacity
                     onPress={onToggleQueue}
-                    style={styles.compactBtn}
+                    activeOpacity={0.7}
+                    style={[
+                      styles.toggleSquircleBtn,
+                      isQueueVisible && styles.toggleSquircleBtnActive,
+                    ]}
+                    accessibilityState={{ selected: isQueueVisible }}
+                    accessibilityLabel="Очередь воспроизведения"
                   >
                     <Ionicons
                       name="list"
-                      size={26}
-                      color={isQueueVisible ? '#ff2d55' : '#e5e5ea'}
+                      size={24}
+                      color={isQueueVisible ? '#ffffff' : '#e5e5ea'}
                     />
                   </TouchableOpacity>
                 </Animated.View>
               )}
             </Animated.View>
           </Animated.View>
-        </View>
+        </Animated.View>
       </GestureDetector>
     </Animated.View>
   );

@@ -677,6 +677,7 @@ function AppContent() {
         networkError={networkError}
         isBufferingSlow={isBufferingSlow}
         onRetryPreload={retryPreload}
+        accentColor={accentColor}
       />
 
       {/* СЛОЙ 1 (ПЕРЕДНИЙ ПЛАН): Карточка приложения, поднимающаяся вверх при открытии плеера */}

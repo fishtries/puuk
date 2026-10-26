@@ -178,6 +178,20 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
   },
+  compactHandleContainer: {
+    width: '100%',
+    height: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    marginBottom: -2,
+  },
+  compactHandlePill: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
+  },
   compactBottomRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -202,6 +216,27 @@ const styles = StyleSheet.create({
   },
   compactBtn: {
     padding: 5,
+  },
+  toggleSquircleBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  toggleSquircleBtnCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    borderCurve: 'continuous',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  toggleSquircleBtnActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
   },
   miniPlayerContainer: {
     position: 'absolute',

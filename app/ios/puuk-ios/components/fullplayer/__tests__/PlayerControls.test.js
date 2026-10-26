@@ -350,4 +350,166 @@ describe('PlayerControls - bottom plus icon removed', () => {
     });
     expect(mockFetchNext).toHaveBeenCalledTimes(1);
   });
+
+  it('renders pull trigger when isEffectivelyCompact is true and handles tap to exit compact', async () => {
+    let renderer;
+    const mockExitCompact = jest.fn();
+    const mockTriggerExitCompact = jest.fn();
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <PlayerControls
+          styles={styles}
+          isEffectivelyCompact={true}
+          isPlaying={true}
+          isLoading={false}
+          currentTime={10}
+          duration={100}
+          togglePlayPause={jest.fn()}
+          fetchNextTrack={jest.fn()}
+          playPreviousTrack={jest.fn()}
+          seekTo={jest.fn()}
+          isLyricsView={true}
+          isQueueVisible={false}
+          isSlidingShared={{ value: false }}
+          sliderWidthShared={{ value: 1 }}
+          slideProgressShared={{ value: 0 }}
+          durationShared={{ value: 100 }}
+          bottomSwipeGesture={{}}
+          exitCompactMode={mockExitCompact}
+          triggerExitCompactMode={mockTriggerExitCompact}
+          onToggleQueue={jest.fn()}
+          onToggleLyrics={jest.fn()}
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    // ProgressBar should not be rendered
+    expect(root.findAllByType('ProgressBar').length).toBe(0);
+
+    // Pull trigger handle should be rendered
+    const pullTrigger = root.findByProps({
+      accessibilityLabel: 'Развернуть элементы управления',
+    });
+    expect(pullTrigger).toBeDefined();
+
+    await act(async () => {
+      pullTrigger.props.onPress();
+    });
+    expect(mockTriggerExitCompact).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders ProgressBar and does not render pull trigger when isEffectivelyCompact is false', async () => {
+    let renderer;
+    const mockUserInteraction = jest.fn();
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <PlayerControls
+          styles={styles}
+          isEffectivelyCompact={false}
+          isPlaying={true}
+          isLoading={false}
+          currentTime={10}
+          duration={100}
+          togglePlayPause={jest.fn()}
+          fetchNextTrack={jest.fn()}
+          playPreviousTrack={jest.fn()}
+          seekTo={jest.fn()}
+          isLyricsView={true}
+          isQueueVisible={false}
+          isSlidingShared={{ value: false }}
+          sliderWidthShared={{ value: 1 }}
+          slideProgressShared={{ value: 0 }}
+          durationShared={{ value: 100 }}
+          bottomSwipeGesture={{}}
+          exitCompactMode={jest.fn()}
+          triggerExitCompactMode={jest.fn()}
+          onToggleQueue={jest.fn()}
+          onToggleLyrics={jest.fn()}
+          onUserInteraction={mockUserInteraction}
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    // ProgressBar should be rendered
+    expect(root.findAllByType('ProgressBar').length).toBe(1);
+
+    // Pull trigger should not be rendered
+    const pullTriggers = root.findAllByProps({
+      accessibilityLabel: 'Развернуть элементы управления',
+    });
+    expect(pullTriggers.length).toBe(0);
+
+    // Pressing play button triggers onUserInteraction
+    const playBtn = root.findByProps({ accessibilityLabel: 'Пауза' });
+    await act(async () => {
+      playBtn.props.onPressIn();
+    });
+    expect(mockUserInteraction).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders white icon and translucent squircle background for Lyrics and Queue when active', async () => {
+    let renderer;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <PlayerControls
+          styles={styles}
+          isEffectivelyCompact={false}
+          isPlaying={true}
+          isLoading={false}
+          currentTime={10}
+          duration={100}
+          togglePlayPause={jest.fn()}
+          fetchNextTrack={jest.fn()}
+          playPreviousTrack={jest.fn()}
+          seekTo={jest.fn()}
+          isLyricsView={true}
+          isQueueVisible={true}
+          hasLyrics={true}
+          isSlidingShared={{ value: false }}
+          sliderWidthShared={{ value: 1 }}
+          slideProgressShared={{ value: 0 }}
+          durationShared={{ value: 100 }}
+          bottomSwipeGesture={{}}
+          exitCompactMode={jest.fn()}
+          triggerExitCompactMode={jest.fn()}
+          onToggleQueue={jest.fn()}
+          onToggleLyrics={jest.fn()}
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    const lyricsIcon = root.findByProps({ name: 'text' });
+    expect(lyricsIcon.props.color).toBe('#ffffff');
+
+    const lyricsBtn = root.findByProps({ accessibilityLabel: 'Текст песни' });
+    const lyricsStyle = Array.isArray(lyricsBtn.props.style)
+      ? lyricsBtn.props.style.flat()
+      : [lyricsBtn.props.style];
+    expect(
+      lyricsStyle.some(
+        (s) => s && s.backgroundColor === 'rgba(255, 255, 255, 0.2)',
+      ),
+    ).toBe(true);
+
+    const queueIcon = root.findByProps({ name: 'list' });
+    expect(queueIcon.props.color).toBe('#ffffff');
+
+    const queueBtn = root.findByProps({
+      accessibilityLabel: 'Очередь воспроизведения',
+    });
+    const queueStyle = Array.isArray(queueBtn.props.style)
+      ? queueBtn.props.style.flat()
+      : [queueBtn.props.style];
+    expect(
+      queueStyle.some(
+        (s) => s && s.backgroundColor === 'rgba(255, 255, 255, 0.2)',
+      ),
+    ).toBe(true);
+  });
 });

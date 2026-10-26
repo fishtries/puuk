@@ -1,14 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-} from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  runOnJS,
-  FadeIn,
-  FadeOut,
-} from 'react-native-reanimated';
+import { View, Text } from 'react-native';
+import Animated, { useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 const ProgressBar = ({
@@ -37,13 +29,16 @@ const ProgressBar = ({
     }
   }, []);
 
-  const handleSeekEnd = useCallback((targetTime) => {
-    lastReportedSecRef.current = null;
-    setScrubSeconds(null);
-    if (targetTime !== null && targetTime !== undefined) {
-      seekTo?.(targetTime);
-    }
-  }, [seekTo]);
+  const handleSeekEnd = useCallback(
+    (targetTime) => {
+      lastReportedSecRef.current = null;
+      setScrubSeconds(null);
+      if (targetTime !== null && targetTime !== undefined) {
+        seekTo?.(targetTime);
+      }
+    },
+    [seekTo],
+  );
 
   const scrubGesture = Gesture.Pan()
     .onBegin((event) => {
@@ -112,55 +107,45 @@ const ProgressBar = ({
     return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
-  if (isEffectivelyCompact) return null;
-
   const currentSeconds = scrubSeconds !== null ? scrubSeconds : currentTime;
   const totalDuration = duration || 0;
   const remainingSeconds = Math.max(0, totalDuration - currentSeconds);
 
   return (
-    <Animated.View
-      exiting={FadeOut.duration(300)}
-      entering={FadeIn.duration(300)}
-    >
-      <GestureDetector gesture={scrubGesture}>
-        <Animated.View
-          style={styles.progressContainer}
-          onLayout={(e) => {
-            sliderWidthShared.value = e.nativeEvent.layout.width;
-          }}
-        >
-          <View style={{ justifyContent: 'center' }}>
+    <GestureDetector gesture={scrubGesture}>
+      <Animated.View
+        style={styles.progressContainer}
+        onLayout={(e) => {
+          sliderWidthShared.value = e.nativeEvent.layout.width;
+        }}
+      >
+        <View style={{ justifyContent: 'center' }}>
+          <Animated.View
+            style={[
+              styles.progressBarBackground,
+              barHeightAnimatedStyle,
+              { overflow: 'hidden' },
+            ]}
+          >
             <Animated.View
               style={[
-                styles.progressBarBackground,
-                barHeightAnimatedStyle,
-                { overflow: 'hidden' },
+                styles.progressBarFill,
+                { width: '100%', height: '100%' },
+                progressFillStyle,
               ]}
-            >
-              <Animated.View
-                style={[
-                  styles.progressBarFill,
-                  { width: '100%', height: '100%' },
-                  progressFillStyle,
-                ]}
-              />
-            </Animated.View>
-            <Animated.View
-              style={[
-                styles.progressThumb,
-                progressThumbStyle,
-              ]}
-              pointerEvents="none"
             />
-          </View>
-          <View style={styles.timeRow}>
-            <Text style={styles.timeText}>{formatTime(currentSeconds)}</Text>
-            <Text style={styles.timeText}>-{formatTime(remainingSeconds)}</Text>
-          </View>
-        </Animated.View>
-      </GestureDetector>
-    </Animated.View>
+          </Animated.View>
+          <Animated.View
+            style={[styles.progressThumb, progressThumbStyle]}
+            pointerEvents="none"
+          />
+        </View>
+        <View style={styles.timeRow}>
+          <Text style={styles.timeText}>{formatTime(currentSeconds)}</Text>
+          <Text style={styles.timeText}>-{formatTime(remainingSeconds)}</Text>
+        </View>
+      </Animated.View>
+    </GestureDetector>
   );
 };
 
