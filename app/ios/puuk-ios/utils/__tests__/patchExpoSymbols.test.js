@@ -25,7 +25,7 @@ describe('patch-expo-symbols', () => {
 
     const content = fs.readFileSync(targetFile, 'utf8');
     expect(content).toContain(
-      'imageView.setSymbolImage(finalImage, with: .automatic)',
+      'imageView.setSymbolImage(finalImage, contentTransition: .automatic)',
     );
     expect(content).toContain('currentSymbolName');
   });

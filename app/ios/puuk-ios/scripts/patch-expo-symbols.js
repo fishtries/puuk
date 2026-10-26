@@ -17,8 +17,34 @@ if (!fs.existsSync(targetFile)) {
 
 let content = fs.readFileSync(targetFile, 'utf8');
 
-if (content.includes('imageView.setSymbolImage(finalImage, with: .automatic)')) {
+const isAlreadyPatched =
+  content.includes(
+    'imageView.setSymbolImage(finalImage, contentTransition: .automatic)',
+  ) && content.includes('#if canImport(Symbols)');
+
+if (isAlreadyPatched) {
   console.log('[expo-symbols] SymbolView.swift already patched.');
+  process.exit(0);
+}
+
+// 1. Add #if canImport(Symbols) import Symbols #endif if missing
+if (!content.includes('import Symbols')) {
+  content = content.replace(
+    'import ExpoModulesCore',
+    `import ExpoModulesCore\n#if canImport(Symbols)\nimport Symbols\n#endif`,
+  );
+}
+
+// 2. Fix invalid `with: .automatic` argument label if an older patch was applied
+if (content.includes('imageView.setSymbolImage(finalImage, with: .automatic)')) {
+  content = content.replace(
+    'imageView.setSymbolImage(finalImage, with: .automatic)',
+    'imageView.setSymbolImage(finalImage, contentTransition: .automatic)',
+  );
+  fs.writeFileSync(targetFile, content, 'utf8');
+  console.log(
+    '[expo-symbols] Successfully updated SymbolView.swift with correct contentTransition parameter.',
+  );
   process.exit(0);
 }
 
@@ -71,7 +97,7 @@ const newReloadMethod = `#if !os(macOS)
       let isChangingSymbol = currentSymbolName != nil && currentSymbolName != name
       currentSymbolName = name
       if isChangingSymbol {
-        imageView.setSymbolImage(finalImage, with: .automatic)
+        imageView.setSymbolImage(finalImage, contentTransition: .automatic)
       } else {
         imageView.image = finalImage
       }
