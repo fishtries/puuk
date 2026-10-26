@@ -66,6 +66,7 @@ const createLyricsStyles = ({
   },
   lyricsMiniTextContainer: {
     flex: 1,
+    justifyContent: 'center',
   },
   lyricsMiniTitle: {
     color: '#fff',
@@ -173,6 +174,7 @@ const AppleLyricsView = ({
   onClose,
   onExitCompactMode,
   onLyricsCompactChange,
+  onRegisterResetTimer,
 }) => {
   const [lyrics, setLyrics] = useState([]);
   const [plainLyricsText, setPlainLyricsText] = useState('');
@@ -277,12 +279,28 @@ const AppleLyricsView = ({
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     if (isLyricsView && !isLyricsCompactRef.current) {
       inactivityTimerRef.current = setTimeout(() => {
+        isLyricsCompactRef.current = true;
         setIsLyricsCompact(true);
-      }, 7000);
+      }, 3000);
     }
   }, [isLyricsView]);
 
+  useEffect(() => {
+    if (isLyricsView) {
+      isLyricsCompactRef.current = false;
+      setIsLyricsCompact(false);
+      resetInactivityTimer();
+    } else {
+      isLyricsCompactRef.current = false;
+      setIsLyricsCompact(false);
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+    }
+  }, [isLyricsView, resetInactivityTimer]);
+
   const exitCompactMode = useCallback(() => {
+    isLyricsCompactRef.current = false;
     setIsLyricsCompact(false);
     resetInactivityTimer();
   }, [resetInactivityTimer]);
@@ -294,6 +312,14 @@ const AppleLyricsView = ({
       onExitCompactModeRef.current(exitCompactMode);
     }
   }, [exitCompactMode]);
+
+  const onRegisterResetTimerRef = useRef(onRegisterResetTimer);
+  onRegisterResetTimerRef.current = onRegisterResetTimer;
+  useEffect(() => {
+    if (onRegisterResetTimerRef.current) {
+      onRegisterResetTimerRef.current(resetInactivityTimer);
+    }
+  }, [resetInactivityTimer]);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -316,7 +342,12 @@ const AppleLyricsView = ({
     baseTargetYShared.value = 0;
     setIsInitialMount(true);
     lyricLayouts.current = {};
-  }, [trackId]);
+    if (isLyricsView) {
+      isLyricsCompactRef.current = false;
+      setIsLyricsCompact(false);
+      resetInactivityTimer();
+    }
+  }, [trackId, isLyricsView, resetInactivityTimer]);
 
   // Transition from initial snap mount to animated wave springs
   useEffect(() => {
@@ -435,14 +466,11 @@ const AppleLyricsView = ({
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
     }
-    if (isLyricsCompactRef.current) {
-      exitCompactMode();
-    }
     if (!isManualScrollingRef.current) {
       setIsManualScrolling(true);
       isManualScrollingRef.current = true;
     }
-  }, [exitCompactMode]);
+  }, []);
 
   const handleManualScrollFinished = useCallback(() => {
     setIsManualScrolling(false);
@@ -453,7 +481,9 @@ const AppleLyricsView = ({
     if (manualScrollTimeoutRef.current) {
       clearTimeout(manualScrollTimeoutRef.current);
     }
-    resetInactivityTimer();
+    if (!isLyricsCompactRef.current) {
+      resetInactivityTimer();
+    }
     manualScrollTimeoutRef.current = setTimeout(() => {
       manualScrollY.value = withSpring(
         0,
@@ -489,12 +519,11 @@ const AppleLyricsView = ({
       if (time !== null && seekTo) {
         seekTo(time);
       }
-      if (isLyricsCompactRef.current) {
-        exitCompactMode();
+      if (!isLyricsCompactRef.current) {
+        resetInactivityTimer();
       }
-      resetInactivityTimer();
     },
-    [seekTo, exitCompactMode, resetInactivityTimer, manualScrollY],
+    [seekTo, resetInactivityTimer, manualScrollY],
   );
 
   const panGesture = useMemo(() => {
@@ -689,8 +718,8 @@ const AppleLyricsView = ({
                   top: 0,
                   left: 0,
                   right: 0,
-                  paddingTop: insets.top + 10,
-                  height: (insets.top || 47) + 65,
+                  paddingTop: (insets?.top || 47) + 10,
+                  height: (insets?.top || 47) + 64,
                   backgroundColor: 'transparent',
                   paddingHorizontal: 30,
                 },
@@ -765,6 +794,21 @@ const AppleLyricsView = ({
                 ref={lyricsScrollRef}
                 style={styles.lyricsScrollView}
                 showsVerticalScrollIndicator={false}
+                onScrollBeginDrag={() => {
+                  if (inactivityTimerRef.current) {
+                    clearTimeout(inactivityTimerRef.current);
+                  }
+                }}
+                onScrollEndDrag={() => {
+                  if (!isLyricsCompactRef.current) {
+                    resetInactivityTimer();
+                  }
+                }}
+                onMomentumScrollEnd={() => {
+                  if (!isLyricsCompactRef.current) {
+                    resetInactivityTimer();
+                  }
+                }}
                 contentContainerStyle={{
                   paddingTop: insets.top + 115,
                   paddingBottom: isEffectivelyCompact

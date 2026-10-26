@@ -68,66 +68,50 @@ const AnimatedLyricLine = ({
 
     // Manual scroll: synchronous spring with zero delay & full clarity
     if (isManualScrolling) {
-      lineY.value = withSpring(targetY, {
+      const manualSpring = {
         stiffness: 260,
         damping: 28,
         mass: 0.55,
-      });
-      lineScale.value = withTiming(progressive.scale, { duration: 250 });
-      lineOpacity.value = withTiming(progressive.opacity, { duration: 250 });
-      colorProgress.value = withTiming(isActive ? 1.0 : 0.85, { duration: 200 });
+      };
+      lineY.value = withSpring(targetY, manualSpring);
+      lineScale.value = withSpring(progressive.scale, manualSpring);
+      lineOpacity.value = withSpring(progressive.opacity, manualSpring);
+      colorProgress.value = withSpring(isActive ? 1.0 : 0.85, manualSpring);
       return;
     }
 
-    // Staggered wave delay: "как машины в пробке"
+    const springConfig = {
+      stiffness: springStiffness,
+      damping: springDamping,
+      mass: springMass,
+    };
+    const targetColor = isActive
+      ? 1.0
+      : Math.abs(index - activeIndex) <= 1
+        ? 0.6
+        : 0.25;
+
+    // Line switching and opacity/scale/color changes execute identically:
+    // same delay, same spring physics parameters, synchronized movement
     if (delayMs > 0) {
-      lineY.value = withDelay(
-        delayMs,
-        withSpring(targetY, {
-          stiffness: springStiffness,
-          damping: springDamping,
-          mass: springMass,
-        })
-      );
+      lineY.value = withDelay(delayMs, withSpring(targetY, springConfig));
       lineScale.value = withDelay(
-        Math.round(delayMs * 0.6),
-        withTiming(progressive.scale, {
-          duration: 450,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
-        })
+        delayMs,
+        withSpring(progressive.scale, springConfig),
       );
       lineOpacity.value = withDelay(
-        Math.round(delayMs * 0.6),
-        withTiming(progressive.opacity, {
-          duration: 450,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
-        })
+        delayMs,
+        withSpring(progressive.opacity, springConfig),
       );
       colorProgress.value = withDelay(
-        isActive ? 0 : Math.round(delayMs * 0.4),
-        withTiming(isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25), {
-          duration: isActive ? 200 : 350,
-          easing: Easing.out(Easing.cubic),
-        })
+        delayMs,
+        withSpring(targetColor, springConfig),
       );
     } else {
-      lineY.value = withSpring(targetY, {
-        stiffness: springStiffness,
-        damping: springDamping,
-        mass: springMass,
-      });
-      lineScale.value = withTiming(progressive.scale, {
-        duration: 450,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
-      });
-      lineOpacity.value = withTiming(progressive.opacity, {
-        duration: 450,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
-      });
-      colorProgress.value = withTiming(isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25), {
-        duration: isActive ? 200 : 350,
-        easing: Easing.out(Easing.cubic),
-      });
+      lineY.value = withSpring(targetY, springConfig);
+      lineScale.value = withSpring(progressive.scale, springConfig);
+      lineOpacity.value = withSpring(progressive.opacity, springConfig);
+      colorProgress.value = withSpring(targetColor, springConfig);
     }
   }, [
     targetY,

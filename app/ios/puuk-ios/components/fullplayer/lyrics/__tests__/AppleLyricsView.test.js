@@ -16,6 +16,7 @@ jest.mock('../../../../shared/api/api', () => ({
   authFetch: jest.fn(),
 }));
 
+let lastPanGesture = {};
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
   return {
@@ -27,11 +28,25 @@ jest.mock('react-native-gesture-handler', () => {
           activeOffsetX: () => gesture,
           failOffsetX: () => gesture,
           failOffsetY: () => gesture,
-          onBegin: () => gesture,
-          onStart: () => gesture,
-          onUpdate: () => gesture,
-          onEnd: () => gesture,
+          onBegin: (cb) => {
+            gesture._onBegin = cb;
+            return gesture;
+          },
+          onStart: (cb) => {
+            gesture._onStart = cb;
+            lastPanGesture = gesture;
+            return gesture;
+          },
+          onUpdate: (cb) => {
+            gesture._onUpdate = cb;
+            return gesture;
+          },
+          onEnd: (cb) => {
+            gesture._onEnd = cb;
+            return gesture;
+          },
         };
+        lastPanGesture = gesture;
         return gesture;
       },
     },
@@ -389,5 +404,89 @@ describe('AppleLyricsView', () => {
     });
 
     expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('automatically collapses controls after 3000ms inactivity', async () => {
+    const onLyricsCompactChange = jest.fn();
+    const lrcContent = '[00:05.00]Line 1\n[00:10.00]Line 2';
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: lrcContent, isSynced: true }),
+    });
+
+    await act(async () => {
+      TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          onLyricsCompactChange={onLyricsCompactChange}
+        />,
+      );
+    });
+
+    // Initially starts as false
+    expect(onLyricsCompactChange).toHaveBeenCalledWith(false);
+
+    // After 2999ms, has not collapsed yet
+    await act(async () => {
+      jest.advanceTimersByTime(2999);
+    });
+    expect(onLyricsCompactChange).not.toHaveBeenCalledWith(true);
+
+    // Reaching 3000ms triggers auto-collapse
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(onLyricsCompactChange).toHaveBeenCalledWith(true);
+  });
+
+  it('does NOT expand compact mode when scrolling lyrics', async () => {
+    const onLyricsCompactChange = jest.fn();
+    let exitCompactFn;
+    const onExitCompactMode = jest.fn((fn) => {
+      exitCompactFn = fn;
+    });
+
+    const lrcContent = '[00:05.00]Line 1\n[00:10.00]Line 2';
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: lrcContent, isSynced: true }),
+    });
+
+    await act(async () => {
+      TestRenderer.create(
+        <AppleLyricsView
+          {...defaultProps}
+          onExitCompactMode={onExitCompactMode}
+          onLyricsCompactChange={onLyricsCompactChange}
+        />,
+      );
+    });
+
+    // Trigger auto-collapse to compact mode
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
+
+    // User starts scrolling lyrics (via pan gesture)
+    if (lastPanGesture._onStart) {
+      await act(async () => {
+        lastPanGesture._onStart();
+      });
+    }
+
+    // Must NOT have expanded: should still remain compact (true)
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
+
+    // When explicitly exiting compact mode via exitCompactFn (pull trigger or swipe up)
+    expect(exitCompactFn).toBeDefined();
+    await act(async () => {
+      exitCompactFn();
+    });
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(false);
+
+    // After 3000ms of inactivity, controls automatically collapse back
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
   });
 });
