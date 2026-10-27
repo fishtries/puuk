@@ -140,22 +140,31 @@ describe('YourMixCard', () => {
     expect(animGradient.props.colors[0]).toBe('#FFA040');
   });
 
-  test('renders inner glow halo covering entire border perimeter', () => {
+  test('renders volumetric god rays and celestial light shafts via SVG', () => {
     let renderer;
     act(() => {
       renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
     });
 
     const root = renderer.root;
-    const innerGlow = root.findByProps({ testID: 'your-mix-inner-glow' });
-    expect(innerGlow).toBeDefined();
-    expect(innerGlow.props.pointerEvents).toBe('none');
+    const godRays = root.findByProps({ testID: 'your-mix-god-rays' });
+    expect(godRays).toBeDefined();
+    expect(godRays.props.pointerEvents).toBe('none');
+  });
 
-    // Inner glow contains directional gradients for top, bottom, left, right edges
-    const gradients = innerGlow.findAll(
-      (n) => n.props.testID === 'linear-gradient',
-    );
-    expect(gradients.length).toBeGreaterThanOrEqual(4);
+  test('renders floating luminous embers and particles', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<YourMixCard onPress={() => {}} />);
+    });
+
+    const root = renderer.root;
+    const particlesContainer = root.findByProps({
+      testID: 'your-mix-particles',
+    });
+    expect(particlesContainer).toBeDefined();
+    expect(particlesContainer.props.pointerEvents).toBe('none');
+    expect(particlesContainer.props.children.length).toBeGreaterThan(15);
   });
 
   test('does not render any blob, orb or blur view elements', () => {

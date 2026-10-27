@@ -48,6 +48,14 @@ jest.mock('react-native-reanimated', () => {
       bezier: () => () => {},
     },
     runOnJS: (fn) => fn,
+    interpolate: (val, input, output) => {
+      if (val <= input[0]) return output[0];
+      if (val >= input[input.length - 1]) return output[output.length - 1];
+      return (
+        output[0] +
+        ((val - input[0]) / (input[1] - input[0])) * (output[1] - output[0])
+      );
+    },
     FadeIn: { duration: () => ({}) },
     FadeOut: { duration: () => ({}) },
     LinearTransition: {
@@ -253,7 +261,7 @@ describe('PlayerControls - bottom plus icon removed', () => {
     expect(mockTogglePlay).toHaveBeenCalledTimes(1);
   });
 
-  it('passes compact sizes and spacing when isEffectivelyCompact is true', async () => {
+  it('applies compact container sizes and smooth scale transform when isEffectivelyCompact is true', async () => {
     let renderer;
 
     await act(async () => {
@@ -271,14 +279,10 @@ describe('PlayerControls - bottom plus icon removed', () => {
           seekTo={jest.fn()}
           isLyricsView={false}
           isQueueVisible={false}
-          isSliding={false}
-          setIsSliding={jest.fn()}
-          setSlideValue={jest.fn()}
           isSlidingShared={{ value: false }}
           sliderWidthShared={{ value: 1 }}
           slideProgressShared={{ value: 0 }}
           durationShared={{ value: 100 }}
-          slideValue={0}
           bottomSwipeGesture={{}}
           exitCompactMode={jest.fn()}
           triggerExitCompactMode={jest.fn()}
@@ -290,14 +294,23 @@ describe('PlayerControls - bottom plus icon removed', () => {
 
     const root = renderer.root;
     const playSymbol = root.findByProps({ name: 'play.fill' });
-    expect(playSymbol.props.size).toBe(36);
+    expect(playSymbol.props.size).toBe(48);
 
-    const chasingIcons = root.findAllByType('ChasingArrowsIcon');
-    expect(chasingIcons.length).toBe(2);
-    expect(chasingIcons[0].props.size).toBe(28);
-    expect(chasingIcons[0].props.spacing).toBe(14);
-    expect(chasingIcons[1].props.size).toBe(28);
-    expect(chasingIcons[1].props.spacing).toBe(14);
+    const playBtn = root.findByProps({ accessibilityLabel: 'Воспроизведение' });
+    const playStyles = Array.isArray(playBtn.props.style)
+      ? playBtn.props.style.flat()
+      : [playBtn.props.style];
+    expect(playStyles.some((s) => s && s.width === 54 && s.height === 54)).toBe(
+      true,
+    );
+
+    const prevBtn = root.findByProps({ accessibilityLabel: 'Предыдущий трек' });
+    const prevStyles = Array.isArray(prevBtn.props.style)
+      ? prevBtn.props.style.flat()
+      : [prevBtn.props.style];
+    expect(prevStyles.some((s) => s && s.width === 48 && s.height === 48)).toBe(
+      true,
+    );
   });
 
   it('renders ChasingArrowsIcon for both buttons without ActivityIndicator even when isLoading is true', async () => {

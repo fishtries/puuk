@@ -29,12 +29,11 @@ export function isNativeMenuAvailable() {
   }
   try {
     if (typeof UIManager.hasViewManagerConfig === 'function') {
-      return UIManager.hasViewManagerConfig('MenuView');
+      const hasConfig = UIManager.hasViewManagerConfig('MenuView');
+      if (hasConfig) return true;
     }
-  } catch {
-    return false;
-  }
-  return false;
+  } catch {}
+  return true;
 }
 
 export default function PlayerHeader({
@@ -60,7 +59,6 @@ export default function PlayerHeader({
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          title: displayTitle,
           options: ['Cancel', ...actionTitles],
           cancelButtonIndex: 0,
         },
@@ -74,7 +72,7 @@ export default function PlayerHeader({
       );
     } else {
       Alert.alert(
-        displayTitle || 'Track Options',
+        undefined,
         undefined,
         [
           { text: 'Cancel', style: 'cancel' },
@@ -90,7 +88,7 @@ export default function PlayerHeader({
         { cancelable: true },
       );
     }
-  }, [displayTitle, handleMenuAction, menuActions]);
+  }, [handleMenuAction, menuActions]);
 
   return (
     <>
@@ -115,7 +113,6 @@ export default function PlayerHeader({
 
           {hasNativeMenu ? (
             <MenuView
-              title={displayTitle}
               onPressAction={handleMenuAction}
               actions={menuActions}
               shouldOpenOnLongPress={false}

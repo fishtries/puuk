@@ -27,5 +27,19 @@ describe('patch-react-native-menu', () => {
     const content = fs.readFileSync(targetFile, 'utf8');
     expect(content).not.toContain('#import "RCTBridge.h"');
     expect(content).toContain('#import <React/RCTBridge.h>');
+
+    const rctMenuItem = path.join(
+      rootDir,
+      'node_modules',
+      '@react-native-menu',
+      'menu',
+      'ios',
+      'Shared',
+      'RCTMenuItem.swift',
+    );
+    if (fs.existsSync(rctMenuItem)) {
+      const swiftContent = fs.readFileSync(rctMenuItem, 'utf8');
+      expect(swiftContent).toContain('imageColor.intValue != 0');
+    }
   });
 });

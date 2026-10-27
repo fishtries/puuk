@@ -1184,14 +1184,17 @@ const FullPlayerModal = ({
       {
         id: 'add_to_playlist',
         title: 'Add to Playlist',
-        image: Platform.select({ ios: 'plus.circle' }),
+        image: Platform.select({ ios: 'plus.circle', android: 'ic_menu_add' }),
       },
       ...(onEditTrack
         ? [
             {
               id: 'edit_track',
               title: 'Edit Track',
-              image: Platform.select({ ios: 'pencil' }),
+              image: Platform.select({
+                ios: 'pencil',
+                android: 'ic_menu_edit',
+              }),
             },
           ]
         : []),

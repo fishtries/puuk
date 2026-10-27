@@ -165,7 +165,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
 
     // Verify pop-up button configuration (shouldOpenOnLongPress = false => primary action popup)
     expect(menuView.props.shouldOpenOnLongPress).toBe(false);
-    expect(menuView.props.title).toBe('Bohemian Rhapsody');
+    expect(menuView.props.title).toBeUndefined();
     expect(menuView.props.actions).toEqual([
       { id: 'add_to_playlist', title: 'Add to Playlist', image: 'plus.circle' },
       { id: 'edit_track', title: 'Edit Track', image: 'pencil' },
@@ -261,12 +261,12 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
 
       expect(showActionSheetSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: 'Bohemian Rhapsody',
           options: ['Cancel', 'Add to Playlist', 'Edit Track'],
           cancelButtonIndex: 0,
         }),
         expect.any(Function),
       );
+      expect(showActionSheetSpy.mock.calls[0][0].title).toBeUndefined();
       expect(handleMenuAction).toHaveBeenCalledWith({
         nativeEvent: { event: 'add_to_playlist' },
       });

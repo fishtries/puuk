@@ -17,7 +17,7 @@
 | Очередь | `components/fullplayer/QueuePanel.js` |
 | Тексты и движение строк | `components/fullplayer/lyrics/AppleLyricsView.js`, `AnimatedLyricLine.js` |
 | Загрузка обложки | `components/CoverImage.js` |
-| Карточка «your mix» на главном экране (градиент сверху вниз, внутренний ореол глоу, анимация) | `features/catalog/YourMixCard.js` |
+| Карточка «your mix» на главном экране (объёмные лучи света god rays, солнце сверху, плавающие частицы/искры, анимация) | `features/catalog/YourMixCard.js` |
 | Управление аудио | `hooks/usePlayerController.js` |
 
 ## Компоненты и стили
