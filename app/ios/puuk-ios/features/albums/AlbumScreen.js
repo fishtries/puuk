@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import CoverImage from '../../shared/media/CoverImage';
+import { subscribeArtistCreditsUpdated } from '../../shared/domain/artistCreditEvents';
 import { authFetch, SERVER_URL } from '../../shared/api/api';
 import { getTrackId, normalizeTrack } from '../../shared/domain/trackAdapter';
+import { normalizeAlbum, getSelectableArtists } from '../../shared/domain/artistCredits';
+import ArtistSelector from '../../shared/components/ArtistSelector';
 
 export default function AlbumScreen({
   route,
@@ -33,7 +36,7 @@ export default function AlbumScreen({
       const response = await authFetch(`/api/albums/${albumId}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      setAlbum(data.album || null);
+      setAlbum(normalizeAlbum(data.album));
       const rawTracks = Array.isArray(data.tracks) ? data.tracks : [];
       const normalizedTracks = rawTracks
         .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
@@ -53,6 +56,8 @@ export default function AlbumScreen({
       fetchAlbum();
     }, [fetchAlbum]),
   );
+
+  useEffect(() => subscribeArtistCreditsUpdated(() => fetchAlbum()), [fetchAlbum]);
 
   const renderTrack = ({ item, index }) => (
     <TouchableOpacity
@@ -84,11 +89,17 @@ export default function AlbumScreen({
 
   const resolvedTitle = album?.title || albumTitle;
   const resolvedCover = album?.coverArt || coverArt;
+  const albumArtist = album?.artists?.length ? album.artists.map((artist) => artist.name).join(', ') : (album?.album_artist || album?.artist);
+  const selectableArtists = getSelectableArtists(album);
   const metaParts = [];
-  if (album?.album_artist || album?.artist)
-    metaParts.push(album.album_artist || album.artist);
+  if (albumArtist) metaParts.push(albumArtist);
   if (album?.year) metaParts.push(String(album.year));
   if (album?.track_count) metaParts.push(`${album.track_count} трек(ов)`);
+
+  const secondaryMetaParts = [];
+  if (album?.year) secondaryMetaParts.push(String(album.year));
+  if (album?.track_count)
+    secondaryMetaParts.push(`${album.track_count} трек(ов)`);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -132,10 +143,22 @@ export default function AlbumScreen({
             <View style={styles.albumHeader}>
               <CoverImage source={resolvedCover} style={styles.coverImage} />
               <Text style={styles.albumTitleText}>{resolvedTitle}</Text>
-              {metaParts.length > 0 && (
-                <Text style={styles.albumMetaText}>
-                  {metaParts.join(' · ')}
-                </Text>
+              {selectableArtists.length > 0 && albumArtist ? (
+                <View style={styles.albumMetaRow}>
+                  <ArtistSelector entity={album} identity={albumId} display={albumArtist} onSelect={(artistId) => navigation.navigate('ArtistDetail', { artistId })} controlStyle={styles.albumArtistControl} textStyle={styles.albumMetaText} />
+                  {secondaryMetaParts.map((part, idx) => (
+                    <React.Fragment key={`${idx}-${part}`}>
+                      <Text style={styles.albumMetaText}> · </Text>
+                      <Text style={styles.albumMetaText}>{part}</Text>
+                    </React.Fragment>
+                  ))}
+                </View>
+              ) : (
+                metaParts.length > 0 && (
+                  <Text style={styles.albumMetaText}>
+                    {metaParts.join(' · ')}
+                  </Text>
+                )
               )}
             </View>
           }
@@ -225,6 +248,17 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
     textAlign: 'center',
+  },
+  albumMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  albumArtistControl: {
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   albumMetaText: {
     fontSize: 14,

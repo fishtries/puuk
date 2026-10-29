@@ -94,7 +94,6 @@ describe('TrackEditScreen - Stage 8 Slice 6 track normalization & identity', () 
         method: 'PATCH',
         body: expect.objectContaining({
           title: 'Legacy Edit Song',
-          artist: 'Artist Edit',
           album: 'Edit Album',
         }),
       }),

@@ -123,6 +123,7 @@ describe('shared/domain/trackAdapter', () => {
       const raw = { id: 'track-uuid-1', title: 'Song 1', artist: 'Artist 1' };
       const normalized = normalizeTrack(raw);
       expect(normalized).toEqual({
+        artists: [], artists_revision: 0, album_artists: [], album_artists_revision: 0,
         id: 'track-uuid-1',
         track_id: 'track-uuid-1',
         title: 'Song 1',

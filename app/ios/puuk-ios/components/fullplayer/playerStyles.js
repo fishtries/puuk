@@ -95,8 +95,12 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 25,
     fontWeight: 'bold',
-    marginBottom: 4,
+    marginBottom: 2,
     letterSpacing: -0.2,
+  },
+  artistButton: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   artistText: {
     color: 'rgba(255, 255, 255, 0.7)',

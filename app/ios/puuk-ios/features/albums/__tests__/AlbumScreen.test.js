@@ -1,6 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { FlatList } from 'react-native';
+import { FlatList, TouchableOpacity } from 'react-native';
 import AlbumScreen from '../AlbumScreen';
 import { authFetch } from '../../../shared/api/api';
 
@@ -172,5 +172,145 @@ describe('AlbumScreen - Stage 8 Slice 5 track normalization & identity', () => {
     const flatList = renderer.root.findByType(FlatList);
     expect(flatList.props.data).toHaveLength(1);
     expect(flatList.props.data[0].id).toBe('valid-alb-1');
+  });
+
+  test('делает только album artist кликабельным при наличии stable ID и сохраняет год в meta', async () => {
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        album: {
+          id: 'alb-1',
+          title: 'Test Album',
+          album_artist: 'Artist A',
+          artist_id: 'art_123',
+          year: 2024,
+          track_count: 8,
+        },
+        tracks: [{ id: 'track-1', title: 'Song', artist: 'Track Guest' }],
+      }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AlbumScreen route={mockRoute} navigation={mockNavigation} />,
+      );
+    });
+    const albumArtist = renderer.root.findAll(
+      (node) => node.type === 'Text' && node.props.children === 'Artist A',
+    )[0];
+    let artistControl = albumArtist.parent;
+    while (artistControl && artistControl.type !== TouchableOpacity) {
+      artistControl = artistControl.parent;
+    }
+    expect(artistControl).toBeDefined();
+    expect(artistControl.props.accessibilityRole).toBe('button');
+    expect(artistControl.props.accessibilityLabel).toBe(
+      'Страница артиста Artist A',
+    );
+    await act(async () => artistControl.props.onPress());
+
+    expect(mockNavigation.navigate).toHaveBeenCalledWith('ArtistDetail', {
+      artistId: 'art_123',
+    });
+
+    // EV-15: Year and track count remain visible when album artist is tappable
+    const yearNodes = renderer.root.findAll(
+      (node) => node.type === 'Text' && node.props.children === '2024',
+    );
+    expect(yearNodes.length).toBeGreaterThan(0);
+
+    const trackCountNodes = renderer.root.findAll(
+      (node) => node.type === 'Text' && node.props.children === '8 трек(ов)',
+    );
+    expect(trackCountNodes.length).toBeGreaterThan(0);
+
+    const trackArtist = renderer.root.findByProps({ children: 'Track Guest' });
+    expect(trackArtist.parent.type).not.toBe('TouchableOpacity');
+  });
+
+  test('не создает tappable artist control без artist_id и рендерит обычный meta-текст', async () => {
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        album: {
+          id: 'alb-2',
+          title: 'Plain Album',
+          album_artist: 'Artist B',
+          artist_id: null,
+          year: 2023,
+          track_count: 5,
+        },
+        tracks: [{ id: 'track-2', title: 'Song 2', artist: 'Artist B' }],
+      }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AlbumScreen route={mockRoute} navigation={mockNavigation} />,
+      );
+    });
+
+    const metaNodes = renderer.root.findAll(
+      (node) =>
+        node.type === 'Text' &&
+        node.props.children === 'Artist B · 2023 · 5 трек(ов)',
+    );
+    expect(metaNodes.length).toBeGreaterThan(0);
+
+    const artistButtons = renderer.root.findAll(
+      (node) =>
+        node.props?.accessibilityRole === 'button' &&
+        node.props?.accessibilityLabel === 'Страница артиста Artist B',
+    );
+    expect(artistButtons).toHaveLength(0);
+
+    expect(mockNavigation.navigate).not.toHaveBeenCalledWith(
+      'ArtistDetail',
+      expect.anything(),
+    );
+  });
+
+  test('строки треков не являются интерактивными для навигации на артиста', async () => {
+    const onPlayTrack = jest.fn();
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        album: {
+          id: 'alb-3',
+          title: 'Album 3',
+          album_artist: 'Main Artist',
+          artist_id: 'art_main',
+          year: 2021,
+        },
+        tracks: [{ id: 'track-3', title: 'Song 3', artist: 'Guest Star' }],
+      }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <AlbumScreen
+          route={mockRoute}
+          navigation={mockNavigation}
+          onPlayTrack={onPlayTrack}
+        />,
+      );
+    });
+
+    const guestText = renderer.root.findByProps({ children: 'Guest Star' });
+    expect(guestText.parent.type).not.toBe('TouchableOpacity');
+
+    const trackRow = renderer.root.findAllByProps({ activeOpacity: 0.6 })[0];
+    await act(async () => {
+      trackRow.props.onPress();
+    });
+
+    expect(onPlayTrack).toHaveBeenCalledTimes(1);
+    expect(mockNavigation.navigate).not.toHaveBeenCalledWith(
+      'ArtistDetail',
+      expect.anything(),
+    );
   });
 });

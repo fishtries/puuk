@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ import {
 } from '../../shared/storage/settings';
 import { getTrackId, normalizeTrack } from '../../shared/domain/trackAdapter';
 import styles from './trackEditScreenStyles';
+import ArtistCreditsEditor from '../../shared/components/ArtistCreditsEditor';
 
 export default function TrackEditScreen({ route, navigation }) {
   const routeTrack = route?.params?.track;
@@ -36,9 +37,14 @@ export default function TrackEditScreen({ route, navigation }) {
     () => getSettings().accentColor || '#FFDAB9',
   );
 
+  const edited = useRef({});
+  const mark = (field, setter) => (value) => { edited.current[field] = true; setter(value); };
+
   // Track field states
   const [title, setTitle] = useState(track.title || '');
-  const [artist, setArtist] = useState(track.artist || '');
+  const [credits, setCredits] = useState(track);
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  const artist = credits.artist || '';
   const [album, setAlbum] = useState(track.album || '');
   const [lyrics, setLyrics] = useState('');
 
@@ -85,12 +91,12 @@ export default function TrackEditScreen({ route, navigation }) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data) {
-          if (data.title) setTitle(data.title);
-          if (data.artist) setArtist(data.artist);
-          if (data.album && data.album !== 'Unknown Album')
+          if (data.title && !edited.current.title) setTitle(data.title);
+          if (!edited.current.credits) setCredits(normalizeTrack(data, { serverUrl: SERVER_URL }) || data);
+          if (!edited.current.album && data.album && data.album !== 'Unknown Album')
             setAlbum(data.album);
-          if (data.lyrics) setLyrics(data.lyrics);
-          if (data.coverArt) {
+          if (data.lyrics && !edited.current.lyrics) setLyrics(data.lyrics);
+          if (data.coverArt && !edited.current.cover) {
             // Append timestamp to avoid cached image if refreshed
             setCoverPreview(data.coverArt);
           }
@@ -122,6 +128,7 @@ export default function TrackEditScreen({ route, navigation }) {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
+        edited.current.cover = true;
         setCoverPreview(asset.uri);
         setCoverBase64(
           asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : null,
@@ -137,6 +144,7 @@ export default function TrackEditScreen({ route, navigation }) {
 
   // Revert cover to original
   const handleRevertCover = () => {
+    edited.current.cover = true;
     setCoverPreview(originalCover);
     setCoverUrl(null);
     setCoverBase64(null);
@@ -147,6 +155,7 @@ export default function TrackEditScreen({ route, navigation }) {
   const handleRemoveCover = () => {
     setCoverBase64(null);
     setCoverUrl(null);
+    edited.current.cover = true;
     setCoverPreview(null);
     setCoverAction(coverAction === 'remove' ? 'keep' : 'remove');
   };
@@ -191,10 +200,10 @@ export default function TrackEditScreen({ route, navigation }) {
 
   // Apply downloaded metadata result
   const handleApplyMetadata = (result) => {
-    if (result.title) setTitle(result.title);
-    if (result.artist) setArtist(result.artist);
-    if (result.album) setAlbum(result.album);
+    if (result.title) mark('title', setTitle)(result.title);
+    if (result.album) mark('album', setAlbum)(result.album);
     if (result.cover_url) {
+      edited.current.cover = true;
       setCoverPreview(result.cover_url);
       setCoverUrl(result.cover_url);
       setCoverBase64(null);
@@ -236,7 +245,7 @@ export default function TrackEditScreen({ route, navigation }) {
   // Apply chosen lyric
   const handleSelectLyric = (result) => {
     const best = result.syncedLyrics || result.plainLyrics || '';
-    setLyrics(best);
+    mark('lyrics', setLyrics)(best);
     setLyricsResults([]);
   };
 
@@ -255,7 +264,6 @@ export default function TrackEditScreen({ route, navigation }) {
     try {
       const payload = {
         title: title.trim(),
-        artist: artist.trim(),
         album: album.trim() || 'Unknown Album',
         lyrics: lyrics || '',
         cover_action: coverAction,
@@ -281,10 +289,10 @@ export default function TrackEditScreen({ route, navigation }) {
       // Notify rest of the app about update
       DeviceEventEmitter.emit('PUUK_TRACK_UPDATED', {
         ...track,
+        ...credits,
         id: trackId,
         track_id: trackId,
         title: title.trim(),
-        artist: artist.trim(),
         album: album.trim() || 'Unknown Album',
         coverArt:
           coverAction === 'remove' ? null : coverPreview || track.coverArt,
@@ -567,25 +575,22 @@ export default function TrackEditScreen({ route, navigation }) {
           <TextInput
             style={styles.input}
             value={title}
-            onChangeText={setTitle}
+            onChangeText={mark('title', setTitle)}
             placeholder="Track title"
             placeholderTextColor="#666"
           />
 
           <Text style={styles.label}>Artist</Text>
-          <TextInput
-            style={styles.input}
-            value={artist}
-            onChangeText={setArtist}
-            placeholder="Artist name"
-            placeholderTextColor="#666"
-          />
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Изменить исполнителей" onPress={() => { edited.current.credits = true; setCreditsOpen(true); }} style={styles.input}>
+            <Text style={{ color: '#fff' }}>{artist || 'Добавить исполнителей'} — изменить</Text>
+          </TouchableOpacity>
+          <ArtistCreditsEditor visible={creditsOpen} onClose={() => setCreditsOpen(false)} entity={credits} entityId={trackId} scope="track" onSaved={(dto) => { edited.current.credits = true; setCredits(dto); Alert.alert('Сохранено', 'Состав уже сохранён в Puuk.'); }} />
 
           <Text style={styles.label}>Album</Text>
           <TextInput
             style={styles.input}
             value={album}
-            onChangeText={setAlbum}
+            onChangeText={mark('album', setAlbum)}
             placeholder="Album name"
             placeholderTextColor="#666"
           />
@@ -651,7 +656,7 @@ export default function TrackEditScreen({ route, navigation }) {
           <TextInput
             style={styles.textArea}
             value={lyrics}
-            onChangeText={setLyrics}
+            onChangeText={mark('lyrics', setLyrics)}
             multiline
             placeholder="No lyrics saved yet..."
             placeholderTextColor="#666"

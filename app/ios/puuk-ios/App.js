@@ -52,7 +52,6 @@ import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
 import {
-  authFetch,
   checkAuth,
   addAuthListener,
   SERVER_URL,
@@ -67,6 +66,7 @@ import {
 } from './shared/storage/settings';
 import { getTrackId, areTrackIdsEqual } from './shared/domain/trackAdapter';
 import defaultAudioCache from './utils/audioCache';
+import useSavedCreditsSync from './hooks/useSavedCreditsSync';
 
 const { width, height } = Dimensions.get('window');
 
@@ -171,6 +171,8 @@ function AppContent() {
       subDeleted.remove();
     };
   }, [currentTrack, setCurrentTrack, setTracks]);
+
+  useSavedCreditsSync(currentTrack, currentUser);
 
   const activeTrack = currentTrack;
   const displayTitle = activeTrack?.title || 'Puuk Music';
@@ -564,6 +566,15 @@ function AppContent() {
     [activeTrack, navigationRef],
   );
 
+  const handleArtistPress = useCallback(
+    (artistId) => {
+      if (!artistId) return;
+      setIsPlayerVisible(false);
+      navigationRef.navigate('ArtistDetail', { artistId });
+    },
+    [setIsPlayerVisible, navigationRef],
+  );
+
   const handleToggleActiveLike = useCallback(() => {
     handleToggleLike(activeTrack);
   }, [handleToggleLike, activeTrack]);
@@ -678,6 +689,7 @@ function AppContent() {
         isBufferingSlow={isBufferingSlow}
         onRetryPreload={retryPreload}
         accentColor={accentColor}
+        onArtistPress={handleArtistPress}
       />
 
       {/* СЛОЙ 1 (ПЕРЕДНИЙ ПЛАН): Карточка приложения, поднимающаяся вверх при открытии плеера */}

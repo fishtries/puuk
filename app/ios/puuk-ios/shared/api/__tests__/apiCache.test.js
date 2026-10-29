@@ -114,6 +114,7 @@ import {
   setCachedCatalog,
   removeCachedCatalog,
   clearCatalogCache,
+  invalidateArtistCreditsCache,
   fetchCatalogWithCache,
   resetMemoryCache,
   getCacheFile,
@@ -819,6 +820,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
         offset: 0,
         items: [
           {
+            artists: [], artists_revision: 0, album_artists: [], album_artists_revision: 0,
             id: 't-1',
             track_id: 't-1',
             title: 'Track 1',
@@ -826,6 +828,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
             coverArt: 'https://web.puuk.fun/api/cover/t-1',
           },
           {
+            artists: [], artists_revision: 0, album_artists: [], album_artists_revision: 0,
             id: 't-2',
             track_id: 't-2',
             title: 'Track 2',
@@ -1306,4 +1309,15 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(cached).toBeNull();
     });
   });
+});
+
+
+it('invalidates only the active user and server namespace', async () => {
+  await setCachedCatalog('tracks', ['old'], { serverUrl: 'https://one', userId: 1 });
+  await setCachedCatalog('tracks', ['other server'], { serverUrl: 'https://two', userId: 1 });
+  await setCachedCatalog('tracks', ['other user'], { serverUrl: 'https://one', userId: 2 });
+  await invalidateArtistCreditsCache({ serverUrl: 'https://one', userId: 1 });
+  expect(await getCachedCatalog('tracks', { serverUrl: 'https://one', userId: 1 })).toBeNull();
+  expect((await getCachedCatalog('tracks', { serverUrl: 'https://two', userId: 1 })).data).toEqual(['other server']);
+  expect((await getCachedCatalog('tracks', { serverUrl: 'https://one', userId: 2 })).data).toEqual(['other user']);
 });

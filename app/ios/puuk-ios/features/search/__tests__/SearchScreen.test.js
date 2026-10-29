@@ -1,6 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TextInput, TouchableOpacity } from 'react-native';
+import { TextInput, TouchableOpacity, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SearchScreen from '../SearchScreen';
 import { authFetch } from '../../../shared/api/api';
@@ -289,5 +289,292 @@ describe('SearchScreen - Stage 8 Slice 4 track normalization & identity', () => 
 
     const trackCovers = renderer.root.findAllByType('CoverImage');
     expect(trackCovers).toHaveLength(1);
+  });
+
+  test('переходит в ArtistDetail по stable artist_id вместо повторного поиска, сохраняя запрос и результаты', async () => {
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        artists: [{ id: 'art_123', artist_id: 'art_123', name: 'Artist A', track_count: 2 }],
+        albums: [],
+        tracks: [],
+      }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<SearchScreen navigation={mockNavigation} />);
+    });
+    const input = renderer.root.findByType(TextInput);
+    await act(async () => {
+      input.props.onChangeText('artist');
+      jest.advanceTimersByTime(400);
+    });
+    const artistCard = renderer.root.findAllByProps({ activeOpacity: 0.7 })[0];
+    await act(async () => artistCard.props.onPress());
+
+    // Проверяем навигацию с artistId (контракт 6.2)
+    expect(mockNavigation.navigate).toHaveBeenCalledWith('ArtistDetail', { artistId: 'art_123' });
+    // Повторный поиск запрещён: authFetch вызван ровно 1 раз
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    // Запрос в строке поиска и результаты сохранились
+    expect(renderer.root.findByType(TextInput).props.value).toBe('artist');
+    expect(renderer.root.findAllByProps({ children: 'Artist A' }).length).toBeGreaterThan(0);
+  });
+
+  test('устаревший ответ не может перезаписать более новый поисковый запрос (debounce & cancellation)', async () => {
+    let resolveFirst;
+    const firstPromise = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    let resolveSecond;
+    const secondPromise = new Promise((resolve) => {
+      resolveSecond = resolve;
+    });
+
+    authFetch
+      .mockImplementationOnce(() => firstPromise)
+      .mockImplementationOnce(() => secondPromise);
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<SearchScreen navigation={mockNavigation} />);
+    });
+
+    const input = renderer.root.findByType(TextInput);
+
+    // 1. Вводим первый запрос "art"
+    await act(async () => {
+      input.props.onChangeText('art');
+      jest.advanceTimersByTime(400);
+    });
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    expect(authFetch.mock.calls[0][0]).toContain('q=art');
+
+    // 2. Вводим второй запрос "radio"
+    await act(async () => {
+      input.props.onChangeText('radio');
+      jest.advanceTimersByTime(400);
+    });
+    expect(authFetch).toHaveBeenCalledTimes(2);
+    expect(authFetch.mock.calls[1][0]).toContain('q=radio');
+
+    // 3. Второй (актуальный) запрос завершается раньше первого
+    await act(async () => {
+      resolveSecond({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          artists: [{ id: 'art_radio', artist_id: 'art_radio', name: 'Radiohead', track_count: 50 }],
+          albums: [],
+          tracks: [],
+        }),
+      });
+    });
+
+    expect(renderer.root.findAllByProps({ children: 'Radiohead' }).length).toBeGreaterThan(0);
+
+    // 4. Первый (устаревший) запрос завершается позже
+    await act(async () => {
+      resolveFirst({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          artists: [{ id: 'art_stale', artist_id: 'art_stale', name: 'Stale Artist', track_count: 1 }],
+          albums: [],
+          tracks: [],
+        }),
+      });
+    });
+
+    // Устаревший ответ не должен перезаписать результаты более нового запроса
+    expect(renderer.root.findAllByProps({ children: 'Stale Artist' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ children: 'Radiohead' }).length).toBeGreaterThan(0);
+  });
+
+  test('очистка поиска отменяет устаревший ответ и не даёт ему отрисовать результаты', async () => {
+    let resolveSearch;
+    const pendingPromise = new Promise((resolve) => {
+      resolveSearch = resolve;
+    });
+
+    authFetch.mockImplementationOnce(() => pendingPromise);
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<SearchScreen navigation={mockNavigation} />);
+    });
+
+    const input = renderer.root.findByType(TextInput);
+    await act(async () => {
+      input.props.onChangeText('slow');
+      jest.advanceTimersByTime(400);
+    });
+    expect(authFetch).toHaveBeenCalledTimes(1);
+
+    // Очищаем поиск кнопкой сброса
+    const clearBtn = renderer.root.findByProps({ accessibilityLabel: 'Clear search' });
+    await act(async () => {
+      clearBtn.props.onPress();
+    });
+
+    // Теперь медленный ответ возвращается
+    await act(async () => {
+      resolveSearch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          artists: [{ id: 'art_slow', artist_id: 'art_slow', name: 'Slow Artist', track_count: 1 }],
+          albums: [],
+          tracks: [],
+        }),
+      });
+    });
+
+    // Результаты очищены, стартовый экран отображается
+    expect(renderer.root.findAllByProps({ children: 'Slow Artist' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ children: 'Find your music' }).length).toBeGreaterThan(0);
+  });
+
+  test('чётко разделяет пустое состояние и состояние ошибки с возможностью повтора', async () => {
+    // 1. Пустой результат
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        artists: [],
+        albums: [],
+        tracks: [],
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<SearchScreen navigation={mockNavigation} />);
+    });
+
+    const input = renderer.root.findByType(TextInput);
+    await act(async () => {
+      input.props.onChangeText('unknown');
+      jest.advanceTimersByTime(400);
+    });
+
+    expect(renderer.root.findAllByProps({ testID: 'empty-state' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ children: 'No results found' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ testID: 'error-state' })).toHaveLength(0);
+
+    // 2. Ошибка сервера (HTTP 500)
+    authFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+    });
+
+    await act(async () => {
+      input.props.onChangeText('error-query');
+      jest.advanceTimersByTime(400);
+    });
+
+    expect(renderer.root.findAllByProps({ testID: 'error-state' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ children: 'Search unavailable' }).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({ testID: 'empty-state' })).toHaveLength(0);
+
+    // 3. Повтор поиска (Try again)
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        artists: [{ id: 'art_recovered', artist_id: 'art_recovered', name: 'Recovered Artist', track_count: 3 }],
+        albums: [],
+        tracks: [],
+      }),
+    });
+
+    const retryBtn = renderer.root.findByProps({ accessibilityLabel: 'Retry search' });
+    await act(async () => {
+      retryBtn.props.onPress();
+    });
+
+    expect(renderer.root.findAllByProps({ testID: 'error-state' }).length).toBe(0);
+    expect(renderer.root.findAllByProps({ children: 'Recovered Artist' }).length).toBeGreaterThan(0);
+  });
+
+  test('содержит доступные подписи (accessibility) и стили для обрезки длинных имён', async () => {
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        artists: [
+          {
+            id: 'art_long',
+            artist_id: 'art_long',
+            name: 'A Very Long Artist Name That Should Ellipsize Cleanly Without Overlapping Layout',
+            track_count: 10,
+          },
+        ],
+        albums: [
+          {
+            id: 'alb_long',
+            title: 'A Very Long Album Title That Exceeds Container Width',
+            artist: 'Album Artist',
+            coverArt: 'https://puuk.app/cover.jpg',
+          },
+        ],
+        tracks: [
+          {
+            id: 'trk_long',
+            title: 'A Very Long Track Title That Should Truncate',
+            artist: 'Track Artist',
+          },
+        ],
+      }),
+    });
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<SearchScreen navigation={mockNavigation} />);
+    });
+
+    const input = renderer.root.findByType(TextInput);
+    expect(input.props.accessibilityLabel).toBe('Search music');
+
+    await act(async () => {
+      input.props.onChangeText('long');
+      jest.advanceTimersByTime(400);
+    });
+
+    // ArtistCard
+    const artistCard = renderer.root.findByProps({ testID: 'artist-card-art_long' });
+    expect(artistCard.props.accessibilityRole).toBe('button');
+    expect(artistCard.props.accessibilityLabel).toContain('A Very Long Artist Name');
+    expect(artistCard.props.accessibilityLabel).toContain('10 tracks');
+
+    const artistNameText = renderer.root.findByProps({
+      children: 'A Very Long Artist Name That Should Ellipsize Cleanly Without Overlapping Layout',
+    });
+    expect(artistNameText.props.numberOfLines).toBe(1);
+    expect(artistNameText.props.ellipsizeMode).toBe('tail');
+
+    // AlbumCard
+    const albumCard = renderer.root.findByProps({ testID: 'album-card-alb_long' });
+    expect(albumCard.props.accessibilityRole).toBe('button');
+    expect(albumCard.props.accessibilityLabel).toBe('Album A Very Long Album Title That Exceeds Container Width by Album Artist');
+
+    const albumTitleText = renderer.root.findByProps({
+      children: 'A Very Long Album Title That Exceeds Container Width',
+    });
+    expect(albumTitleText.props.numberOfLines).toBe(1);
+    expect(albumTitleText.props.ellipsizeMode).toBe('tail');
+
+    // TrackRow
+    const trackTitleText = renderer.root.findByProps({
+      children: 'A Very Long Track Title That Should Truncate',
+    });
+    expect(trackTitleText.props.numberOfLines).toBe(1);
+    expect(trackTitleText.props.ellipsizeMode).toBe('tail');
+
+    // Clear button
+    const clearBtn = renderer.root.findByProps({ accessibilityLabel: 'Clear search' });
+    expect(clearBtn.props.accessibilityRole).toBe('button');
   });
 });

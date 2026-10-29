@@ -34,7 +34,8 @@ const memoryCache = new Map(); // cacheKey => { version, savedAt, serverUrl, use
 const inFlightRequests = new Map(); // cacheKey => Promise
 const inFlightAbortControllers = new Map(); // cacheKey => AbortController
 const requestEpochs = new Map(); // cacheKey => number
-const userClearGenerations = new Map(); // userId => number
+const userClearGenerations = new Map();
+const namespaceGenerations = new Map(); // userId => number
 let globalEpochCounter = 0;
 let cacheClearGeneration = 0;
 
@@ -258,6 +259,7 @@ export const setCachedCatalog = async (key, data, options = {}) => {
 
   const isInvalidated = () => {
     if (options.signal?.aborted) return true;
+    if (options.expectedNamespace && (namespaceGenerations.get(options.expectedNamespace) || 0) !== options.expectedNamespaceGeneration) return true;
     if (cacheClearGeneration !== startGlobalGen) return true;
     if (
       userKeyStr &&
@@ -460,6 +462,28 @@ export const clearCatalogCache = async (options = {}) => {
   }
 };
 
+
+// Invalidate the active server/user namespace, including in-flight writes.
+export const invalidateArtistCreditsCache = async (options = {}) => {
+  const serverUrl = normalizeServerUrl(options.serverUrl || SERVER_URL || '');
+  const user = options.userId === undefined ? await getSavedUser().catch(() => null) : null;
+  const userId = options.userId === undefined ? user?.id ?? null : options.userId;
+  const prefix = getCacheKey('', serverUrl, userId);
+  namespaceGenerations.set(prefix, (namespaceGenerations.get(prefix) || 0) + 1);
+  for (const [key, controller] of inFlightAbortControllers) {
+    if (key.startsWith(prefix)) { controller.abort(); inFlightAbortControllers.delete(key); }
+  }
+  for (const map of [memoryCache, inFlightRequests, requestEpochs]) {
+    for (const key of map.keys()) if (key.startsWith(prefix)) map.delete(key);
+  }
+  try {
+    const dir = getCacheDirectory();
+    if (dir.exists && typeof dir.list === 'function') {
+      for (const file of dir.list()) if (file.name?.startsWith(prefix)) file.delete();
+    }
+  } catch (err) { console.warn('[apiCache] Error invalidating artist credits:', err?.message); }
+};
+
 /**
  * Вычисляет безопасный ключ кэша на основе эндпоинта (сохраняя query-параметры).
  * @param {string} endpoint
@@ -534,9 +558,12 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
     ? userClearGenerations.get(userKeyStr) || 0
     : 0;
   const startGlobalGen = cacheClearGeneration;
+  const namespace = getCacheKey('', serverUrl, userId);
+  const startNamespaceGen = namespaceGenerations.get(namespace) || 0;
 
   const isCacheCleared = () => {
     if (cacheClearGeneration !== startGlobalGen) return true;
+    if ((namespaceGenerations.get(namespace) || 0) !== startNamespaceGen) return true;
     if (
       userKeyStr &&
       (userClearGenerations.get(userKeyStr) || 0) !== startUserGen
@@ -698,6 +725,8 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
         savedAt: requestStartTime,
         expectedClearGeneration: startGlobalGen,
         expectedUserClearGeneration: startUserGen,
+        expectedNamespace: namespace,
+        expectedNamespaceGeneration: startNamespaceGen,
         signal: internalAbortController.signal,
       });
 
@@ -821,6 +850,8 @@ export const fetchTracksPage = async (
       let pageData = data;
       if (Array.isArray(data)) {
         pageData = transformPage(data);
+      } else if (Array.isArray(data?.items)) {
+        pageData = { ...data, items: data.items.map((track) => normalizeTrack(track, { serverUrl })).filter(Boolean) };
       }
       if (typeof options.onData === 'function') {
         options.onData(pageData, meta);
@@ -830,6 +861,8 @@ export const fetchTracksPage = async (
       let pageData = data;
       if (Array.isArray(data)) {
         pageData = transformPage(data);
+      } else if (Array.isArray(data?.items)) {
+        pageData = { ...data, items: data.items.map((track) => normalizeTrack(track, { serverUrl })).filter(Boolean) };
       }
       if (typeof options.onFreshData === 'function') {
         options.onFreshData(pageData);
@@ -839,6 +872,8 @@ export const fetchTracksPage = async (
       let pageData = data;
       if (Array.isArray(data)) {
         pageData = transformPage(data);
+      } else if (Array.isArray(data?.items)) {
+        pageData = { ...data, items: data.items.map((track) => normalizeTrack(track, { serverUrl })).filter(Boolean) };
       }
       if (typeof options.onCachedData === 'function') {
         options.onCachedData(pageData);
@@ -849,6 +884,8 @@ export const fetchTracksPage = async (
   let finalData = result?.data;
   if (Array.isArray(finalData)) {
     finalData = transformPage(finalData);
+  } else if (Array.isArray(finalData?.items)) {
+    finalData = { ...finalData, items: finalData.items.map((track) => normalizeTrack(track, { serverUrl })).filter(Boolean) };
   }
 
   return {

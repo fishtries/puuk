@@ -55,16 +55,19 @@ const SearchResultRow = ({
     ]}
     activeOpacity={0.65}
     onPress={() => onPress(track)}
+    accessibilityRole="button"
+    accessibilityLabel={`Play ${track.title} by ${track.artist}`}
   >
     <CoverImage source={track.coverArt} style={styles.resultImage} />
     <View style={styles.resultInfo}>
       <Text
         style={[styles.resultTitle, isCurrentPlaying && { color: accentColor }]}
         numberOfLines={1}
+        ellipsizeMode="tail"
       >
         {track.title}
       </Text>
-      <Text style={styles.resultArtist} numberOfLines={1}>
+      <Text style={styles.resultArtist} numberOfLines={1} ellipsizeMode="tail">
         {track.artist}{' '}
         {track.album && track.album !== 'Unknown Album'
           ? `• ${track.album}`
@@ -85,6 +88,8 @@ const SearchResultRow = ({
       hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
       onPress={() => onPressEllipsis && onPressEllipsis(track)}
       style={styles.ellipsisBtn}
+      accessibilityRole="button"
+      accessibilityLabel={`More options for ${track.title}`}
     >
       <Ionicons name="ellipsis-horizontal" size={18} color="#666" />
     </TouchableOpacity>
@@ -98,6 +103,9 @@ const ArtistCard = ({ artist, onPress, index, accentColor }) => (
     style={styles.artistCard}
     activeOpacity={0.7}
     onPress={() => onPress(artist)}
+    accessibilityRole="button"
+    accessibilityLabel={`Artist ${artist.name}, ${artist.track_count ?? 0} ${artist.track_count === 1 ? 'track' : 'tracks'}`}
+    testID={`artist-card-${artist.artist_id || artist.id}`}
   >
     <View style={styles.artistAvatar}>
       {artist.coverArt ? (
@@ -108,10 +116,10 @@ const ArtistCard = ({ artist, onPress, index, accentColor }) => (
         </View>
       )}
     </View>
-    <Text style={styles.artistName} numberOfLines={1}>
+    <Text style={styles.artistName} numberOfLines={1} ellipsizeMode="tail">
       {artist.name}
     </Text>
-    <Text style={styles.artistSub} numberOfLines={1}>
+    <Text style={styles.artistSub} numberOfLines={1} ellipsizeMode="tail">
       {artist.track_count} {artist.track_count === 1 ? 'track' : 'tracks'}
     </Text>
   </AnimatedTouchable>
@@ -124,6 +132,9 @@ const AlbumCard = ({ album, onPress, index }) => (
     style={styles.albumCard}
     activeOpacity={0.7}
     onPress={() => onPress(album)}
+    accessibilityRole="button"
+    accessibilityLabel={`Album ${album.title} by ${album.artist}`}
+    testID={`album-card-${album.id}`}
   >
     <View style={styles.albumCoverContainer}>
       <CoverImage source={album.coverArt} style={styles.albumImage} />
@@ -131,10 +142,10 @@ const AlbumCard = ({ album, onPress, index }) => (
         <Ionicons name="disc-outline" size={18} color="#fff" />
       </View>
     </View>
-    <Text style={styles.albumTitle} numberOfLines={1}>
+    <Text style={styles.albumTitle} numberOfLines={1} ellipsizeMode="tail">
       {album.title}
     </Text>
-    <Text style={styles.albumArtist} numberOfLines={1}>
+    <Text style={styles.albumArtist} numberOfLines={1} ellipsizeMode="tail">
       {album.artist}
     </Text>
   </AnimatedTouchable>
@@ -161,9 +172,13 @@ export default function SearchScreen({
   });
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+
   const searchTimerRef = useRef(null);
   const searchInputRef = useRef(null);
   const scrollViewRef = useRef(null);
+  const abortControllerRef = useRef(null);
+  const latestRequestIdRef = useRef(0);
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -190,30 +205,52 @@ export default function SearchScreen({
     return () => clearTimeout(timer);
   }, []);
 
-  // Cleanup timer on unmount
+  // Cleanup timer and abort in-flight fetch on unmount
   useEffect(() => {
     return () => {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      latestRequestIdRef.current += 1;
     };
   }, []);
 
-  // ── Search with debounce ──
+  // ── Search with debounce and cancellation ──
   const performSearch = useCallback(async (query) => {
     const trimmed = query.trim();
     if (!trimmed) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      latestRequestIdRef.current += 1;
       setResults({ tracks: [], albums: [], artists: [] });
       setIsSearching(false);
       setHasSearched(false);
+      setSearchError(null);
       return;
     }
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const requestId = ++latestRequestIdRef.current;
+
     setIsSearching(true);
+    setSearchError(null);
+
     try {
       const response = await authFetch(
         `/api/search?q=${encodeURIComponent(trimmed)}&limit=30`,
+        { signal: controller.signal },
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+
+      if (requestId !== latestRequestIdRef.current) {
+        return;
+      }
 
       let tracks = [];
       let albums = [];
@@ -232,12 +269,22 @@ export default function SearchScreen({
       }
 
       setResults({ tracks, albums, artists });
+      setSearchError(null);
     } catch (error) {
+      if (error?.name === 'AbortError' || controller.signal.aborted) {
+        return;
+      }
+      if (requestId !== latestRequestIdRef.current) {
+        return;
+      }
       console.warn('Search error:', error);
       setResults({ tracks: [], albums: [], artists: [] });
+      setSearchError(error?.message ? `Search failed: ${error.message}` : 'Search failed. Please try again.');
     } finally {
-      setIsSearching(false);
-      setHasSearched(true);
+      if (requestId === latestRequestIdRef.current) {
+        setIsSearching(false);
+        setHasSearched(true);
+      }
     }
   }, []);
 
@@ -248,8 +295,15 @@ export default function SearchScreen({
         clearTimeout(searchTimerRef.current);
       }
       if (!text.trim()) {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+        }
+        latestRequestIdRef.current += 1;
         setResults({ tracks: [], albums: [], artists: [] });
+        setIsSearching(false);
         setHasSearched(false);
+        setSearchError(null);
         return;
       }
       searchTimerRef.current = setTimeout(() => {
@@ -260,15 +314,34 @@ export default function SearchScreen({
   );
 
   const clearSearch = useCallback(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    latestRequestIdRef.current += 1;
     setSearchQuery('');
     setResults({ tracks: [], albums: [], artists: [] });
+    setIsSearching(false);
     setHasSearched(false);
+    setSearchError(null);
     searchInputRef.current?.focus();
   }, []);
 
+  const handleSubmitEditing = useCallback(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    if (searchQuery.trim()) {
+      performSearch(searchQuery);
+    }
+  }, [performSearch, searchQuery]);
+
   const handleTrackPress = useCallback(
     (track) => {
-      onPlayTrack(track);
+      onPlayTrack?.(track);
       Keyboard.dismiss();
     },
     [onPlayTrack],
@@ -277,7 +350,7 @@ export default function SearchScreen({
   const handleAlbumPress = useCallback(
     (album) => {
       Keyboard.dismiss();
-      navigation.navigate('Album', {
+      navigation?.navigate('Album', {
         albumId: album.id,
         albumTitle: album.title,
         coverArt: album.coverArt,
@@ -288,12 +361,13 @@ export default function SearchScreen({
 
   const handleArtistPress = useCallback(
     (artist) => {
-      // Fill search bar with artist name and trigger search
-      setSearchQuery(artist.name);
-      performSearch(artist.name);
       Keyboard.dismiss();
+      const artistId = artist?.artist_id || artist?.id;
+      if (artistId && navigation?.navigate) {
+        navigation.navigate('ArtistDetail', { artistId });
+      }
     },
-    [performSearch],
+    [navigation],
   );
 
   const totalResults =
@@ -324,15 +398,19 @@ export default function SearchScreen({
             placeholderTextColor="#666"
             value={searchQuery}
             onChangeText={handleSearchChange}
+            onSubmitEditing={handleSubmitEditing}
             returnKeyType="search"
             autoCorrect={false}
             autoCapitalize="none"
+            accessibilityLabel="Search music"
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
               onPress={clearSearch}
               style={styles.searchClearBtn}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
             >
               <Ionicons name="close-circle" size={18} color="#8E8E93" />
             </TouchableOpacity>
@@ -353,7 +431,7 @@ export default function SearchScreen({
         keyboardDismissMode="on-drag"
       >
         {/* Initial state — no query */}
-        {!searchQuery.trim() && !hasSearched && (
+        {!searchQuery.trim() && !hasSearched && !isSearching && !searchError && (
           <Animated.View
             entering={FadeIn.duration(500)}
             style={styles.initialState}
@@ -380,7 +458,7 @@ export default function SearchScreen({
         )}
 
         {/* ─── Search Results ─── */}
-        {!isSearching && hasSearched && totalResults > 0 && (
+        {!isSearching && !searchError && hasSearched && totalResults > 0 && (
           <View style={styles.resultsWrapper}>
             {/* 1. Artists Section */}
             {showArtists && (
@@ -393,7 +471,7 @@ export default function SearchScreen({
                 >
                   {results.artists.map((artist, idx) => (
                     <ArtistCard
-                      key={`art-${artist.name}-${idx}`}
+                      key={`art-${artist.artist_id || artist.id || artist.name}-${idx}`}
                       artist={artist}
                       onPress={handleArtistPress}
                       index={idx}
@@ -449,10 +527,11 @@ export default function SearchScreen({
         )}
 
         {/* Empty results */}
-        {!isSearching && hasSearched && totalResults === 0 && (
+        {!isSearching && !searchError && hasSearched && totalResults === 0 && (
           <Animated.View
             entering={FadeIn.duration(400)}
             style={styles.emptyState}
+            testID="empty-state"
           >
             <Ionicons name="musical-notes-outline" size={48} color="#333" />
             <Text style={styles.emptyTitle}>No results found</Text>
@@ -460,6 +539,31 @@ export default function SearchScreen({
               Try checking spelling or searching for another artist, track, or
               album
             </Text>
+          </Animated.View>
+        )}
+
+        {/* Error state */}
+        {!isSearching && !!searchError && (
+          <Animated.View
+            entering={FadeIn.duration(400)}
+            style={styles.errorState}
+            testID="error-state"
+            accessibilityRole="alert"
+          >
+            <Ionicons name="alert-circle-outline" size={48} color="#8e8e93" />
+            <Text style={styles.errorTitle}>Search unavailable</Text>
+            <Text style={styles.errorHint}>{searchError}</Text>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => performSearch(searchQuery)}
+              accessibilityRole="button"
+              accessibilityLabel="Retry search"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={[styles.retryText, { color: accentColor }]}>
+                Try again
+              </Text>
+            </TouchableOpacity>
           </Animated.View>
         )}
 
@@ -571,6 +675,7 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     fontSize: 11,
     textAlign: 'center',
+    width: '100%',
   },
 
   // ── Album Card ──
@@ -608,10 +713,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginBottom: 2,
+    width: '100%',
   },
   albumArtist: {
     color: '#8E8E93',
     fontSize: 11,
+    width: '100%',
   },
 
   // ── Initial State ──
@@ -714,5 +821,38 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     lineHeight: 18,
+  },
+
+  // ── Error ──
+  errorState: {
+    alignItems: 'center',
+    paddingTop: 80,
+    gap: 8,
+    paddingHorizontal: 20,
+  },
+  errorTitle: {
+    fontSize: 18,
+    color: '#ff453a',
+    fontWeight: '600',
+    marginTop: 8,
+  },
+  errorHint: {
+    fontSize: 13,
+    color: '#8e8e93',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  retryButton: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1c1c22',
+    borderWidth: 1,
+    borderColor: '#2c2c36',
+  },
+  retryText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,14 +16,17 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import CoverImage from '../../shared/media/CoverImage';
 import { authFetch, parseApiErrorMessage } from '../../shared/api/api';
+import { normalizeAlbum } from '../../shared/domain/artistCredits';
+import ArtistCreditsEditor from '../../shared/components/ArtistCreditsEditor';
 
 export default function AlbumEditScreen({ route, navigation }) {
   const { albumId, album: initialAlbum } = route.params;
 
+  const edited = useRef({});
+  const mark = (field, setter) => (value) => { edited.current[field] = true; setter(value); };
   const [title, setTitle] = useState(initialAlbum?.title || '');
-  const [albumArtist, setAlbumArtist] = useState(
-    initialAlbum?.album_artist || initialAlbum?.artist || ''
-  );
+  const [credits, setCredits] = useState(normalizeAlbum(initialAlbum));
+  const [creditsOpen, setCreditsOpen] = useState(false);
   const [year, setYear] = useState(initialAlbum?.year ? String(initialAlbum.year) : '');
 
   const [coverAction, setCoverAction] = useState('keep');
@@ -39,10 +42,10 @@ export default function AlbumEditScreen({ route, navigation }) {
       .then((data) => {
         if (!data || !data.album) return;
         const a = data.album;
-        setTitle(a.title || '');
-        setAlbumArtist(a.album_artist || a.artist || '');
-        setYear(a.year ? String(a.year) : '');
-        setCoverPreview(a.coverArt || null);
+        if (!edited.current.title) setTitle(a.title || '');
+        if (!edited.current.credits) setCredits(normalizeAlbum(a));
+        if (!edited.current.year) setYear(a.year ? String(a.year) : '');
+        if (!edited.current.cover) setCoverPreview(a.coverArt || null);
         setTrackCount(a.track_count || (data.tracks ? data.tracks.length : 0));
       })
       .catch(() => {});
@@ -65,6 +68,7 @@ export default function AlbumEditScreen({ route, navigation }) {
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
+      edited.current.cover = true;
       setCoverPreview(asset.uri);
       setCoverBase64(asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : null);
       setCoverAction('replace');
@@ -73,6 +77,7 @@ export default function AlbumEditScreen({ route, navigation }) {
 
   const handleRemoveCover = () => {
     setCoverBase64(null);
+    edited.current.cover = true;
     setCoverPreview(null);
     setCoverAction(coverAction === 'remove' ? 'keep' : 'remove');
   };
@@ -87,7 +92,6 @@ export default function AlbumEditScreen({ route, navigation }) {
     try {
       const payload = {
         title: title.trim(),
-        album_artist: albumArtist.trim(),
         year: year.trim() || null,
         cover_action: coverAction,
         cover_base64: coverAction === 'replace' ? coverBase64 : null,
@@ -144,7 +148,7 @@ export default function AlbumEditScreen({ route, navigation }) {
         <View style={styles.warningBox}>
           <Ionicons name="information-circle-outline" size={16} color="#FFDAB9" />
           <Text style={styles.warningText}>
-            Изменения будут записаны в теги всех {trackCount || ''} трек(ов) этого альбома.
+            Название, год и обложка будут записаны в теги всех {trackCount || ''} трек(ов) этого альбома.
           </Text>
         </View>
 
@@ -153,21 +157,18 @@ export default function AlbumEditScreen({ route, navigation }) {
           <TextInput
             style={styles.input}
             value={title}
-            onChangeText={setTitle}
+            onChangeText={mark('title', setTitle)}
             placeholder="Album title"
             placeholderTextColor="#555"
           />
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Исполнитель альбома</Text>
-          <TextInput
-            style={styles.input}
-            value={albumArtist}
-            onChangeText={setAlbumArtist}
-            placeholder="Daft Punk / Various Artists"
-            placeholderTextColor="#555"
-          />
+          <Text style={styles.label}>Исполнители альбома</Text>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Изменить исполнителей" style={styles.input} onPress={() => { edited.current.credits = true; setCreditsOpen(true); }}>
+            <Text style={{ color: '#fff' }}>{credits?.artists?.map((a) => a.name).join(', ') || 'Добавить исполнителей'} — изменить</Text>
+          </TouchableOpacity>
+          <ArtistCreditsEditor visible={creditsOpen} onClose={() => setCreditsOpen(false)} entity={credits} entityId={albumId} scope="album" onSaved={(dto) => { edited.current.credits = true; setCredits(normalizeAlbum(dto)); Alert.alert('Сохранено', 'Состав уже сохранён в Puuk.'); }} />
         </View>
 
         <View style={styles.fieldGroup}>
@@ -175,7 +176,7 @@ export default function AlbumEditScreen({ route, navigation }) {
           <TextInput
             style={styles.input}
             value={year}
-            onChangeText={setYear}
+            onChangeText={mark('year', setYear)}
             placeholder="1997"
             placeholderTextColor="#555"
             keyboardType="numbers-and-punctuation"
