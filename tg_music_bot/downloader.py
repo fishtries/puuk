@@ -81,27 +81,21 @@ def _match_song(songs: list, title: str, artist: str, filepath: str) -> dict | N
     def song_artists(song: dict) -> str:
         return _normalize(", ".join(song.get('artists') or []))
 
-    # 1. Точное совпадение пары title + artist — самый надёжный вариант,
-    #    защищает от одноимённых треков разных исполнителей в одном плейлисте.
+    def unique(candidates):
+        return candidates[0] if len(candidates) == 1 else None
+
     if norm_title and norm_artist:
-        for song in songs:
-            if _normalize(song.get('name')) == norm_title and song_artists(song) == norm_artist:
-                return song
-    # 2. Совпадение по artist + вхождению названия в имя файла.
-    if norm_artist:
-        for song in songs:
-            if song_artists(song) == norm_artist and _normalize(song.get('name')) in filename:
-                return song
-    # 3. Только по названию (artist неизвестен/не совпал).
+        candidates = [s for s in songs if _normalize(s.get('name')) == norm_title and song_artists(s) == norm_artist]
+        if candidates:
+            return unique(candidates)
+    if norm_artist and not norm_title:
+        candidates = [s for s in songs if song_artists(s) == norm_artist and _normalize(s.get('name')) and _normalize(s.get('name')) in filename]
+        if candidates:
+            return unique(candidates)
     if norm_title:
-        for song in songs:
-            if _normalize(song.get('name')) == norm_title:
-                return song
-    # 4. Название встречается в имени файла.
-    for song in songs:
-        if _normalize(song.get('name')) and _normalize(song.get('name')) in filename:
-            return song
-    return None
+        candidates = [s for s in songs if _normalize(s.get('name')) == norm_title]
+        return unique(candidates)
+    return unique([s for s in songs if _normalize(s.get('name')) and _normalize(s.get('name')) in filename])
 
 
 def _format_number(number, total) -> str:
@@ -138,6 +132,7 @@ def _finalize_track(filepath: str, song: dict | None = None,
         logging.warning("[metadata] cannot read tags for %s: %s", filepath, exc)
         tags = None
 
+    original_tags = tags
     title = (tags.title if tags else "") or song.get('name') or fallback_title
     artist = (tags.artist if tags else "") or ", ".join(song.get('artists') or []) or fallback_artist
     if not title or not artist:
@@ -186,6 +181,13 @@ def _finalize_track(filepath: str, song: dict | None = None,
         logging.warning("[metadata] verification failed for %s, missing=%s", filepath, missing)
 
     result = tags.as_metadata() if tags else {"filepath": filepath}
+    for key, attr in (('artists', 'artists'), ('album_artists', 'album_artists')):
+        provider = song.get(key)
+        if isinstance(provider, list) and all(isinstance(name, str) for name in provider):
+            result[key], result[key + '_kind'] = provider, 'provider'
+        else:
+            values = getattr(original_tags, attr, None) if original_tags else None
+            result[key], result[key + '_kind'] = values, 'tags' if values is not None else None
     result['verification'] = ok
     result['has_lyrics'] = bool(result.get('lyrics'))
     logging.info(
@@ -196,33 +198,74 @@ def _finalize_track(filepath: str, song: dict | None = None,
     return result
 
 
+def _parse_track_number(val) -> int:
+    if val is None:
+        return 999999
+    match = re.match(r'^\s*(\d+)', str(val))
+    return int(match.group(1)) if match else 999999
+
+
 def _build_tracks(changed_files: list, songs: list) -> list:
     """Синхронная финализация файлов (может ходить в сеть за обложкой).
 
     Вызывается через asyncio.to_thread, чтобы не блокировать event loop бота.
     """
     tracks = []
+    matches = []
     for filepath in changed_files:
         try:
             tags = read_audio_tags(filepath)
-            song = _match_song(songs, tags.title, tags.artist, filepath)
+            matches.append((filepath, _match_song(songs, tags.title, tags.artist, filepath)))
+        except Exception as exc:
+            logging.error("[metadata] failed to read %s: %s", filepath, exc)
+    # A provider result can identify at most one changed file in this batch.
+    counts = {}
+    for _, song in matches:
+        if song is not None:
+            counts[id(song)] = counts.get(id(song), 0) + 1
+    song_index_map = {id(s): i for i, s in enumerate(songs)} if songs else {}
+    for filepath, song in matches:
+        try:
+            if song is not None and counts[id(song)] != 1:
+                song = None
             metadata = _finalize_track(filepath, song=song)
         except Exception as exc:
             logging.error("[metadata] failed to finalize %s: %s", filepath, exc)
             continue
         tracks.append({
+            'verified_metadata': metadata,
             'filepath': filepath,
             'title': metadata.get('title', ''),
             'artist': metadata.get('artist', ''),
             'album': metadata.get('album', ''),
             'album_artist': metadata.get('album_artist', ''),
+            'artists': metadata.get('artists'),
+            'artists_kind': metadata.get('artists_kind'),
+            'album_artists': metadata.get('album_artists'),
+            'album_artists_kind': metadata.get('album_artists_kind'),
             'track_number': metadata.get('track_number', ''),
             'disc_number': metadata.get('disc_number', ''),
             'duration': metadata.get('duration', 0),
             'has_cover': metadata.get('has_cover', False),
             'has_lyrics': metadata.get('has_lyrics', False),
             'verification': metadata.get('verification', False),
+            '_source_order': song_index_map.get(id(song)) if song is not None else None,
         })
+    if songs:
+        tracks.sort(key=lambda t: (
+            t['_source_order'] if t['_source_order'] is not None else 999999,
+            _parse_track_number(t.get('disc_number')),
+            _parse_track_number(t.get('track_number')),
+            t.get('filepath', ''),
+        ))
+    else:
+        tracks.sort(key=lambda t: (
+            _parse_track_number(t.get('disc_number')),
+            _parse_track_number(t.get('track_number')),
+            t.get('filepath', ''),
+        ))
+    for t in tracks:
+        t.pop('_source_order', None)
     return tracks
 
 
@@ -310,11 +353,17 @@ def download_audio(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=No
                 'title': metadata.get('title') or title,
                 'artist': metadata.get('artist') or uploader,
                 'album': metadata.get('album', ''),
+                'album_artist': metadata.get('album_artist', ''),
+                'artists': metadata.get('artists'),
+                'artists_kind': metadata.get('artists_kind'),
+                'album_artists': metadata.get('album_artists'),
+                'album_artists_kind': metadata.get('album_artists_kind'),
                 'duration': duration,
                 'url': url,
                 'filepath': final_mp3,
                 'is_spotify': False,
                 'metadata': metadata,
+                'verified_metadata': metadata,
             }
     except Exception as e:
         logging.error(f"Error downloading {url}: {e}")

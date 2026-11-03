@@ -22,6 +22,8 @@ if brain_dir not in sys.path:
     sys.path.insert(0, brain_dir)
 
 import db
+from repositories.artist_credits import CreditSource
+from services.media_locations import resolve_import_album
 from downloader import download_audio, download_spotify, search_youtube
 
 # Load environment variables
@@ -230,7 +232,8 @@ def enqueue_embedding_tasks(track_records: list[dict], music_dir: str = MUSIC_DI
         )
         if not is_queue_delivery_enabled():
             return None
-        counters = enqueue_missing_tracks(get_qdrant_client(), track_records, music_dir)
+        hydrated = db.get_tracks_by_ids([record["id"] for record in track_records])
+        counters = enqueue_missing_tracks(get_qdrant_client(), list(hydrated.values()), music_dir)
         logging.info(f"Embedding queue (bot): {counters}")
         return counters
     except Exception as ex:
@@ -253,9 +256,11 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
     candidates = track_info.get('tracks', []) if track_info.get('is_spotify') else [track_info]
     indexed = 0
     real_files: list[dict] = []
-    is_multi_track = is_playlist or len(candidates) > 1
-    for idx, meta in enumerate(candidates, start=1):
+    for meta in candidates:
         try:
+            verified = meta.get('verified_metadata')
+            if isinstance(verified, dict):
+                meta = {**meta, **verified, 'filepath': meta.get('filepath')}
             title = meta.get('title') or 'Unknown Title'
             artist = meta.get('artist') or 'Unknown Artist'
             album = meta.get('album') or ''
@@ -272,20 +277,25 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
             else:
                 rel_path = f"{title} - {artist}.mp3"
 
+            def credit_source(key):
+                names, kind = meta.get(key), meta.get(key + '_kind')
+                return CreditSource(kind, names) if kind and isinstance(names, list) else None
+
+            track_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
             album_id = None
             if album:
                 try:
-                    album_id = db.resolve_album(
-                        album,
-                        album_artist=meta.get('album_artist') or artist,
+                    album_id = resolve_import_album(
+                        track_uuid, album,
+                        album_artist=meta.get('album_artist') or '',
+                        artist_source=credit_source('album_artists'),
                     )
                 except Exception as ex:
                     logging.warning(f"Error resolving album for {rel_path}: {ex}")
 
-            track_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
             track_num = meta.get('track_number')
             disc_num = meta.get('disc_number')
-            pos = idx if is_multi_track else None
+            pos = meta.get('album_track_position')
 
             db.add_or_update_track(
                 track_id=track_uuid,
@@ -298,6 +308,7 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
                 track_number=track_num,
                 disc_number=disc_num,
                 album_track_position=pos,
+                artist_source=credit_source('artists'),
             )
             if not is_playlist:
                 db.add_favorite(puuk_user['id'], track_uuid)

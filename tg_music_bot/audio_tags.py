@@ -57,6 +57,8 @@ class AudioTags:
     artist: str = ""
     album: str = ""
     album_artist: str = ""
+    artists: Optional[list[str]] = None
+    album_artists: Optional[list[str]] = None
     date: str = ""
     genre: str = ""
     track_number: str = ""
@@ -73,6 +75,8 @@ class AudioTags:
             "artist": self.artist,
             "album": self.album,
             "album_artist": self.album_artist,
+            "artists": self.artists,
+            "album_artists": self.album_artists,
             "date": self.date,
             "year": extract_year(self.date),
             "genre": self.genre,
@@ -122,9 +126,11 @@ def _read_mp3(path: str) -> AudioTags:
         return _clean(frame) if frame is not None else ""
 
     tags.title = text("TIT2")
-    tags.artist = text("TPE1")
+    tags.artists = [str(v) for v in id3["TPE1"].text if str(v).strip()] if "TPE1" in id3 else None
+    tags.artist = tags.artists[0] if tags.artists else ""
     tags.album = text("TALB")
-    tags.album_artist = text("TPE2")
+    tags.album_artists = [str(v) for v in id3["TPE2"].text if str(v).strip()] if "TPE2" in id3 else None
+    tags.album_artist = tags.album_artists[0] if tags.album_artists else ""
     tags.date = text("TDRC")
     tags.genre = text("TCON")
     tags.track_number = text("TRCK")
@@ -151,6 +157,8 @@ def _read_generic(path: str) -> AudioTags:
         logger.debug("[audio_tags] cannot read %s: %s", path, exc)
         audio = None
     if audio is not None:
+        tags.artists = [str(v) for v in audio.get("artist", []) if str(v).strip()] if "artist" in audio else None
+        tags.album_artists = [str(v) for v in audio.get("albumartist", []) if str(v).strip()] if "albumartist" in audio else None
         tags.title = _clean(audio.get("title"))
         tags.artist = _clean(audio.get("artist"))
         tags.album = _clean(audio.get("album"))
