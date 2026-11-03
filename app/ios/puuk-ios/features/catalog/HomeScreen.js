@@ -10,9 +10,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import CoverImage from '../../shared/media/CoverImage';
 import YourMixCard from './YourMixCard';
+import GenreMixesSection from './GenreMixesSection';
+import RecentlyListenedSection from './RecentlyListenedSection';
+import { useRecentlyListened } from './useRecentlyListened';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -67,14 +72,27 @@ export default function HomeScreen({
   isPlaying,
   currentTrack,
   onPlayTrack,
+  onPlayTrackList,
   onStartWave,
   onAddToPlaylist,
   onPressEllipsis,
   onLoadMoreTracks,
   hasMoreTracks,
   isLoadingMoreTracks,
+  currentUser,
+  navigation,
+  accentColor,
+  genreMixes,
 }) {
   const flatListRef = useRef(null);
+  const insets = React.useContext(SafeAreaInsetsContext);
+  const topInset = insets?.top || (Platform.OS === 'ios' ? 44 : 0);
+  const headerScrimHeight = topInset + 84;
+
+  const {
+    tracks: recentlyListenedTracks,
+    isLoading: isRecentlyListenedLoading,
+  } = useRecentlyListened({ currentUser });
 
   const handleStartWave = useCallback(() => {
     if (onStartWave) onStartWave();
@@ -117,14 +135,45 @@ export default function HomeScreen({
     [],
   );
 
+  const handleEllipsisTrack = onAddToPlaylist || onPressEllipsis;
+
   const ListHeader = useMemo(
     () => (
       <>
         <YourMixCard onPress={handleStartWave} />
+        <GenreMixesSection
+          currentUser={currentUser}
+          navigation={navigation}
+          onPlayTrackList={onPlayTrackList}
+          accentColor={accentColor}
+          sections={genreMixes}
+        />
+        <RecentlyListenedSection
+          tracks={recentlyListenedTracks}
+          isLoading={isRecentlyListenedLoading}
+          currentTrack={currentTrack}
+          isPlaying={isPlaying}
+          onPlayTrack={onPlayTrack}
+          onPressEllipsis={handleEllipsisTrack}
+        />
         {tracks.length > 0 && <SectionHeader title="Tracks" />}
       </>
     ),
-    [handleStartWave, tracks.length],
+    [
+      handleStartWave,
+      currentUser,
+      navigation,
+      onPlayTrackList,
+      accentColor,
+      genreMixes,
+      recentlyListenedTracks,
+      isRecentlyListenedLoading,
+      currentTrack,
+      isPlaying,
+      onPlayTrack,
+      handleEllipsisTrack,
+      tracks.length,
+    ],
   );
 
   const ListFooter = useMemo(
@@ -162,6 +211,23 @@ export default function HomeScreen({
         windowSize={5}
         removeClippedSubviews={Platform.OS !== 'android'}
       />
+      <View
+        pointerEvents="none"
+        style={[styles.headerScrim, { height: headerScrimHeight }]}
+        testID="home-header-scrim"
+      >
+        <LinearGradient
+          colors={[
+            'rgba(0, 0, 0, 0.85)',
+            'rgba(0, 0, 0, 0.65)',
+            'rgba(0, 0, 0, 0.35)',
+            'rgba(0, 0, 0, 0.08)',
+            'transparent',
+          ]}
+          locations={[0, 0.35, 0.65, 0.88, 1.0]}
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
     </View>
   );
 }
@@ -170,6 +236,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000000',
+  },
+  headerScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 5,
   },
   scrollContent: {
     paddingTop: 0,
