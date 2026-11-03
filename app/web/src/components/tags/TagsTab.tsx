@@ -16,7 +16,7 @@ const FIELD_DEFS: Array<{ key: FieldKey; label: string; placeholder: string }> =
   { key: 'albumArtist', label: 'Исполнитель альбома', placeholder: 'Album Artist' },
   { key: 'year', label: 'Год', placeholder: '2024' },
   { key: 'genre', label: 'Жанр', placeholder: 'Electronic, Pop, Rock...' },
-  { key: 'trackNumber', label: 'Номер трека', placeholder: '1 или 1/12' },
+  { key: 'trackNumber', label: 'Номер трека / позиция', placeholder: '1 или 1/12' },
   { key: 'discNumber', label: 'Номер диска', placeholder: '1 или 1/2' },
 ];
 

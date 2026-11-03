@@ -49,10 +49,15 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
   }, [tracks]);
 
   const handleRowClick = (track: Track) => {
-    if (currentTrack?.id === track.id) {
+    const state = usePlayerStore.getState();
+    const sameCollection = state.autoplayAfterQueue && !state.isWaveActive
+      && state.queue.length === ordered.length
+      && state.queue.every((item, index) => item.id === ordered[index].id);
+    if (currentTrack?.id === track.id && sameCollection) {
       togglePlay();
     } else {
-      playTrack(track, ordered);
+      if (state.isShuffled) state.toggleShuffle();
+      playTrack(track, ordered, 'collection');
     }
   };
 

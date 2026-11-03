@@ -45,10 +45,15 @@ export const Tracklist: React.FC<TracklistProps> = ({
   const togglePlay = usePlayerStore((state) => state.togglePlay);
 
   const handleRowClick = (track: Track) => {
-    if (currentTrack?.id === track.id) {
+    const state = usePlayerStore.getState();
+    const sameCollection = state.autoplayAfterQueue && !state.isWaveActive
+      && state.queue.length === tracks.length
+      && state.queue.every((item, index) => item.id === tracks[index].id);
+    if (currentTrack?.id === track.id && sameCollection) {
       togglePlay();
     } else {
-      playTrack(track, tracks);
+      if (state.isShuffled) state.toggleShuffle();
+      playTrack(track, tracks, 'collection');
     }
   };
 
@@ -192,15 +197,15 @@ export const CollectionDetail: React.FC<CollectionDetailProps> = ({
 
   const handlePlay = () => {
     if (tracks.length === 0) return;
-    const startIndex = isShuffled ? Math.floor(Math.random() * tracks.length) : 0;
-    playTrack(tracks[startIndex], tracks);
+    if (isShuffled) toggleShuffle();
+    playTrack(tracks[0], tracks, 'collection');
   };
 
   const handleShuffle = () => {
     if (tracks.length === 0) return;
     toggleShuffle();
     const randomIndex = Math.floor(Math.random() * tracks.length);
-    playTrack(tracks[randomIndex], tracks);
+    playTrack(tracks[randomIndex], tracks, 'collection');
   };
 
   const renderTrackActions = (track: Track): React.ReactNode => (

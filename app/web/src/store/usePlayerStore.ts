@@ -69,6 +69,13 @@ let waveAdvanceInFlight: Promise<void> | null = null;
  * переключения не дают позднему ответу запустить чужой трек или статус 'error'.
  */
 let audioLoadGeneration = 0;
+let queueGeneration = 0;
+
+function invalidateWaveRequests() {
+  queueGeneration += 1;
+  waveFetchPromise = null;
+  waveAdvanceInFlight = null;
+}
 
 function requestWaveBatch(
   currentTrackId: string | undefined,
@@ -76,20 +83,21 @@ function requestWaveBatch(
 ): Promise<Track[]> {
   if (waveFetchPromise) return waveFetchPromise;
 
-  waveFetchPromise = fetchWaveQueue({
+  const request = fetchWaveQueue({
     currentTrackId,
     limit: WAVE_BATCH_SIZE,
     excludeTrackIds: exclusions.excludeTrackIds,
     queuedTrackIds: exclusions.queuedTrackIds,
   }).finally(() => {
-    waveFetchPromise = null;
+    if (waveFetchPromise === request) waveFetchPromise = null;
   });
-
-  return waveFetchPromise;
+  waveFetchPromise = request;
+  return request;
 }
 
 export const usePlayerStore = create<PlayerStoreState>((set, get) => {
   async function loadWaveBatch(): Promise<Track[]> {
+    const generation = queueGeneration;
     const { currentTrack, queue, wavePlayedIds } = get();
     const exclusions = buildWaveExclusions(currentTrack, queue, wavePlayedIds);
 
@@ -98,12 +106,13 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       // requestWaveBatch de-duplicates concurrent callers by sharing one promise,
       // so a second Next press waits for the same in-flight request instead of
       // dropping it and returning an empty batch.
-      return await requestWaveBatch(currentTrack?.id, exclusions);
+      const tracks = await requestWaveBatch(currentTrack?.id, exclusions);
+      return generation === queueGeneration ? tracks : [];
     } catch (e) {
       console.warn('Wave queue fetch failed:', e);
       return [];
     } finally {
-      set({ isWaveLoading: false });
+      if (generation === queueGeneration) set({ isWaveLoading: false });
     }
   }
 
@@ -114,6 +123,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
    * Next presses resolve to distinct heads instead of replaying one.
    */
   async function playWaveBufferHead(resolvedIndex: number, playedIds: string[]): Promise<boolean> {
+    const generation = queueGeneration;
     const { queue, isWaveActive, playTrack } = get();
     if (!isWaveActive) return false;
 
@@ -129,9 +139,9 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       queue: compacted,
       currentTrackIndex: nextIndex >= 0 ? nextIndex : 1,
     });
-    await playTrack(head, compacted);
+    await playTrack(head, compacted, 'wave');
 
-    if (get().isWaveActive && upcoming.length - 1 <= WAVE_PREFETCH_THRESHOLD) {
+    if (generation === queueGeneration && get().isWaveActive && upcoming.length - 1 <= WAVE_PREFETCH_THRESHOLD) {
       void prefetchWave();
     }
     return true;
@@ -143,6 +153,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
    * backend never returns it again within the session.
    */
   async function advanceWave(finishedTrack: Track | null) {
+    const generation = queueGeneration;
     const { queue, currentTrackIndex, currentTrack, wavePlayedIds, playTrack } = get();
     const playedIds = finishedTrack?.id
       ? trimPlayedIds([...wavePlayedIds, finishedTrack.id])
@@ -155,9 +166,11 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     const resolvedIndex = anchorIndex >= 0 ? anchorIndex : currentTrackIndex;
 
     if (await playWaveBufferHead(resolvedIndex, playedIds)) return;
+    if (generation !== queueGeneration || !get().isWaveActive) return;
 
     set({ wavePlayedIds: playedIds });
     const fresh = await loadWaveBatch();
+    if (generation !== queueGeneration || !get().isWaveActive) return;
     const merged = mergeWaveTracks(
       compactWaveQueue(queue, resolvedIndex, playedIds),
       fresh,
@@ -165,7 +178,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     );
 
     if (merged.length === 0) return;
-    await playTrack(merged[0], merged);
+    await playTrack(merged[0], merged, 'wave');
   }
 
   /**
@@ -175,8 +188,10 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
    * would double-play it. Buffered presses stay sequential per press.
    */
   function advanceWaveOnce(finishedTrack: Track | null): Promise<void> {
+    const generation = queueGeneration;
     if (waveAdvanceInFlight) {
       return waveAdvanceInFlight.then(() => {
+        if (generation !== queueGeneration) return;
         const { currentTrack, queue, currentTrackIndex, wavePlayedIds } = get();
         const anchorIndex = currentTrack
           ? queue.findIndex((t) => t.id === currentTrack.id)
@@ -187,13 +202,14 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     }
 
     waveAdvanceInFlight = advanceWave(finishedTrack).finally(() => {
-      waveAdvanceInFlight = null;
+      if (generation === queueGeneration) waveAdvanceInFlight = null;
     });
     return waveAdvanceInFlight;
   }
 
   /** Background refill: never touches playback, only extends the queue. */
   async function prefetchWave() {
+    const generation = queueGeneration;
     const { currentTrack, queue, wavePlayedIds, isWaveLoading } = get();
     if (isWaveLoading) return;
 
@@ -203,22 +219,23 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     set({ isWaveLoading: true });
     try {
       const fresh = await requestWaveBatch(currentTrack?.id, exclusions);
+      if (generation !== queueGeneration || !get().isWaveActive) return;
       const state = get();
       const anchorIndex = state.currentTrack
         ? state.queue.findIndex((t) => t.id === state.currentTrack?.id)
         : state.currentTrackIndex;
       const resolvedIndex = anchorIndex >= 0 ? anchorIndex : state.currentTrackIndex;
-      const compacted = compactWaveQueue(state.queue, resolvedIndex, playedIds);
+      const compacted = compactWaveQueue(state.queue, resolvedIndex, state.wavePlayedIds);
       const merged = mergeWaveTracks(
         compacted,
         fresh,
-        new Set([...playedIds, ...(state.currentTrack?.id ? [state.currentTrack.id] : [])])
+        new Set([...state.wavePlayedIds, ...(state.currentTrack?.id ? [state.currentTrack.id] : [])])
       );
-      set({ queue: merged, currentTrackIndex: state.currentTrack ? 0 : state.currentTrackIndex });
+      set({ queue: state.currentTrack ? [state.currentTrack, ...merged] : merged, currentTrackIndex: state.currentTrack ? 0 : state.currentTrackIndex });
     } catch (e) {
       console.warn('Wave prefetch failed:', e);
     } finally {
-      set({ isWaveLoading: false });
+      if (generation === queueGeneration) set({ isWaveLoading: false });
     }
   }
 
@@ -255,7 +272,11 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         if (get().repeatMode === 'all') {
           nextIndex = 0;
         } else {
-          return; // end of queue per WEB_CLIENT_ARCH
+          if (get().autoplayAfterQueue && currentTrack && localStorage.getItem('puuk_token')) {
+            set({ isWaveActive: true, wavePlayedIds: queue.map((track) => track.id) });
+            await advanceWaveOnce(currentTrack);
+          }
+          return;
         }
       }
     }
@@ -300,6 +321,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     repeatMode: 'off',
     isShuffled: false,
     isWaveActive: false,
+    autoplayAfterQueue: false,
     isWaveLoading: false,
     isLoudnessNormalizationEnabled: getInitialLoudnessSetting(),
 
@@ -323,9 +345,18 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     isLyricsLoading: false,
     rawLyricsText: '',
 
-    playTrack: async (track: Track, newQueue?: Track[]) => {
+    playTrack: async (track: Track, newQueue?: Track[], source?: 'collection' | 'search' | 'wave') => {
+      if (source !== 'wave' && (newQueue || source)) {
+        invalidateWaveRequests();
+        set({
+          isWaveActive: source === 'search',
+          isWaveLoading: false,
+          autoplayAfterQueue: source === 'collection' || source === 'search',
+          wavePlayedIds: source === 'search' ? [track.id] : [],
+        });
+      }
       const state = get();
-      const updatedQueue = newQueue || (state.queue.length > 0 ? state.queue : [track]);
+      const updatedQueue = source === 'search' ? [track] : newQueue || (state.queue.length > 0 ? state.queue : [track]);
       const index = updatedQueue.findIndex((t) => t.id === track.id);
       const generation = ++audioLoadGeneration;
 
@@ -353,6 +384,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
       get().fetchLyrics(track.id);
       get().recordHistory(track);
+      if (source === 'search') void prefetchWave();
 
       try {
         const streamUrl = await resolveAuthorizedAudioUrl(track.id);
@@ -511,11 +543,13 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         set({ isLoginOpen: true });
         return false;
       }
+      invalidateWaveRequests();
+      const generation = queueGeneration;
       const nextWave = !get().isWaveActive;
       const currentTrack = get().currentTrack;
 
       if (!nextWave) {
-        set({ isWaveActive: false, isWaveLoading: false });
+        set({ isWaveActive: false, isWaveLoading: false, autoplayAfterQueue: false });
         return false;
       }
 
@@ -525,6 +559,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       });
 
       const waveTracks = await loadWaveBatch();
+      if (generation !== queueGeneration) return false;
       if (waveTracks.length === 0) {
         set({ isWaveActive: false });
         return false;
@@ -532,7 +567,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
       const state = get();
       if (!state.currentTrack) {
-        await get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()));
+        await get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()), 'wave');
         return true;
       }
 
@@ -596,7 +631,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     clearQueue: () => {
-      set({ queue: [], currentTrackIndex: -1 });
+      invalidateWaveRequests();
+      set({ queue: [], currentTrackIndex: -1, isWaveActive: false, isWaveLoading: false, autoplayAfterQueue: false });
     },
 
     setActiveView: (activeView: ActiveView) => {

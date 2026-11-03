@@ -199,6 +199,7 @@ beforeEach(() => {
     currentTrackIndex: -1,
     wavePlayedIds: [],
     isWaveActive: false,
+    autoplayAfterQueue: false,
     isWaveLoading: false,
     repeatMode: 'off',
     isShuffled: false,
@@ -298,10 +299,9 @@ describe('Wave batch consumption', () => {
     assert.equal(waveQueueFetchUrls.length, 1);
     const state = usePlayerStore.getState();
     assert.equal(state.currentTrack?.id, 'G');
-    // The freshly played current (G) is dropped from the buffered queue;
-    // batch 2 (J..Q) is merged onto the unplayed remainder.
+    // Keep the current track as the navigation anchor before the unplayed buffer.
     assert.deepEqual(state.queue.map((t) => t.id), [
-      'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+      'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
     ]);
   });
 });
@@ -369,4 +369,65 @@ describe('Wave single in-flight request', () => {
     assert.equal(waveQueueFetchUrls.length, 0);
     assert.deepEqual(loadedStreamIds(), ['C', 'D']);
   });
+});
+
+
+describe('Collection order and search recommendations', () => {
+  it('plays from the selected collection position and starts similar tracks after the last ended event', async () => {
+    seedWave('old', ['old', 'unrelated'], []);
+    const list = ['A', 'B', 'C'].map(track);
+    await usePlayerStore.getState().playTrack(list[1], list, 'collection');
+    assert.equal(usePlayerStore.getState().isWaveActive, false);
+    await usePlayerStore.getState().nextTrack();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'C');
+    assert.equal(waveQueueFetchUrls.length, 0);
+    waveQueueReplies = [['D', 'E', 'F', 'G'].map(track)];
+    audioInstance.fire('ended');
+    await settleAsyncChains();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'D');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['D', 'E', 'F', 'G']);
+    assert.equal(waveQueueFetchUrls.length, 1);
+    assert.equal(new URL(waveQueueFetchUrls[0], 'https://puuk.app').searchParams.get('current_track_id'), 'C');
+  });
+
+  it('search keeps the selected track playing and follows it with the first recommendation', async () => {
+    waveQueueReplies = [['B', 'C', 'D', 'E'].map(track)];
+    await usePlayerStore.getState().playTrack(track('A'), undefined, 'search');
+    await settleAsyncChains();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'A');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['A', 'B', 'C', 'D', 'E']);
+    await usePlayerStore.getState().nextTrack();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+  });
+
+  it('repeat all and repeat one take priority over collection autoplay', async () => {
+    const list = ['A', 'B'].map(track);
+    await usePlayerStore.getState().playTrack(list[1], list, 'collection');
+    usePlayerStore.getState().setRepeatMode('one');
+    audioInstance.fire('ended');
+    await settleAsyncChains();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+    usePlayerStore.getState().setRepeatMode('all');
+    audioInstance.fire('ended');
+    await settleAsyncChains();
+    assert.equal(usePlayerStore.getState().currentTrack?.id, 'A');
+    assert.equal(waveQueueFetchUrls.length, 0);
+  });
+
+  for (const source of ['search', 'collection'] as const) {
+    it(`discards late ${source} recommendations after selecting a new collection`, async () => {
+      let release!: (response: Response) => void;
+      queueReplyOverride = () => new Promise((resolve) => { release = resolve; });
+      await usePlayerStore.getState().playTrack(track('A'), [track('A')], source);
+      const advance = source === 'collection' ? usePlayerStore.getState().nextTrack() : undefined;
+      await settleAsyncChains();
+      await usePlayerStore.getState().playTrack(track('X'), ['X', 'Y'].map(track), 'collection');
+      release(jsonResponse([track('stale')]));
+      await advance;
+      await settleAsyncChains();
+      assert.equal(usePlayerStore.getState().currentTrack?.id, 'X');
+      assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['X', 'Y']);
+      assert.equal(usePlayerStore.getState().isWaveActive, false);
+    });
+  }
 });

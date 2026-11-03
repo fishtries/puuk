@@ -31,7 +31,9 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
   const [albumArtist, setAlbumArtist] = useState(initialTrack.album_artist || '');
   const [year, setYear] = useState<string>(initialTrack.year ? String(initialTrack.year) : '');
   const [genre, setGenre] = useState(initialTrack.genre || '');
-  const [trackNumber, setTrackNumber] = useState(initialTrack.track_number || '');
+  const [trackNumber, setTrackNumber] = useState(
+    initialTrack.track_number || (initialTrack.album_track_position != null ? String(initialTrack.album_track_position) : '')
+  );
   const [discNumber, setDiscNumber] = useState(initialTrack.disc_number || '');
   const [comment, setComment] = useState(initialTrack.comment || '');
   const [lyrics, setLyrics] = useState(initialTrack.lyrics || '');
@@ -213,7 +215,7 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     setAlbumArtist(fresh.album_artist || '');
     setYear(fresh.year ? String(fresh.year) : '');
     setGenre(fresh.genre || '');
-    setTrackNumber(fresh.track_number || '');
+    setTrackNumber(fresh.track_number || (fresh.album_track_position != null ? String(fresh.album_track_position) : ''));
     setDiscNumber(fresh.disc_number || '');
     setComment(fresh.comment || '');
     setLyrics(fresh.lyrics || '');
@@ -262,6 +264,9 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
     setErrorMessage(null);
 
     const parsedYear = year.trim();
+    const rawTrackNum = trackNumber.trim();
+    const trackNumMatch = rawTrackNum.match(/^\s*(\d+)/);
+    const parsedTrackPos = trackNumMatch ? parseInt(trackNumMatch[1], 10) : null;
 
     const payload: TrackEditPayloadDTO = {
       title: title.trim(),
@@ -270,7 +275,8 @@ export function useTagEditorForm(initialTrack: Track, onClose: () => void) {
       album_artist: albumArtist.trim() || null,
       year: parsedYear || null,
       genre: genre.trim() || null,
-      track_number: trackNumber.trim() || null,
+      track_number: rawTrackNum || null,
+      album_track_position: parsedTrackPos,
       disc_number: discNumber.trim() || null,
       comment: comment.trim() || null,
       lyrics: lyrics,

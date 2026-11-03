@@ -40,10 +40,10 @@ export const SearchView: React.FC<SearchViewProps> = ({ searchQuery, onAddToPlay
   const isPlaying = status === 'playing';
 
   const handleTrackClick = (track: Track) => {
-    if (currentTrack?.id === track.id) {
+    if (currentTrack?.id === track.id && usePlayerStore.getState().isWaveActive) {
       togglePlay();
     } else {
-      playTrack(track, tracks);
+      playTrack(track, undefined, 'search');
     }
   };
 

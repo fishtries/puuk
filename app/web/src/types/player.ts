@@ -24,6 +24,7 @@ export interface PlayerStoreState {
   repeatMode: RepeatMode;
   isShuffled: boolean;
   isWaveActive: boolean;
+  autoplayAfterQueue: boolean;
   isWaveLoading: boolean;
   isLoudnessNormalizationEnabled: boolean;
 
@@ -51,7 +52,7 @@ export interface PlayerStoreState {
   rawLyricsText: string;
 
   // Actions
-  playTrack: (track: Track, queue?: Track[]) => Promise<void>;
+  playTrack: (track: Track, queue?: Track[], source?: 'collection' | 'search' | 'wave') => Promise<void>;
   togglePlay: () => void;
   pause: () => void;
   resume: () => void;
