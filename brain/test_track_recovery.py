@@ -43,6 +43,28 @@ class TestPathResolutionAndRecovery(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_placeholder_never_reaches_qdrant(self):
+        from services.media_locations import locate_track_file
+
+        with patch("services.media_locations.db.get_track", return_value=None), \
+             patch("services.media_locations.client.retrieve") as retrieve:
+            self.assertIsNone(ensure_track_in_db("placeholder"))
+            self.assertIsNone(locate_track_file("placeholder"))
+            retrieve.assert_not_called()
+
+    def test_numeric_point_id_is_sent_as_integer(self):
+        with patch("services.media_locations.db.get_track", return_value=None), \
+             patch("services.media_locations.client.retrieve", return_value=[]) as retrieve:
+            self.assertIsNone(ensure_track_in_db("123"))
+            self.assertEqual(retrieve.call_args.kwargs["ids"], [123])
+
+    def test_sqlite_track_with_non_qdrant_id_is_still_accessible(self):
+        row = {"id": "placeholder", "file_path": "existing.mp3"}
+        with patch("services.media_locations.db.get_track", return_value=row), \
+             patch("services.media_locations.client.retrieve") as retrieve:
+            self.assertEqual(ensure_track_in_db("placeholder"), row)
+            retrieve.assert_not_called()
+
     def test_validate_safe_path_relative(self):
         res = validate_safe_path("Artists/Rock/song.mp3", self.music_dir)
         self.assertEqual(res, self.sample_audio)
@@ -73,7 +95,7 @@ class TestPathResolutionAndRecovery(unittest.TestCase):
             self.assertEqual(eff, custom_music_dir)
 
     def test_ensure_track_in_db_from_qdrant(self):
-        track_id = "test-qdrant-recovery-uuid"
+        track_id = "2a65a93f-3ab3-4c38-86cf-d6ed00691701"
         # Ensure track is not in SQLite initially
         self.assertIsNone(db.get_track(track_id))
 
@@ -108,7 +130,7 @@ class TestPathResolutionAndRecovery(unittest.TestCase):
             self.assertEqual(db_row["id"], track_id)
 
     def test_get_track_details_recovers_missing_track(self):
-        track_id = "test-details-recovery-uuid"
+        track_id = "2a65a93f-3ab3-4c38-86cf-d6ed00691702"
         self.assertIsNone(db.get_track(track_id))
 
         fake_payload = {
@@ -156,7 +178,7 @@ class TestPathResolutionAndRecovery(unittest.TestCase):
             self.assertEqual(row["id"], row2["id"])
 
     def test_ensure_track_in_db_rejects_payload_outside_music_dir(self):
-        track_id = "test-outside-payload-uuid"
+        track_id = "2a65a93f-3ab3-4c38-86cf-d6ed00691703"
         fake_payload = {
             "file_path": "/etc/passwd",
             "title": "Malicious Track",
@@ -173,7 +195,7 @@ class TestPathResolutionAndRecovery(unittest.TestCase):
             self.assertIsNone(db.get_track(track_id))
 
     def test_ensure_track_in_db_rejects_missing_file_payload(self):
-        track_id = "test-missing-file-uuid"
+        track_id = "2a65a93f-3ab3-4c38-86cf-d6ed00691704"
         fake_payload = {
             "file_path": "non_existent_audio_file.mp3",
             "title": "Missing File Track",

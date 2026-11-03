@@ -163,6 +163,10 @@ def _build_payload(track: Any, rel_path: str, stat: os.stat_result) -> Dict[str,
         "file_size": stat.st_size,
         "file_mtime_ns": stat.st_mtime_ns,
     }
+    for key in ("artists", "album_artists"):
+        values = _value(track, key)
+        if values is not None:
+            payload[key] = values
     payload.update(_loudness_payload(track, stat))
     return payload
 

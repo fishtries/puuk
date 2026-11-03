@@ -56,9 +56,11 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         self.assertIsNone(_artist_from_file_path(None))
 
         resolver = _ArtistResolver()
-        key = resolver.key({"file_path": "Daft Punk - Around the World.mp3"}, "unknown-id")
-        self.assertEqual(key, "daft punk")
-        self.assertIsNone(resolver.key({"file_path": "plain_track.mp3"}, "unknown-id-2"))
+        from repositories.artist_credits import artist_id_for_name
+        resolver.prefetch(["unknown-id", "unknown-id-2"])
+        key = resolver.keys({"file_path": "Daft Punk - Around the World.mp3"}, "unknown-id")
+        self.assertEqual(key, frozenset([artist_id_for_name("Daft Punk")]))
+        self.assertEqual(resolver.keys({"file_path": "plain_track.mp3"}, "unknown-id-2"), frozenset())
 
     def test_01_normalize_exclude_ids_dedup_and_cap(self):
         """_normalize_exclude_ids дедуплицирует и ограничивает список 100 ID."""
@@ -102,7 +104,7 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         self.assertEqual([p.id for p in selected], ["a1", "a2", "a3"])
 
     def test_04_select_diverse_normalizes_artist_case(self):
-        """'Artist A', ' artist a ' и 'ARTIST A' считаются одним исполнителем."""
+        """Artist identity preserves case; whitespace is normalized."""
         points = [
             MockPoint("a1", 0.9, "Artist A"),
             MockPoint("a2", 0.8, " artist a "),
@@ -113,13 +115,14 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         selected = select_diverse_recommendations(points, limit=3)
         ids = [p.id for p in selected]
         same_artist = sum(1 for i in ids if i.startswith("a"))
-        self.assertLessEqual(same_artist, MAX_TRACKS_PER_ARTIST)
+        self.assertEqual(same_artist, 3)
 
     def test_05_diversity_penalty_is_case_insensitive(self):
-        """Штраф за недавнего исполнителя применяется независимо от регистра."""
+        """Recent counts apply to the matching case-sensitive artist ID."""
         points = [MockPoint("t1", 0.90, "Queen"), MockPoint("t2", 0.85, "Daft Punk")]
 
-        adjusted = apply_diversity_penalty(points, ["QUEEN", " queen "], penalty=0.05)
+        from repositories.artist_credits import artist_id_for_name
+        adjusted = apply_diversity_penalty(points, {artist_id_for_name("Queen"): 2}, penalty=0.05)
         self.assertEqual(adjusted[0].id, "t2")
 
     def test_06_queue_endpoint_accepts_exclude_ids(self):

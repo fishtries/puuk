@@ -14,7 +14,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 import db
 from config import COLLECTION_NAME
 from services.genre_normalization import extract_genres, normalize_genre
-from services.recommendation_service import build_wave_track_payload, client
+from services.recommendation_service import build_wave_track_payload, client, _ArtistResolver
 from user_profile import get_or_compute_user_embedding_fresh
 
 # --- Аффинность к жанрам ---
@@ -149,6 +149,8 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
 
     # Один batch-SELECT на все позитивные треки вместо get_track на каждый.
     tracks_by_id = db.get_tracks_by_ids(weights.keys())
+    resolver = _ArtistResolver()
+    resolver.prefetch(tracks_by_id.keys())
     for track_id, weight in weights.items():
         track = tracks_by_id.get(track_id)
         if not track:
@@ -156,14 +158,13 @@ def get_user_genre_affinity(user_id: int) -> list[GenreAffinity]:
         effective = get_effective_genres(track)
         if not effective:
             continue
-        artist_key = _artist_key(track.get("artist"))
+        artist_keys = resolver.keys(track, track_id)
         # Мультижанровый трек делит вклад поровну между своими жанрами с учетом весов модели
         weight_per_genre = weight / len(effective)
         for genre, genre_weight_from_model in effective:
             genre_weight[genre] = genre_weight.get(genre, 0.0) + weight_per_genre * genre_weight_from_model
             genre_track_count[genre] = genre_track_count.get(genre, 0) + 1
-            if artist_key:
-                genre_artists.setdefault(genre, set()).add(artist_key)
+            genre_artists.setdefault(genre, set()).update(artist_keys)
 
     affinity: list[GenreAffinity] = []
     for genre, weight in genre_weight.items():
@@ -198,15 +199,16 @@ def get_catalog_genre_affinity(catalog: Optional[list[dict]] = None) -> list[Gen
     genre_artists: dict[str, set[str]] = {}
     genre_names: dict[str, str] = {}
 
+    resolver = _ArtistResolver()
+    resolver.prefetch([str(track["id"]) for track in tracks])
     for track in tracks:
         track_id = str(track["id"])
-        artist_key = _artist_key(track.get("artist"))
+        artist_keys = resolver.keys(track, track_id)
         for genre, _ in _get_auto_genres(track):
             genre_key = genre.casefold()
             genre_names.setdefault(genre_key, genre)
             genre_track_ids.setdefault(genre_key, set()).add(track_id)
-            if artist_key:
-                genre_artists.setdefault(genre_key, set()).add(artist_key)
+            genre_artists.setdefault(genre_key, set()).update(artist_keys)
 
     affinity: list[GenreAffinity] = []
     for genre_key, track_ids in genre_track_ids.items():
@@ -312,11 +314,13 @@ def _ordered_sqlite_candidates(
     return sorted(candidates, key=lambda t: _sqlite_rank_key(tier(t), t))
 
 
-def _apply_diversity(ordered: list[dict], limit: int) -> list[dict]:
+def _apply_diversity(ordered: list[dict], limit: int, resolver=None) -> list[dict]:
     """Первый проход — лимиты на артиста/альбом; второй добирает, если альтернатив нет."""
     if limit <= 0:
         return []
 
+    resolver = resolver or _ArtistResolver()
+    resolver.prefetch([str(track["id"]) for track in ordered])
     selected: list[dict] = []
     chosen: set[str] = set()
     artist_counts: Counter = Counter()
@@ -328,16 +332,15 @@ def _apply_diversity(ordered: list[dict], limit: int) -> list[dict]:
         track_id = str(track["id"])
         if track_id in chosen:
             continue
-        artist_key = _artist_key(track.get("artist"))
-        if artist_key and artist_counts[artist_key] >= MAX_TRACKS_PER_ARTIST:
+        artist_keys = resolver.keys(track, track_id)
+        if any(artist_counts[key] >= MAX_TRACKS_PER_ARTIST for key in artist_keys):
             continue
         album_key = _artist_key(track.get("album"))
         if album_key and album_counts[album_key] >= MAX_TRACKS_PER_ALBUM:
             continue
         selected.append(track)
         chosen.add(track_id)
-        if artist_key:
-            artist_counts[artist_key] += 1
+        artist_counts.update(artist_keys)
         if album_key:
             album_counts[album_key] += 1
 
@@ -414,9 +417,8 @@ def generate_genre_playlist(
     positive_history = [str(t) for t in db.get_user_listening_history(user_id)]
     positive_ids = set(positive_history)
     fresh_ids = set(positive_history[:RECENT_HISTORY_WINDOW])
-    recent_artist_keys = {
-        _artist_key(a) for a in db.get_recent_artists(user_id, limit=5)
-    } - {None}
+    resolver = _ArtistResolver()
+    recent_artist_counts = resolver.recent_counts(user_id)
 
     candidates = _genre_candidates(target_key, dislike_ids, exclude, catalog=catalog)
     # Guard жанра: последняя линия защиты от треков с чужим/пустым genre.
@@ -424,6 +426,7 @@ def generate_genre_playlist(
     if not candidates:
         return []
     candidate_by_id = {str(t["id"]): t for t in candidates}
+    resolver.prefetch(candidate_by_id)
 
     # Свежие прослушивания исключаются, если без них хватает альтернатив.
     non_fresh = [t for t in candidates if str(t["id"]) not in fresh_ids]
@@ -450,9 +453,8 @@ def generate_genre_playlist(
                 score += FAVORITE_BONUS
             if track_id in positive_ids:
                 score += RECENT_POSITIVE_BONUS
-            artist_key = _artist_key(track.get("artist"))
-            if artist_key and artist_key in recent_artist_keys:
-                score -= ARTIST_REPEAT_PENALTY
+            artist_keys = resolver.keys(track, track_id)
+            score -= ARTIST_REPEAT_PENALTY * max((recent_artist_counts.get(key, 0) for key in artist_keys), default=0)
             if track_id in fresh_ids:
                 score -= RECENT_REPEAT_PENALTY
             ranked.append((track, score))
@@ -467,7 +469,18 @@ def generate_genre_playlist(
         if str(t["id"]) not in ranked_ids
     ]
     combined = [t for t, _ in ranked] + fallback_order
-    selected = _apply_diversity(combined, limit)
+    selected = _apply_diversity(combined, limit, resolver=resolver)
+
+    # Batch-гидратация кредов для выбранных строк, у которых нет "artists"
+    # (fallback-строки и незагидратированные refill-строки смешанного пути).
+    unhydrated_ids = [str(t["id"]) for t in selected if "artists" not in t]
+    if unhydrated_ids:
+        hydrated = db.get_tracks_by_ids(unhydrated_ids)
+        if hydrated:
+            selected = [
+                {**t, **hydrated[str(t["id"])]} if str(t["id"]) in hydrated else t
+                for t in selected
+            ]
 
     payloads: list[dict] = []
     for track in selected:
@@ -484,6 +497,11 @@ def generate_genre_playlist(
                 "track_id": track_id,
                 "title": track.get("title"),
                 "artist": track.get("artist"),
+                "artist_id": track.get("artist_id"),
+                "artists": track.get("artists", []),
+                "artists_revision": track.get("artists_revision", 0),
+                "album_artists": track.get("album_artists", []),
+                "album_artists_revision": track.get("album_artists_revision", 0),
                 "duration": track.get("duration"),
                 "file_path": track.get("file_path"),
                 "stream_url": f"{base_url}/api/stream/{track_id}",

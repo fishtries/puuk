@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -72,13 +73,21 @@ def record_wave_feedback(
         )
 
     # 1. Сохраняем событие в user_wave_feedback
-    db.add_wave_feedback(
-        user_id=user_id,
-        track_id=feedback.track_id,
-        event_type=feedback.event_type,
-        listen_duration_ms=feedback.listen_duration_ms,
-        track_duration_ms=feedback.track_duration_ms
-    )
+    try:
+        db.add_wave_feedback(
+            user_id=user_id,
+            track_id=feedback.track_id,
+            event_type=feedback.event_type,
+            listen_duration_ms=feedback.listen_duration_ms,
+            track_duration_ms=feedback.track_duration_ms
+        )
+    except sqlite3.IntegrityError as exc:
+        # Check after the failed INSERT: deletion may race a preflight lookup.
+        # Other constraints (including a missing user) remain visible errors.
+        if (exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
+                and db.get_track(feedback.track_id) is None):
+            raise HTTPException(status_code=404, detail="Трек не найден") from exc
+        raise
 
     # 2. Если поставлен лайк, гарантируем запись в избранное
     if feedback.event_type == "like":

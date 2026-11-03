@@ -9,6 +9,10 @@ import sqlite3
 import unicodedata
 from typing import Any, Dict, List, Optional
 
+from repositories.artist_credits import (
+    CreditSource, get_credit_states, ingest_artist_credits, legacy_artist_source,
+    hydrate_album_credits, hydrate_track_credits, merge_album_credits, forget_artist_credits,
+)
 from repositories.base import (
     get_connection,
     TRACK_SUMMARY_COLUMNS,
@@ -22,20 +26,20 @@ VARIOUS_ARTISTS = "Various Artists"
 UNCHANGED = object()
 
 # Детерминированный порядок треков альбома:
-# 1. явная позиция от источника (album_track_position);
-# 2. диск (disc_number);
-# 3. номер трека (track_number, включая ведущие цифры "7/16" и алфавитно-цифровые вроде "A1");
+# 1. диск (disc_number);
+# 2. номер трека (track_number, включая ведущие цифры "7/16" и алфавитно-цифровые вроде "A1");
+# 3. явная позиция от источника (album_track_position, fallback если номеров нет);
 # 4. порядок добавления (rowid, стабильный fallback вместо алфавитного по названию);
 # 5. id трека (детерминированный tie-breaker).
 TRACKS_ORDER_SQL = """
     ORDER BY
-        CASE WHEN t.album_track_position IS NULL THEN 1 ELSE 0 END,
-        t.album_track_position,
         CASE WHEN t.disc_number IS NULL OR t.disc_number = '' THEN 1 ELSE 0 END,
         CAST(t.disc_number AS INTEGER),
         CASE WHEN t.track_number IS NULL OR t.track_number = '' THEN 1 ELSE 0 END,
         CAST(t.track_number AS INTEGER),
         t.track_number,
+        CASE WHEN t.album_track_position IS NULL THEN 1 ELSE 0 END,
+        t.album_track_position,
         t.rowid,
         t.id
 """
@@ -54,7 +58,7 @@ def normalize_text(value: Any) -> str:
     return " ".join(normalized.split()).casefold()
 
 
-def resolve_album(title, album_artist=None, year=None, cover_path=None) -> int:
+def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artist_source: CreditSource | None = None) -> int:
     """Единая точка создания/поиска альбома по идентичности (title, album_artist).
 
     Пустое название канонизируется в UNKNOWN_ALBUM_TITLE; пустой album_artist
@@ -71,6 +75,7 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None) -> int:
     for attempt in (0, 1):
         conn = get_connection()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM albums WHERE title_normalized = ? AND album_artist_normalized = ?",
@@ -96,6 +101,10 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None) -> int:
                         f"UPDATE albums SET {', '.join(updates)} WHERE id = ?",
                         tuple(params),
                     )
+                before = get_credit_states('album', [row['id']], conn=conn).get(str(row['id']))
+                after = ingest_artist_credits(conn, 'album', row['id'], artist_source if artist_source is not None else legacy_artist_source(album_artist))
+                if updates or before != after:
+                    bump_catalog_version(conn)
                 conn.commit()
                 return row["id"]
             cursor.execute(
@@ -106,8 +115,11 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None) -> int:
                 """,
                 (display_title, display_artist, clean_year, cover_path, norm_title, norm_artist),
             )
+            album_id = cursor.lastrowid
+            ingest_artist_credits(conn, 'album', album_id, artist_source if artist_source is not None else legacy_artist_source(album_artist))
+            bump_catalog_version(conn)
             conn.commit()
-            return cursor.lastrowid
+            return album_id
         except sqlite3.IntegrityError:
             conn.rollback()
             if attempt == 0:
@@ -127,7 +139,7 @@ def get_all_albums():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM albums ORDER BY title COLLATE NOCASE")
-    albums = [dict(row) for row in cursor.fetchall()]
+    albums = hydrate_album_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return albums
 
@@ -163,7 +175,7 @@ def get_album_tracks(album_id):
         WHERE t.album_id = ?
         {TRACKS_ORDER_SQL}
     """, (album_id,))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -195,7 +207,7 @@ def get_albums_catalog_rows(album_id=None):
             a.title COLLATE NOCASE,
             a.id
     """, tuple(params))
-    rows = [dict(row) for row in cursor.fetchall()]
+    rows = hydrate_album_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return rows
 
@@ -233,6 +245,7 @@ def update_album_fields(album_id, title=None, album_artist=None, year=UNCHANGED)
         f"UPDATE albums SET {', '.join(set_clauses)} WHERE id = ?",
         tuple(params),
     )
+    ingest_artist_credits(conn, 'album', album_id, legacy_artist_source(new_artist))
     # Название альбома видно в DTO каталога треков (поле album) — двигаем версию.
     bump_catalog_version(conn)
     conn.commit()
@@ -242,69 +255,89 @@ def update_album_fields(album_id, title=None, album_artist=None, year=UNCHANGED)
 
 
 def rebind_tracks_to_album(track_ids: List[str], target_album_id) -> int:
-    """Перепривязывает треки к целевому альбому. Возвращает число затронутых строк."""
+    """Explicit membership change, with its recovery snapshot in one transaction."""
     if not track_ids:
         return 0
     conn = get_connection()
-    cursor = conn.cursor()
-    placeholders = ",".join("?" for _ in track_ids)
-    cursor.execute(
-        f"UPDATE tracks SET album_id = ? WHERE id IN ({placeholders})",
-        (target_album_id, *track_ids),
-    )
-    count = cursor.rowcount
-    if count:
-        bump_catalog_version(conn)
-    conn.commit()
-    conn.close()
-    return count
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        count = 0
+        ids = list(dict.fromkeys(str(value) for value in track_ids))
+        for offset in range(0, len(ids), 400):
+            chunk = ids[offset:offset+400]
+            binds = ','.join('?' for _ in chunk)
+            count += conn.execute(f'UPDATE tracks SET album_id=? WHERE id IN ({binds})', (target_album_id, *chunk)).rowcount
+            conn.execute(f"UPDATE artist_credit_state SET recovery_album_id=? WHERE entity_type='track' AND entity_id IN ({binds})", (target_album_id, *chunk))
+        if count:
+            bump_catalog_version(conn)
+        conn.commit()
+        return count
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def merge_album_into(source_album_id, target_album_id) -> None:
-    """Сливает исходный альбом в целевой: переносит треки, дозаполняет поля, удаляет запись."""
+    """Preflight manual credits before moving any tracks or deleting the source."""
+    if source_album_id == target_album_id:
+        return
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tracks SET album_id = ? WHERE album_id = ?", (target_album_id, source_album_id))
-    cursor.execute("SELECT * FROM albums WHERE id IN (?, ?)", (source_album_id, target_album_id))
-    rows = {row["id"]: dict(row) for row in cursor.fetchall()}
-    source, target = rows.get(source_album_id), rows.get(target_album_id)
-    if target and source:
-        updates: List[str] = []
-        params: List[Any] = []
-        if not target.get("album_artist") and source.get("album_artist"):
-            updates.append("album_artist = ?")
-            params.append(source["album_artist"])
-        if not target.get("year") and source.get("year"):
-            updates.append("year = ?")
-            params.append(source["year"])
-        if not target.get("cover_path") and source.get("cover_path"):
-            updates.append("cover_path = ?")
-            params.append(source["cover_path"])
-        if updates:
-            updates.append("updated_at = CURRENT_TIMESTAMP")
-            params.append(target_album_id)
-            cursor.execute(
-                f"UPDATE albums SET {', '.join(updates)} WHERE id = ?",
-                tuple(params),
-            )
-    cursor.execute("DELETE FROM albums WHERE id = ?", (source_album_id,))
-    bump_catalog_version(conn)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        merge_album_credits(conn, source_album_id, target_album_id)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE artist_credit_state SET recovery_album_id=? WHERE entity_type='track' AND recovery_album_id=?", (target_album_id, source_album_id))
+        cursor.execute("UPDATE tracks SET album_id = ? WHERE album_id = ?", (target_album_id, source_album_id))
+        cursor.execute("SELECT * FROM albums WHERE id IN (?, ?)", (source_album_id, target_album_id))
+        rows = {row["id"]: dict(row) for row in cursor.fetchall()}
+        source, target = rows.get(source_album_id), rows.get(target_album_id)
+        if target and source:
+            updates: List[str] = []
+            params: List[Any] = []
+            if not target.get("year") and source.get("year"):
+                updates.append("year = ?")
+                params.append(source["year"])
+            if not target.get("cover_path") and source.get("cover_path"):
+                updates.append("cover_path = ?")
+                params.append(source["cover_path"])
+            if updates:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(target_album_id)
+                cursor.execute(
+                    f"UPDATE albums SET {', '.join(updates)} WHERE id = ?",
+                    tuple(params),
+                )
+        cursor.execute("DELETE FROM albums WHERE id = ?", (source_album_id,))
+        bump_catalog_version(conn)
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def delete_empty_albums() -> int:
-    """Удаляет альбомы без треков. Возвращает число удалённых записей."""
+    """Explicit cleanup also forgets credit recovery decisions; registry survives."""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        DELETE FROM albums
-        WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)
-    """)
-    count = cursor.rowcount
-    conn.commit()
-    conn.close()
-    return count
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        ids = [r[0] for r in conn.execute('SELECT id FROM albums WHERE NOT EXISTS (SELECT 1 FROM tracks WHERE album_id=albums.id)')]
+        for album_id in ids:
+            forget_artist_credits(conn, 'album', album_id)
+            conn.execute('DELETE FROM albums WHERE id=?', (album_id,))
+        if ids:
+            bump_catalog_version(conn)
+        conn.commit()
+        return len(ids)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _most_frequent_track_value(cursor, album_id, expression: str) -> Optional[str]:
@@ -322,7 +355,7 @@ def _most_frequent_track_value(cursor, album_id, expression: str) -> Optional[st
     return row["val"] if row else None
 
 
-def backfill_album_identities() -> int:
+def backfill_album_identities(*, conn=None) -> int:
     """Миграция 008 (данные): заполнить нормализованную идентичность и слить дубли.
 
     - album_artist/year альбома выводятся из наиболее частого непустого значения
@@ -331,12 +364,14 @@ def backfill_album_identities() -> int:
     - в конце создаётся уникальный индекс идентичности.
     Повторный запуск — no-op. Возвращает число слитых дубликатов.
     """
-    conn = get_connection()
+    own = conn is None
+    conn = get_connection() if own else conn
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(albums)")
     cols = {row["name"].lower() for row in cursor.fetchall()}
     if "title_normalized" not in cols:
-        conn.close()
+        if own:
+            conn.close()
         return 0
 
     cursor.execute("SELECT id, title, album_artist, year FROM albums")
@@ -365,7 +400,8 @@ def backfill_album_identities() -> int:
             normalize_text(display_artist),
             album["id"],
         ))
-    conn.commit()
+    if own:
+        conn.commit()
 
     cursor.execute(
         "SELECT id, title_normalized, album_artist_normalized, album_artist, year, cover_path FROM albums"
@@ -390,18 +426,22 @@ def backfill_album_identities() -> int:
                 keeper["cover_path"] = dup["cover_path"]
             cursor.execute("DELETE FROM albums WHERE id = ?", (dup["id"],))
             merged += 1
-    conn.commit()
+    if own:
+        conn.commit()
 
     cursor.execute("""
         DELETE FROM albums
         WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)
     """)
-    conn.commit()
+    if own:
+        conn.commit()
 
     cursor.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_identity "
         "ON albums(title_normalized, album_artist_normalized)"
     )
-    conn.commit()
-    conn.close()
+    if own:
+        conn.commit()
+    if own:
+        conn.close()
     return merged

@@ -2,6 +2,7 @@
 import sqlite3
 
 from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
+from repositories.artist_credits import hydrate_track_credits
 
 
 # --- Избранное (Favorites) ---
@@ -46,7 +47,7 @@ def get_user_favorites(user_id: int) -> list[dict]:
         WHERE uf.user_id = ?
         ORDER BY uf.added_at DESC
     """, (user_id,))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -79,10 +80,12 @@ def get_favorites_fingerprint(user_id: int) -> str:
 
 def add_history(user_id: int, track_id: str):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO user_history (user_id, track_id) VALUES (?, ?)", (user_id, track_id))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO user_history (user_id, track_id) VALUES (?, ?)", (user_id, track_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_user_history(user_id: int, limit: int = 50) -> list[dict]:
     conn = get_connection()
@@ -101,7 +104,7 @@ def get_user_history(user_id: int, limit: int = 50) -> list[dict]:
         ORDER BY uh.played_at DESC, uh.id DESC
         LIMIT ?
     """, (user_id, limit))
-    history = [dict(row) for row in cursor.fetchall()]
+    history = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return history
 

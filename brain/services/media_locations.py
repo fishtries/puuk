@@ -8,6 +8,19 @@ from config import get_effective_music_dir, COLLECTION_NAME
 from services.recommendation_service import client
 
 
+def _qdrant_point_id(track_id):
+    """Return an ID accepted by Qdrant, or None for SQLite-only identifiers."""
+    value = str(track_id).strip()
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError):
+        if len(value) <= 20 and value.isascii() and value.isdecimal():
+            number = int(value)
+            if number <= 2**64 - 1:
+                return number
+        return None
+
+
 def resolve_safe_music_file(path: Optional[str], music_dir: Optional[str] = None) -> Optional[str]:
     """
     Разрешает путь к файлу (абсолютный или относительный) и строго проверяет,
@@ -53,11 +66,12 @@ def locate_track_file(track_id: str, fallback_to_qdrant: bool = True) -> Optiona
     if db_track and db_track.get("file_path"):
         file_path = resolve_existing_file_path(db_track["file_path"])
 
-    if not file_path and fallback_to_qdrant and track_id and str(track_id).strip():
+    point_id = _qdrant_point_id(track_id) if track_id is not None else None
+    if not file_path and fallback_to_qdrant and point_id is not None:
         try:
             records = client.retrieve(
                 collection_name=COLLECTION_NAME,
-                ids=[track_id],
+                ids=[point_id],
                 with_payload=True,
             )
             if records and records[0].payload:
@@ -156,10 +170,11 @@ def ensure_track_from_file(file_path: str, track_id: Optional[str] = None) -> Op
         return db_track
 
     from metadata import read_audio_metadata
+    from repositories.artist_credits import audio_artist_source
     try:
         meta = read_audio_metadata(safe_path)
         alb_id = (
-            db.resolve_album(meta.album, album_artist=meta.album_artist or meta.artist, year=meta.year)
+            resolve_import_album(track_id, meta.album, meta.album_artist, year=meta.year, artist_source=audio_artist_source(meta, album=True))
             if meta.album else None
         )
         db.add_or_update_track(
@@ -183,6 +198,36 @@ def ensure_track_from_file(file_path: str, track_id: Optional[str] = None) -> Op
         return None
 
 
+def payload_artist_source(payload, key):
+    from repositories.artist_credits import CreditSource, legacy_artist_source
+    if key in payload and isinstance(payload[key], list):
+        names = []
+        for item in payload[key]:
+            if isinstance(item, dict) and isinstance(item.get('name'), str):
+                names.append(item['name'])
+            elif isinstance(item, str):
+                names.append(item)
+            else:
+                return None
+        return CreditSource('qdrant', names)
+    return legacy_artist_source(payload.get('album_artist' if key == 'album_artists' else 'artist'))
+
+
+def resolve_import_album(track_id, title, album_artist, year=None, artist_source=None):
+    if not title:
+        return None
+    # Retain raw identity, including a surviving snapshot after accidental row loss.
+    from repositories.albums import normalize_text
+    from repositories.artist_credits import get_recovery_album
+    if not album_artist:
+        existing = db.get_track(track_id)
+        album = (db.get_album(existing['album_id']) if existing and existing.get('album_id')
+                 else get_recovery_album(track_id) if not existing else None)
+        if album and normalize_text(album.get('title')) == normalize_text(title):
+            album_artist = album.get('album_artist') or ''
+    return db.resolve_album(title, album_artist=album_artist or '', year=year, artist_source=artist_source)
+
+
 def ensure_track_in_db(track_id: str, payload: Optional[dict] = None) -> Optional[dict]:
     """
     Гарантирует наличие трека в SQLite, восстанавливая его из Qdrant или с диска,
@@ -197,13 +242,15 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None) -> Optiona
             return db_track
     except Exception as e:
         print(f"[ensure_track_in_db] DB read error for {track_id}: {e}")
+        return None
 
     # 1. Если payload не передан явно, запрашиваем точку из Qdrant
-    if payload is None:
+    point_id = _qdrant_point_id(track_id)
+    if payload is None and point_id is not None:
         try:
             records = client.retrieve(
                 collection_name=COLLECTION_NAME,
-                ids=[track_id],
+                ids=[point_id],
                 with_payload=True,
             )
             if records and records[0].payload:
@@ -252,7 +299,7 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None) -> Optiona
             print(f"[ensure_track_in_db] Tag reading error for {actual_path}: {e}")
 
         album_id = (
-            db.resolve_album(str(album_title), album_artist=(album_artist or artist) if album_title else None, year=year)
+            resolve_import_album(track_id, str(album_title), album_artist, year=year, artist_source=payload_artist_source(payload, "album_artists"))
             if album_title else None
         )
 
@@ -273,6 +320,7 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None) -> Optiona
                 file_mtime_ns=(meta.file_mtime_ns if meta else None) or payload.get("file_mtime_ns"),
                 track_number=meta.track_number if meta else None,
                 disc_number=meta.disc_number if meta else None,
+                artist_source=payload_artist_source(payload, "artists"),
             )
 
             if meta:

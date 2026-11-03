@@ -175,14 +175,14 @@ class AlbumRepositoryTest(unittest.TestCase):
         self.assertEqual([t["id"] for t in tracks], ["no_num_z", "no_num_a", "no_num_m"])
         self.assertEqual([t["title"] for t in tracks], ["Zulu Opening", "Alpha Ballad", "Middle Groove"])
 
-    def test_track_order_album_track_position_prioritized(self):
-        aid = db.resolve_album("Source Position Test", album_artist="Artist")
+    def test_track_order_track_number_prioritized_over_album_track_position(self):
+        aid = db.resolve_album("Track Number Priority Test", album_artist="Artist")
         conn = db.get_connection()
         cursor = conn.cursor()
         for tid, title, trk, pos in [
-            ("pos_3", "Song Three", "99", 3),
-            ("pos_1", "Song One", "50", 1),
-            ("pos_2", "Song Two", "10", 2),
+            ("trk_pos_3", "Song Three", "1", 3),
+            ("trk_pos_1", "Song One", "3", 1),
+            ("trk_pos_2", "Song Two", "2", 2),
         ]:
             cursor.execute(
                 "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number, album_track_position) "
@@ -193,8 +193,49 @@ class AlbumRepositoryTest(unittest.TestCase):
         conn.close()
 
         tracks = db.get_album_tracks(aid)
-        self.assertEqual([t["id"] for t in tracks], ["pos_1", "pos_2", "pos_3"])
+        self.assertEqual([t["id"] for t in tracks], ["trk_pos_3", "trk_pos_2", "trk_pos_1"])
+        self.assertEqual([t["track_number"] for t in tracks], ["1", "2", "3"])
+
+    def test_track_order_album_track_position_fallback_when_no_track_number(self):
+        aid = db.resolve_album("Source Position Fallback Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        for tid, title, pos in [
+            ("no_trk_3", "Song Three", 3),
+            ("no_trk_1", "Song One", 1),
+            ("no_trk_2", "Song Two", 2),
+        ]:
+            cursor.execute(
+                "INSERT INTO tracks (id, file_path, title, album_id, artist, album_track_position) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (tid, f"{tid}.mp3", title, aid, "Artist", pos),
+            )
+        conn.commit()
+        conn.close()
+
+        tracks = db.get_album_tracks(aid)
+        self.assertEqual([t["id"] for t in tracks], ["no_trk_1", "no_trk_2", "no_trk_3"])
         self.assertEqual([t["album_track_position"] for t in tracks], [1, 2, 3])
+
+    def test_migration_013_clears_album_track_position(self):
+        aid = db.resolve_album("Migration 013 Test", album_artist="Artist")
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO tracks (id, file_path, title, album_id, artist, track_number, album_track_position) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("mig_13_track", "mig_13.mp3", "Migrated Track", aid, "Artist", "1", 5),
+        )
+        conn.commit()
+        conn.close()
+
+        # Execute migration 013 statement directly to verify its effect
+        with db.get_connection() as conn:
+            conn.execute("UPDATE tracks SET album_track_position = NULL WHERE album_track_position IS NOT NULL")
+            conn.commit()
+
+        track = db.get_track("mig_13_track")
+        self.assertIsNone(track["album_track_position"])
 
     def test_track_order_alphanumeric_vinyl_sides(self):
         aid = db.resolve_album("Vinyl Sides Test", album_artist="Artist")
@@ -325,6 +366,11 @@ class AlbumApiTest(unittest.TestCase):
         _, f1 = self._make_track("edit_1", aid, "alb_edit_1.mp3")
         _, f2 = self._make_track("edit_2", aid, "alb_edit_2.mp3")
 
+        from repositories.artist_credits import get_credit_states
+        revision = get_credit_states('album', [aid])[str(aid)]['revision']
+        put = self.client.put(f"/api/albums/{aid}/artists", json={"artists": [{"name": "New Edit Artist"}], "expected_revision": revision}, headers=self.admin_headers)
+        self.assertEqual(put.status_code, 200, put.text)
+        before_artists = [read_audio_metadata(path).album_artist for path in (f1, f2)]
         resp = self.client.patch(
             f"/api/albums/{aid}",
             json={"title": "Album Edit Renamed", "album_artist": "New Edit Artist", "year": "2002"},
@@ -335,13 +381,13 @@ class AlbumApiTest(unittest.TestCase):
 
         updated = db.get_album(aid)
         self.assertEqual(updated["title"], "Album Edit Renamed")
-        self.assertEqual(updated["album_artist"], "New Edit Artist")
+        self.assertEqual(updated["album_artist"], "Edit Artist")
         self.assertEqual(updated["year"], "2002")
 
-        for path in (f1, f2):
+        for path, old_artist in zip((f1, f2), before_artists):
             meta = read_audio_metadata(path)
             self.assertEqual(meta.album, "Album Edit Renamed")
-            self.assertEqual(meta.album_artist, "New Edit Artist")
+            self.assertEqual(meta.album_artist, old_artist)
             self.assertEqual(meta.year, "2002")
 
     def test_patch_album_merges_on_identity_conflict(self):

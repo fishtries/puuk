@@ -5,7 +5,8 @@ from typing import Optional, Literal, Union, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator, StrictInt, Field
+from typing import Annotated
 
 import db
 from auth import get_current_user
@@ -79,6 +80,30 @@ class TrackEditPayload(BaseModel):
         return self
 
 
+class ArtistSelector(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: Optional[str] = None
+    name: Optional[str] = None
+
+    @model_validator(mode="after")
+    def one_selector(self):
+        if len(self.model_fields_set) != 1 or (self.id is None and self.name is None):
+            raise ValueError("Provide exactly one of id or name")
+        return self
+
+
+class ArtistCreditsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artists: list[ArtistSelector] = Field(max_length=100)
+    expected_revision: Annotated[StrictInt, Field(ge=0)]
+
+
+@router.put("/tracks/{track_id}/artists")
+def put_track_artists(track_id: str, payload: ArtistCreditsPayload, request: Request, current_user: dict = Depends(get_current_user)):
+    from services.artist_credit_service import set_track_artists
+    return set_track_artists(track_id, [a.model_dump(exclude_unset=True) for a in payload.artists], payload.expected_revision, current_user, get_base_url(request))
+
+
 def _validate_uuid(track_id: str):
     try:
         uuid.UUID(track_id)
@@ -126,10 +151,15 @@ def get_all_tracks(
 
 
 @router.get("/tracks/{track_id}")
-def get_track_info(track_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+def get_track_info(track_id: str, request: Request, current_user: dict = Depends(get_current_user), credits_only: bool = False):
     """Retrieve track details including full ID3 metadata and tech specs."""
-    from services.track_metadata_service import get_track_metadata_details
     base_url = get_base_url(request)
+    if credits_only:
+        row = db.get_tracks_by_ids([track_id]).get(track_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Track not found")
+        return serialize_track(row, base_url, db.get_favorite_track_ids(current_user["id"]), include_lyrics=False)
+    from services.track_metadata_service import get_track_metadata_details
     return get_track_metadata_details(track_id, current_user, base_url)
 
 

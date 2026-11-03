@@ -48,6 +48,8 @@ def apply_migrations(conn):
             if version not in applied_versions:
                 filepath = os.path.join(migrations_dir, sql_file)
                 try:
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN IMMEDIATE")
                     with open(filepath, "r", encoding="utf-8") as f:
                         script = f.read()
                     statements = [s.strip() for s in script.split(";") if s.strip()]
@@ -79,6 +81,17 @@ def apply_migrations(conn):
                             if "duplicate column name" in msg or "already exists" in msg:
                                 continue
                             raise
+                    if version == 8:
+                        from repositories.albums import backfill_album_identities
+                        backfill_album_identities(conn=conn)
+                    elif version == 12:
+                        from repositories.artist_credits import backfill_artist_credits
+                        from repositories.base import bump_catalog_version
+                        backfill_artist_credits(conn)
+                        bump_catalog_version(conn)
+                    elif version == 13:
+                        from repositories.base import bump_catalog_version
+                        bump_catalog_version(conn)
                     cursor.execute("INSERT INTO schema_migrations (version, filename) VALUES (?, ?)", (version, sql_file))
                     conn.commit()
                 except Exception as e:
@@ -395,13 +408,6 @@ def init_db():
 
     # Верификация полноты схемы (гарантия отсутствия частично примененных миграций)
     verify_and_repair_schema(cursor)
-
-    # Миграция 008: нормализация идентичности альбомов + уникальный индекс.
-    try:
-        from repositories.albums import backfill_album_identities
-        backfill_album_identities()
-    except Exception as e:
-        print(f"[DB Migration] Warning during album identity backfill: {e}")
 
     # 11. Миграция дефолтного администратора
     admin_username = os.getenv("PUUK_ADMIN_USERNAME", "admin")

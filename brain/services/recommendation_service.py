@@ -1,5 +1,6 @@
 """«Моя Волна» recommendations: hybrid vector search, BPM re-ranking, diversity penalty."""
 import os
+import logging
 import random
 from collections import Counter
 from typing import Optional
@@ -9,6 +10,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import RecommendQuery, RecommendInput, Filter, FieldCondition, MatchValue
 
 import db
+from repositories.artist_credits import get_credit_states, artist_id_for_name
+from repositories.wave import get_recent_artist_counts
 from config import QDRANT_URL, COLLECTION_NAME, WAVE_PERSONALIZATION_WEIGHT, WAVE_EXPLORE_RATIO
 from user_profile import get_or_compute_user_embedding
 
@@ -48,45 +51,50 @@ def _artist_from_file_path(file_path: Optional[str]) -> Optional[str]:
 
 
 class _ArtistResolver:
-    """
-    Резолвер исполнителя на время одного recommendation-запроса.
-    Кэширует нормализованные ключи, чтобы не делать отдельный SQLite-запрос
-    на каждого кандидата из пула. Из БД тянется только (id, artist),
-    без полной выгрузки каталога.
-    """
+    """Per-request SQLite-first credit cache; missing rows use payload only."""
 
     def __init__(self):
-        self._cache: dict[str, Optional[str]] = {}
-        self._artist_map: Optional[dict[str, Optional[str]]] = None
+        self._cache = {}
+        self._failed = False
 
-    def _load_artist_map(self) -> dict[str, Optional[str]]:
-        if self._artist_map is None:
-            try:
-                self._artist_map = db.get_track_artist_map()
-            except Exception:
-                self._artist_map = {}
-        return self._artist_map
+    def prefetch(self, track_ids):
+        missing = list(dict.fromkeys(str(t) for t in track_ids if str(t) not in self._cache))
+        if not missing:
+            return
+        if self._failed:
+            self._cache.update({tid: None for tid in missing})
+            return
+        try:
+            states = get_credit_states('track', missing)
+            for tid in missing:
+                state = states.get(tid)
+                self._cache[tid] = frozenset(a['id'] for a in state['artists']) if state is not None else None
+        except Exception:
+            logging.getLogger(__name__).warning('Artist credit lookup failed; using payload for this request', exc_info=True)
+            self._failed = True
+            self._cache.update({tid: None for tid in missing})
 
-    def key(self, payload: dict, track_id: str) -> Optional[str]:
-        cached = self._cache.get(track_id, _UNSET)
-        if cached is not _UNSET:
+    def recent_counts(self, user_id):
+        if not user_id or self._failed:
+            return {}
+        try:
+            return get_recent_artist_counts(user_id, limit=5)
+        except Exception:
+            logging.getLogger(__name__).warning('Artist credit history lookup failed; omitting recent penalty', exc_info=True)
+            self._failed = True
+            return {}
+
+    def keys(self, payload, track_id):
+        cached = self._cache.get(str(track_id))
+        if cached is not None:
             return cached
-
-        payload = payload or {}
-        artist = payload.get("artist")
-
-        if not artist:
-            artist = self._load_artist_map().get(str(track_id))
-
-        if not artist:
-            artist = _artist_from_file_path(payload.get("file_path"))
-
-        key = " ".join(str(artist).casefold().split()) if artist else None
-        self._cache[track_id] = key
-        return key
-
-
-_UNSET = object()
+        payload = payload if isinstance(payload, dict) else {}
+        if isinstance(payload.get('artists'), list):
+            return frozenset(artist_id_for_name(a.get('name')) for a in payload['artists']
+                             if isinstance(a, dict) and isinstance(a.get('name'), str) and artist_id_for_name(a['name']))
+        name = payload.get('artist') or _artist_from_file_path(payload.get('file_path'))
+        key = artist_id_for_name(name) if isinstance(name, str) else None
+        return frozenset([key]) if key else frozenset()
 
 
 def select_diverse_recommendations(
@@ -113,25 +121,31 @@ def select_diverse_recommendations(
     if band_score_eps > 0:
         ordered = _shuffle_score_bands(ordered, band_score_eps)
 
+    resolver.prefetch([str(p.id) for p in ordered])
     keyed: list = []
+    seen = set()
     unknown: list = []
     for point in ordered:
-        key = resolver.key(point.payload or {}, str(point.id))
-        if key:
-            keyed.append((key, point))
+        track_id = str(point.id)
+        if track_id in seen:
+            continue
+        seen.add(track_id)
+        keys = resolver.keys(point.payload or {}, track_id)
+        if keys:
+            keyed.append((keys, point))
         else:
             unknown.append(point)
 
     selected: list = []
     artist_counts: Counter = Counter()
 
-    for key, point in keyed:
+    for keys, point in keyed:
         if len(selected) >= limit:
             break
-        if artist_counts[key] >= max_tracks_per_artist:
+        if any(artist_counts[key] >= max_tracks_per_artist for key in keys):
             continue
         selected.append(point)
-        artist_counts[key] += 1
+        artist_counts.update(keys)
 
     # Fallback 1: кандидаты с неизвестным исполнителем (не ломают diversity-группы).
     if len(selected) < limit:
@@ -142,14 +156,14 @@ def select_diverse_recommendations(
 
     # Fallback 2: мягкое ослабление лимита исполнителя, если пачка всё ещё не набрана.
     if len(selected) < limit:
-        chosen = {id(point) for point in selected}
+        chosen = {str(point.id) for point in selected}
         for _, point in keyed:
             if len(selected) >= limit:
                 break
-            if id(point) in chosen:
+            if str(point.id) in chosen:
                 continue
             selected.append(point)
-            chosen.add(id(point))
+            chosen.add(str(point.id))
 
     return selected
 
@@ -189,7 +203,7 @@ def _shuffle_score_bands(ordered: list, band_score_eps: float) -> list:
 
 def apply_diversity_penalty(
     scored_points: list,
-    recent_artists: list[str],
+    recent_artists: dict[str, int],
     penalty: float = 0.05,
     resolver: Optional["_ArtistResolver"] = None,
 ) -> list:
@@ -202,15 +216,15 @@ def apply_diversity_penalty(
         return scored_points
 
     resolver = resolver or _ArtistResolver()
-    artist_counts = Counter(" ".join(str(a).casefold().split()) for a in recent_artists if a)
+    artist_counts = recent_artists
+    resolver.prefetch([str(p.id) for p in scored_points])
 
     adjusted = []
     for p in scored_points:
-        key = resolver.key(p.payload or {}, str(p.id))
-        if key:
-            reps = artist_counts.get(key, 0)
-            if reps > 0:
-                p.score -= (penalty * reps)
+        keys = resolver.keys(p.payload or {}, str(p.id))
+        reps = max((artist_counts.get(key, 0) for key in keys), default=0)
+        if reps > 0:
+            p.score -= penalty * reps
         adjusted.append(p)
 
     adjusted.sort(key=lambda x: x.score, reverse=True)
@@ -365,7 +379,8 @@ def get_smart_recommendations(
         else:
             scored_points.append(p)
 
-    recent_artists = db.get_recent_artists(user_id, limit=5) if user_id else []
+    resolver.prefetch([str(p.id) for p in candidate_points])
+    recent_artists = resolver.recent_counts(user_id)
 
     # 5. Diversity penalty (избегание повторения недавних артистов)
     if recent_artists:
@@ -402,8 +417,7 @@ def get_smart_recommendations(
             chosen.add(str(point.id))
 
     if os.getenv("WAVE_RECO_DEBUG"):
-        known_keys = {resolver.key(p.payload or {}, str(p.id)) for p in selected}
-        known_keys.discard(None)
+        known_keys = set().union(*(resolver.keys(p.payload or {}, str(p.id)) for p in selected))
         print(
             f"[SmartRec] user={user_id} track={current_track_id} "
             f"pool={len(candidate_points)} explore+{explore_added} "
@@ -476,6 +490,10 @@ def build_wave_track_payload(
     track_id = str(pick.id)
     if db_track is None:
         db_track = db.get_track(track_id)
+    if db_track and "artists" not in db_track:
+        hydrated = db.get_tracks_by_ids([track_id]).get(track_id)
+        if hydrated:
+            db_track = {**db_track, **hydrated}
     if not db_track:
         from services.media_locations import ensure_track_in_db
         db_track = ensure_track_in_db(track_id, pick.payload)
@@ -496,6 +514,11 @@ def build_wave_track_payload(
         "track_id": track_id,
         "title": title,
         "artist": artist,
+        "artist_id": db_track.get("artist_id") if db_track else None,
+        "artists": db_track.get("artists", []) if db_track else pick.payload.get("artists", []),
+        "artists_revision": db_track.get("artists_revision", 0) if db_track else 0,
+        "album_artists": db_track.get("album_artists", []) if db_track else [],
+        "album_artists_revision": db_track.get("album_artists_revision", 0) if db_track else 0,
         "duration": duration,
         "file_path": file_path,
         "bpm": pick.payload.get("bpm"),

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from auth import get_current_user
 from config import get_base_url
 from services import album_service
+from routers.tracks import ArtistCreditsPayload
 
 router = APIRouter(prefix="/api/albums", tags=["albums"])
 
@@ -68,3 +69,9 @@ def update_album(album_id: int, payload: AlbumEditPayload, request: Request, cur
     """
     base_url = get_base_url(request)
     return album_service.update_album(album_id, payload, current_user, base_url)
+
+
+@router.put("/{album_id}/artists")
+def put_album_artists(album_id: int, payload: ArtistCreditsPayload, request: Request, current_user: dict = Depends(get_current_user)):
+    from services.artist_credit_service import set_album_artists
+    return set_album_artists(album_id, [a.model_dump(exclude_unset=True) for a in payload.artists], payload.expected_revision, current_user, get_base_url(request))

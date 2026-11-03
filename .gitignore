@@ -23,6 +23,8 @@ brain/lyrics_worker.log
 # Temp / working files
 brain/temp_audio/
 brain/scratch/
+brain/artist_artwork/
+claudemy/
 *.MP4
 *.mp4
 

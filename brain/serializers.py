@@ -33,10 +33,17 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
 
     has_lyrics_val = bool(r.get("has_lyrics")) if "has_lyrics" in r else bool(r.get("lyrics") and str(r.get("lyrics")).strip())
 
+    artist_id = r.get("artist_id")
+
     return {
         "id": track_id,
         "title": r.get("title", ""),
         "artist": r.get("artist", ""),
+        "artist_id": artist_id,
+        "artists": r.get("artists", []),
+        "artists_revision": r.get("artists_revision", 0),
+        "album_artists": r.get("album_artists", []),
+        "album_artists_revision": r.get("album_artists_revision", 0),
         "album": album_name,
         "album_id": r.get("album_id"),
         "album_artist": r.get("album_artist"),

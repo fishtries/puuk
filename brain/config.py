@@ -9,6 +9,7 @@ MUSIC_DIR = os.getenv("MUSIC_DIR", "/mnt/data/projects/puuk/music")
 BASE_DIR = os.path.dirname(__file__)
 DEFAULT_COVER_PATH = os.path.join(BASE_DIR, "default_cover.jpg")
 DEFAULT_COVER_COLOR = "#13141f"
+ARTIST_ARTWORK_DIR = os.getenv("ARTIST_ARTWORK_DIR", os.path.join(BASE_DIR, "artist_artwork"))
 WAVE_PERSONALIZATION_WEIGHT = float(os.getenv("WAVE_PERSONALIZATION_WEIGHT", "0.35"))
 # Доля exploration-пула кандидатов от чистого вектора вкуса (ширина выхода за кластер трека).
 WAVE_EXPLORE_RATIO = float(os.getenv("WAVE_EXPLORE_RATIO", "0.25"))

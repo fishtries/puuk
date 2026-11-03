@@ -135,7 +135,8 @@ class TestWavePersonalization(unittest.TestCase):
             MockScoredPoint("t3", 0.85, "Daft Punk")
         ]
 
-        recent_artists = ["Queen", "Queen", "Nirvana"]
+        from repositories.artist_credits import artist_id_for_name
+        recent_artists = {artist_id_for_name("Queen"): 2, artist_id_for_name("Nirvana"): 1}
         adjusted = apply_diversity_penalty(points, recent_artists, penalty=0.05)
 
         # Queen имеет 2 повторения в истории -> штраф 0.10

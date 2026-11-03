@@ -4,9 +4,10 @@ from pathlib import Path
 
 import db
 from config import get_effective_music_dir
-from services.media_locations import extract_full_metadata
+from services.media_locations import resolve_import_album
+from repositories.artist_credits import audio_artist_source
 
-SUPPORTED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg'}
+SUPPORTED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus'}
 
 
 def scan_library():
@@ -26,13 +27,7 @@ def scan_library():
             track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
             try:
                 meta = read_audio_metadata(str(file_path))
-                # Идентичность альбома = (название, album_artist); без альбомного
-                # артиста fallback на исполнителя трека — временное значение импорта.
-                album_id = db.resolve_album(
-                    meta.album,
-                    album_artist=meta.album_artist or meta.artist,
-                    year=meta.year,
-                )
+                album_id = resolve_import_album(track_id, meta.album, meta.album_artist, year=meta.year, artist_source=audio_artist_source(meta, album=True))
                 db_track = db.get_track(track_id)
                 file_changed = False
                 if db_track:
@@ -46,6 +41,7 @@ def scan_library():
                     track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
                     duration=meta.duration, genre=meta.genre,
                     track_number=meta.track_number, disc_number=meta.disc_number,
+                    artist_source=audio_artist_source(meta),
                 )
                 # Режим сканера: пустой жанр в файле не затирает жанр в БД (например,
                 # выставленный вручную через редактор тегов).
@@ -55,9 +51,6 @@ def scan_library():
                     db.reset_track_loudness_pending(track_id, file_size=meta.file_size, file_mtime_ns=meta.file_mtime_ns)
             except Exception as e:
                 print(f"[scan] Error scanning {file_path}: {e}")
-                title, artist, album, lyrics, duration = extract_full_metadata(rel_path)
-                album_id = db.resolve_album(album, album_artist=artist)
-                db.add_or_update_track(track_id, rel_path, title, album_id, artist, lyrics, duration=duration)
 
             added += 1
 

@@ -8,6 +8,11 @@ from repositories.base import (
     TRACK_SUMMARY_COLUMNS,
     bump_catalog_version,
 )
+from repositories.artist_credits import (
+    CreditSource, artist_id_for_name, normalize_artist_name, ingest_artist_credits,
+    legacy_artist_source, audio_artist_source, hydrate_track_credits, hydrate_album_credits,
+    get_credit_states, forget_artist_credits,
+)
 
 
 def get_all_tracks():
@@ -19,7 +24,7 @@ def get_all_tracks():
         LEFT JOIN albums a ON a.id = t.album_id
         ORDER BY t.title
     """)
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -34,27 +39,27 @@ def get_tracks_page(limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         ORDER BY t.title
         LIMIT ? OFFSET ?
     """, (limit, offset))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
 def get_tracks_by_ids(track_ids) -> Dict[str, Dict[str, Any]]:
-    """Карта id -> строка каталога (без lyrics) для пачек (Волна, жанровые подборки)."""
-    ids = [str(track_id) for track_id in (track_ids or []) if track_id]
+    """Bounded batch lookup, including effective credit metadata."""
+    ids = list(dict.fromkeys(str(value) for value in (track_ids or []) if value))
     if not ids:
         return {}
     conn = get_connection()
-    placeholders = ",".join("?" for _ in ids)
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album
-        FROM tracks t
-        LEFT JOIN albums a ON a.id = t.album_id
-        WHERE t.id IN ({placeholders})
-    """, ids)
-    mapping = {row["id"]: dict(row) for row in cursor.fetchall()}
-    conn.close()
-    return mapping
+    try:
+        rows = []
+        for offset in range(0, len(ids), 400):
+            chunk = ids[offset:offset+400]
+            binds = ','.join('?' for _ in chunk)
+            rows.extend(dict(row) for row in conn.execute(f"""SELECT {TRACK_SUMMARY_COLUMNS},a.title AS album
+                FROM tracks t LEFT JOIN albums a ON a.id=t.album_id WHERE t.id IN ({binds})""", chunk))
+        return {row['id']: row for row in hydrate_track_credits(rows, conn=conn)}
+    finally:
+        conn.close()
+
 
 def get_catalog_tracks() -> List[Dict[str, Any]]:
     """Весь каталог без lyrics: для жанровых подборок (одна выгрузка на запрос)."""
@@ -66,7 +71,7 @@ def get_catalog_tracks() -> List[Dict[str, Any]]:
         LEFT JOIN albums a ON a.id = t.album_id
         ORDER BY t.title
     """)
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -80,14 +85,14 @@ def get_tracks_for_embedding_reconcile() -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, file_path, title, artist, duration, genre,
+        SELECT id, album_id, file_path, title, artist, duration, genre,
                file_size, file_mtime_ns,
                loudness_status, loudness_lufs, true_peak_db, normalization_gain_db,
                loudness_analysis_version, loudness_file_size, loudness_file_mtime_ns,
                loudness_error, loudness_retry_count
         FROM tracks
     """)
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -118,7 +123,9 @@ def delete_track(track_id) -> bool:
     """
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
+        forget_artist_credits(conn, 'track', track_id)
         cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         deleted = cursor.rowcount > 0
         cursor.execute("DELETE FROM track_mutation_journal WHERE track_id = ?", (track_id,))
@@ -140,10 +147,11 @@ def search_tracks(query, limit=30):
         SELECT {TRACK_SUMMARY_COLUMNS}, a.title as album_title
         FROM tracks t
         LEFT JOIN albums a ON t.album_id = a.id
-        WHERE t.title LIKE ? OR t.artist LIKE ? OR a.title LIKE ?
+        WHERE t.title LIKE ? OR EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+            WHERE ta.track_id=t.id AND ar.name LIKE ?) OR a.title LIKE ?
         LIMIT ?
     """, (search_term, search_term, search_term, limit))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 
@@ -157,43 +165,37 @@ def search_all(query, limit=30):
         SELECT {TRACK_SUMMARY_COLUMNS}, a.title as album_title
         FROM tracks t
         LEFT JOIN albums a ON t.album_id = a.id
-        WHERE t.title LIKE ? OR t.artist LIKE ? OR a.title LIKE ?
+        WHERE t.title LIKE ? OR EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+            WHERE ta.track_id=t.id AND ar.name LIKE ?) OR a.title LIKE ?
         LIMIT ?
     """, (search_term, search_term, search_term, limit))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
 
-    # 2. Albums (matching title or artist) — из сущности альбома, не из треков
     cursor.execute(f"""
-        SELECT a.id, a.title, a.album_artist, a.year,
-               COALESCE(a.album_artist,
-                        (SELECT t.artist FROM tracks t WHERE t.album_id = a.id
-                           AND t.artist IS NOT NULL AND t.artist != ''
-                         ORDER BY t.id LIMIT 1)) as artist,
-               (SELECT COUNT(*) FROM tracks t WHERE t.album_id = a.id) as track_count,
-               ({albums.REPRESENTATIVE_TRACK_SQL}) as cover_track_id
-        FROM albums a
-        WHERE a.title LIKE ?
-           OR a.album_artist LIKE ?
-           OR (SELECT t.artist FROM tracks t WHERE t.album_id = a.id LIMIT 1) LIKE ?
+        SELECT a.id,a.title,a.album_artist,a.year,
+               (SELECT COUNT(*) FROM tracks t WHERE t.album_id=a.id) AS track_count,
+               ({albums.REPRESENTATIVE_TRACK_SQL}) AS cover_track_id
+        FROM albums a WHERE a.title LIKE ? OR EXISTS (
+            SELECT 1 FROM album_artists aa JOIN artists ar ON ar.id=aa.artist_id
+            WHERE aa.album_id=a.id AND ar.name LIKE ?)
         LIMIT ?
-    """, (search_term, search_term, search_term, limit))
-    albums_rows = [dict(row) for row in cursor.fetchall()]
-
-    # 3. Artists (grouped by artist name)
+    """, (search_term, search_term, limit))
+    albums_rows = hydrate_album_credits([dict(row) for row in cursor.fetchall()], conn=conn)
+    conn.create_function('artist_fold', 1, lambda value: normalize_artist_name(value).casefold(), deterministic=True)
     cursor.execute("""
-        SELECT t.artist as name,
-               COUNT(DISTINCT t.id) as track_count,
-               COUNT(DISTINCT t.album_id) as album_count,
-               (SELECT t2.id FROM tracks t2 WHERE t2.artist = t.artist AND t2.id IS NOT NULL LIMIT 1) as cover_track_id
-        FROM tracks t
-        WHERE t.artist LIKE ? AND t.artist IS NOT NULL AND t.artist != ''
-        GROUP BY t.artist
-        LIMIT ?
-    """, (search_term, limit))
+        SELECT ar.id,ar.id AS artist_id,ar.name,
+          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id=ta.track_id WHERE ta.artist_id=ar.id) AS track_count,
+          (SELECT COUNT(*) FROM album_artists aa WHERE aa.artist_id=ar.id AND EXISTS (SELECT 1 FROM tracks t WHERE t.album_id=aa.album_id)) AS album_count,
+          (SELECT MIN(ta.track_id) FROM track_artists ta JOIN tracks t ON t.id=ta.track_id WHERE ta.artist_id=ar.id) AS cover_track_id
+        FROM artists ar WHERE instr(artist_fold(ar.normalized_name),artist_fold(?))>0
+          AND (EXISTS (SELECT 1 FROM track_artists ta JOIN tracks t ON t.id=ta.track_id WHERE ta.artist_id=ar.id)
+            OR EXISTS (SELECT 1 FROM album_artists aa WHERE aa.artist_id=ar.id AND EXISTS (SELECT 1 FROM tracks t WHERE t.album_id=aa.album_id)))
+        ORDER BY artist_fold(ar.name),ar.name,ar.id LIMIT ?
+    """, (query, limit))
     artists = [dict(row) for row in cursor.fetchall()]
-
     conn.close()
-    return {"tracks": tracks, "albums": albums_rows, "artists": artists}
+    return {'tracks': tracks, 'albums': albums_rows, 'artists': artists}
+
 
 def _clean_genre(genre: Optional[str]) -> Optional[str]:
     """Жанр из файла для сканера: пустые и заглушки ('Unknown') считаются отсутствием жанра."""
@@ -203,6 +205,24 @@ def _clean_genre(genre: Optional[str]) -> Optional[str]:
     if not cleaned or cleaned.lower() == "unknown":
         return None
     return cleaned
+
+def _track_fingerprint(conn, track_id):
+    row = conn.execute('SELECT * FROM tracks WHERE id=?', (track_id,)).fetchone()
+    return (tuple(row) if row else None, get_credit_states('track', [track_id], conn=conn).get(str(track_id)))
+
+
+def _recovery_album(conn, track_id, proposed_album_id):
+    """Recover the original release if a lost row's source identity is unchanged."""
+    existing = conn.execute('SELECT album_id FROM tracks WHERE id=?', (track_id,)).fetchone()
+    if existing:
+        return proposed_album_id if proposed_album_id is not None else existing[0]
+    state = conn.execute("SELECT recovery_album_id FROM artist_credit_state WHERE entity_type='track' AND entity_id=?", (str(track_id),)).fetchone()
+    if not state or state[0] is None:
+        return proposed_album_id
+    old = conn.execute('SELECT title_normalized,album_artist_normalized FROM albums WHERE id=?', (state[0],)).fetchone()
+    new = conn.execute('SELECT title_normalized,album_artist_normalized FROM albums WHERE id=?', (proposed_album_id,)).fetchone() if proposed_album_id is not None else None
+    return state[0] if old and (new is None or tuple(old) == tuple(new)) else proposed_album_id
+
 
 def add_or_update_track(
     track_id,
@@ -220,33 +240,45 @@ def add_or_update_track(
     track_number=None,
     disc_number=None,
     album_track_position=None,
+    *, artist_source: CreditSource | None = None,
 ):
     genre_value = _clean_genre(genre)
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM tracks WHERE id = ?", (track_id,))
-    if cursor.fetchone():
-        # Пустой/Unknown жанр из файла не затирает существующее непустое значение.
-        cursor.execute("""
-            UPDATE tracks
-            SET file_path = ?, title = ?, album_id = ?, artist = ?, lyrics = ?,
-                genre = COALESCE(?, genre),
-                cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration),
-                file_size = COALESCE(?, file_size),
-                file_mtime_ns = COALESCE(?, file_mtime_ns),
-                track_number = COALESCE(?, track_number),
-                disc_number = COALESCE(?, disc_number),
-                album_track_position = COALESCE(?, album_track_position)
-            WHERE id = ?
-        """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, file_size, file_mtime_ns, track_number, disc_number, album_track_position, track_id))
-    else:
-        cursor.execute("""
-            INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns, track_number, disc_number, album_track_position)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns, track_number, disc_number, album_track_position))
-    bump_catalog_version(conn)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        before = _track_fingerprint(conn, track_id)
+        album_id = _recovery_album(conn, track_id, album_id)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM tracks WHERE id = ?", (track_id,))
+        if cursor.fetchone():
+            # Пустой/Unknown жанр из файла не затирает существующее непустое значение.
+            cursor.execute("""
+                UPDATE tracks
+                SET file_path = ?, title = ?, album_id = ?, artist = ?, lyrics = ?,
+                    genre = COALESCE(?, genre),
+                    cover_color = COALESCE(?, cover_color), duration = COALESCE(?, duration),
+                    file_size = COALESCE(?, file_size),
+                    file_mtime_ns = COALESCE(?, file_mtime_ns),
+                    track_number = COALESCE(?, track_number),
+                    disc_number = COALESCE(?, disc_number),
+                    album_track_position = COALESCE(?, album_track_position)
+                WHERE id = ?
+            """, (file_path, title, album_id, artist, lyrics, genre_value, cover_color, duration, file_size, file_mtime_ns, track_number, disc_number, album_track_position, track_id))
+        else:
+            cursor.execute("""
+                INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns, track_number, disc_number, album_track_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns, track_number, disc_number, album_track_position))
+        ingest_artist_credits(conn, 'track', track_id, artist_source if artist_source is not None else legacy_artist_source(artist))
+        conn.execute("UPDATE artist_credit_state SET recovery_album_id=(SELECT album_id FROM tracks WHERE id=?) WHERE entity_type='track' AND entity_id=?", (track_id, str(track_id)))
+        if _track_fingerprint(conn, track_id) != before:
+            bump_catalog_version(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def update_track_cover_color(track_id, cover_color):
     conn = get_connection()
@@ -335,19 +367,33 @@ def set_track_reference_search_status(track_id: str, search_status: str):
     conn.commit()
     conn.close()
 
-def update_track_metadata(track_id, title, artist, album_id, lyrics):
+def update_track_metadata(track_id, title, artist, album_id, lyrics, *, artist_source: CreditSource | None = None):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE tracks
-        SET title = ?, artist = ?, album_id = ?, lyrics = ?
-        WHERE id = ?
-    """, (title, artist, album_id, lyrics, track_id))
-    bump_catalog_version(conn)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        before = _track_fingerprint(conn, track_id)
+        album_id = _recovery_album(conn, track_id, album_id)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tracks
+            SET title = ?, artist = ?, album_id = ?, lyrics = ?
+            WHERE id = ?
+        """, (title, artist, album_id, lyrics, track_id))
+        ingest_artist_credits(conn, 'track', track_id, artist_source if artist_source is not None else legacy_artist_source(artist))
+        conn.execute("UPDATE artist_credit_state SET recovery_album_id=(SELECT album_id FROM tracks WHERE id=?) WHERE entity_type='track' AND entity_id=?", (track_id, str(track_id)))
+        if _track_fingerprint(conn, track_id) != before:
+            bump_catalog_version(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
-def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Optional[int] = None):
+UNCHANGED = object()
+
+
+def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Any = UNCHANGED, *, artist_source: CreditSource | None = None, album_artist_source: CreditSource | None = None):
     """
     Обновляет запись трека в SQLite фактическими данными, прочитанными из файла на диске.
 
@@ -356,62 +402,89 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
     ручные PATCH/resync-потоки, где файл является источником истины.
     """
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        before = _track_fingerprint(conn, track_id)
+        album_id = _recovery_album(conn, track_id, album_id)
+        cursor = conn.cursor()
 
-    # Если lyrics не передан явно, берем из метаданных
-    lyr = lyrics if lyrics is not None else meta.lyrics
+        # Если lyrics не передан явно, берем из метаданных
+        lyr = lyrics if lyrics is not None else meta.lyrics
 
-    genre_value = _clean_genre(meta.genre) if preserve_empty_genre else meta.genre
-    genre_sql = "genre = COALESCE(?, genre)" if preserve_empty_genre else "genre = ?"
+        genre_value = _clean_genre(meta.genre) if preserve_empty_genre else meta.genre
+        genre_sql = "genre = COALESCE(?, genre)" if preserve_empty_genre else "genre = ?"
 
-    cover_inc_sql = ", cover_version = COALESCE(cover_version, 0) + 1" if cover_version_inc else ""
+        cover_inc_sql = ", cover_version = COALESCE(cover_version, 0) + 1" if cover_version_inc else ""
 
-    cursor.execute(f"""
-        UPDATE tracks
-        SET title = ?,
-            artist = ?,
-            album_id = COALESCE(?, album_id),
-            album_artist = ?,
-            year = ?,
-            {genre_sql},
-            track_number = ?,
-            disc_number = ?,
-            comment = ?,
-            lyrics = ?,
-            duration = COALESCE(?, duration),
-            bitrate = ?,
-            sample_rate = ?,
-            channels = ?,
-            format = ?,
-            file_size = ?,
-            file_mtime_ns = ?,
-            album_track_position = COALESCE(?, album_track_position)
-            {cover_inc_sql}
-        WHERE id = ?
-    """, (
-        meta.title,
-        meta.artist,
-        album_id,
-        meta.album_artist,
-        meta.year,
-        genre_value,
-        meta.track_number,
-        meta.disc_number,
-        meta.comment,
-        lyr,
-        meta.duration if meta.duration > 0 else None,
-        meta.bitrate,
-        meta.sample_rate,
-        meta.channels,
-        meta.format,
-        meta.file_size,
-        meta.file_mtime_ns,
-        album_track_position,
-        track_id
-    ))
-    bump_catalog_version(conn)
-    conn.commit()
-    conn.close()
+        if album_track_position is UNCHANGED:
+            pos_sql = "album_track_position = album_track_position"
+            pos_params = []
+        else:
+            pos_sql = "album_track_position = ?"
+            pos_params = [album_track_position]
+
+        cursor.execute(f"""
+            UPDATE tracks
+            SET title = ?,
+                artist = ?,
+                album_id = COALESCE(?, album_id),
+                album_artist = ?,
+                year = ?,
+                {genre_sql},
+                track_number = ?,
+                disc_number = ?,
+                comment = ?,
+                lyrics = ?,
+                duration = COALESCE(?, duration),
+                bitrate = ?,
+                sample_rate = ?,
+                channels = ?,
+                format = ?,
+                file_size = ?,
+                file_mtime_ns = ?,
+                {pos_sql}
+                {cover_inc_sql}
+            WHERE id = ?
+        """, (
+            meta.title,
+            meta.artist,
+            album_id,
+            meta.album_artist,
+            meta.year,
+            genre_value,
+            meta.track_number,
+            meta.disc_number,
+            meta.comment,
+            lyr,
+            meta.duration if meta.duration > 0 else None,
+            meta.bitrate,
+            meta.sample_rate,
+            meta.channels,
+            meta.format,
+            meta.file_size,
+            meta.file_mtime_ns,
+            *pos_params,
+            track_id
+        ))
+        ingest_artist_credits(conn, 'track', track_id, artist_source if artist_source is not None else audio_artist_source(meta))
+        conn.execute("UPDATE artist_credit_state SET recovery_album_id=(SELECT album_id FROM tracks WHERE id=?) WHERE entity_type='track' AND entity_id=?", (track_id, str(track_id)))
+        linked_album = conn.execute('SELECT album_id FROM tracks WHERE id=?', (track_id,)).fetchone()
+        if linked_album and linked_album[0] is not None:
+            source = album_artist_source if album_artist_source is not None else audio_artist_source(meta, album=True)
+            album_before = get_credit_states('album', [linked_album[0]], conn=conn)
+            ingest_artist_credits(conn, 'album', linked_album[0], source)
+            album_changed = album_before != get_credit_states('album', [linked_album[0]], conn=conn)
+        else:
+            album_changed = False
+        if _track_fingerprint(conn, track_id) != before or album_changed:
+            bump_catalog_version(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 
 # --- Журнал мутаций (Mutation Journal) ---
 

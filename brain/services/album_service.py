@@ -6,12 +6,14 @@ title/album_artist/year записываются в ID3-теги всех тре
 """
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+from repositories.artist_credits import hydrate_album_credits, hydrate_track_credits
 
 from fastapi import HTTPException
 
 import db
 from repositories.albums import UNCHANGED
 from serializers import serialize_track
+from services.artist_credit_lock import serialize_artist_credit_mutation
 from services.track_metadata_service import (
     check_track_edit_permissions,
     mutate_track_metadata,
@@ -24,6 +26,9 @@ def serialize_album(row: Dict[str, Any], base_url: str) -> Dict[str, Any]:
 
     `album_artist` — как хранится (может быть пустым), `artist` — display-значение
     с fallback "Various Artists" (совместимо с клиентскими типами).
+    `artist_id` — единственное место, где он выводится для альбомных DTO;
+    берётся из фактического исполнителя альбома и не подменяется ярлыком
+    "Various Artists" (иначе compilation получил бы несуществующего артиста).
     """
     cover_id = row.get("cover_track_id")
     stored_artist = row.get("album_artist") or ""
@@ -31,6 +36,9 @@ def serialize_album(row: Dict[str, Any], base_url: str) -> Dict[str, Any]:
         "id": row["id"],
         "title": row["title"],
         "album_artist": stored_artist,
+        "artist_id": row.get("artist_id"),
+        "artists": row.get("artists", []),
+        "artists_revision": row.get("artists_revision", 0),
         "artist": stored_artist or db.VARIOUS_ARTISTS,
         "year": row.get("year"),
         "track_count": row.get("track_count") or 0,
@@ -54,6 +62,7 @@ def get_album_detail(album_id: int, current_user: Optional[Dict[str, Any]], base
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
+    album = hydrate_album_credits([album])[0]
     track_rows = db.get_album_tracks(album_id)
     fav_ids = db.get_favorite_track_ids(current_user["id"]) if current_user else set()
 
@@ -77,6 +86,49 @@ def _normalize_year(value: Any) -> Optional[str]:
     return normalized or None
 
 
+def _split_album(source_id: int, title: str, artist: str, year: Any, track_ids: list[str]) -> int:
+    """Create a split release, copy its manual decision, and move successful tracks atomically."""
+    from repositories.albums import normalize_text
+    from repositories.artist_credits import (CreditSource, get_credit_states, ingest_artist_credits,
+        replace_artist_credits)
+    from repositories.base import bump_catalog_version
+
+    conn = db.get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        source = get_credit_states('album', [source_id], conn=conn)[str(source_id)]
+        row = conn.execute("SELECT id FROM albums WHERE title_normalized=? AND album_artist_normalized=?",
+                           (normalize_text(title), normalize_text(artist))).fetchone()
+        if row:
+            target_id = row['id']
+        else:
+            target_id = conn.execute("""INSERT INTO albums
+                (title, album_artist, year, title_normalized, album_artist_normalized)
+                VALUES (?, ?, ?, ?, ?)""", (title, artist or None, year,
+                normalize_text(title), normalize_text(artist))).lastrowid
+            ingest_artist_credits(conn, 'album', target_id, CreditSource(source['source_kind'], source['source_names']))
+        if target_id != source_id and source['manual']:
+            target = get_credit_states('album', [target_id], conn=conn)[str(target_id)]
+            if target['manual'] and target['artists'] != source['artists']:
+                raise HTTPException(409, detail={'code': 'album_credits_conflict', 'message': 'Составы альбомов конфликтуют'})
+            replace_artist_credits(conn, 'album', target_id,
+                [{'id': item['id']} for item in source['artists']], expected_revision=target['revision'])
+        for offset in range(0, len(track_ids), 400):
+            chunk = track_ids[offset:offset + 400]
+            marks = ','.join('?' for _ in chunk)
+            conn.execute(f'UPDATE tracks SET album_id=? WHERE id IN ({marks})', (target_id, *chunk))
+            conn.execute(f"UPDATE artist_credit_state SET recovery_album_id=? WHERE entity_type='track' AND entity_id IN ({marks})", (target_id, *chunk))
+        bump_catalog_version(conn)
+        conn.commit()
+        return target_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@serialize_artist_credit_mutation
 def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url: str) -> Dict[str, Any]:
     """PATCH /api/albums/{id}: правка релиза целиком.
 
@@ -91,14 +143,42 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
+    from repositories.artist_credits import normalize_artist_name, artist_id_for_name
+    from services.artist_credit_service import set_album_artists
+    hydrated = hydrate_album_credits([album])[0]
     track_rows = db.get_album_tracks(album_id)
+    if not track_rows and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    conn = db.get_connection()
+    try:
+        permission_rows = conn.execute("SELECT id, added_by_user_id FROM tracks WHERE album_id = ?", (album_id,)).fetchall()
+        for t in permission_rows:
+            check_track_edit_permissions(dict(t), current_user)
+    finally:
+        conn.close()
+    fs = set(getattr(payload, "model_fields_set", set()))
+    changed = set()
+    for field in fs & {"title", "year"}:
+        value, old = getattr(payload, field, None), album.get(field)
+        if ("" if value is None else str(value).strip()) != ("" if old is None else str(old).strip()):
+            changed.add(field)
+    if getattr(payload, "cover_action", "keep") != "keep" or getattr(payload, "cover_base64", None) or getattr(payload, "cover_url", None):
+        changed.add("cover_action")
+    if "album_artist" in fs:
+        value = normalize_artist_name(getattr(payload, "album_artist", None))
+        if value not in {normalize_artist_name(hydrated.get("album_artist")), normalize_artist_name(album.get("album_artist"))}:
+            if len(hydrated.get("artists", [])) > 1:
+                raise HTTPException(409, detail={"code": "structured_artists_required", "message": "Используйте редактор состава"})
+            if changed:
+                raise HTTPException(409, detail={"code": "artists_edit_separately", "message": "Измените состав отдельно"})
+            selectors = [{"name": value}] if artist_id_for_name(value) else []
+            detail = set_album_artists(album_id, selectors, hydrated["artists_revision"], current_user, base_url)
+            return {"status": "success", "changed": True, "merged": False, "failed_tracks": [], **detail}
+    fs.discard("album_artist")
+    if not changed:
+        return {"status": "success", "changed": False, "merged": False, "failed_tracks": [], **get_album_detail(album_id, current_user, base_url)}
     if not track_rows:
         raise HTTPException(status_code=400, detail="Album has no tracks")
-
-    for t in track_rows:
-        check_track_edit_permissions(t, current_user)
-
-    fs = set(payload.model_fields_set) if hasattr(payload, "model_fields_set") else set()
 
     new_title = album["title"]
     if "title" in fs:
@@ -116,13 +196,26 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
         new_year = _normalize_year(payload.year)
 
     cover_action = getattr(payload, "cover_action", "keep") or "keep"
-    prepare_cover_bytes(cover_action, getattr(payload, "cover_base64", None), getattr(payload, "cover_url", None))
 
     # Идентичность (title, album_artist): конфликт с существующим альбомом
     # означает merge — треки переезжают в уже существующую запись.
     existing = db.find_album_by_identity(new_title, new_artist)
     merge_mode = bool(existing and existing["id"] != album_id)
     canonical_id = existing["id"] if merge_mode else album_id
+    if merge_mode:
+        from repositories.artist_credits import merge_album_credits, AlbumCreditsConflict
+        conn = db.get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            merge_album_credits(conn, album_id, canonical_id)
+            conn.rollback()
+        except AlbumCreditsConflict:
+            conn.rollback()
+            raise HTTPException(409, detail={"code": "album_credits_conflict", "message": "Составы альбомов конфликтуют"})
+        finally:
+            conn.close()
+
+    prepare_cover_bytes(cover_action, getattr(payload, "cover_base64", None), getattr(payload, "cover_url", None))
 
     album_fields = {"album" if name == "title" else name for name in fs} & {"album", "album_artist", "year"}
 
@@ -200,6 +293,7 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
     elif merge_mode:
         # Частичный успех при merge: упавшие треки остались в исходной записи со
         # старыми тегами, успешные уже перепривязаны к canonical_id. merge отложен.
+        _split_album(album_id, new_title, new_artist, new_year, succeeded)
         db.update_album_fields(canonical_id, year=new_year if "year" in fs else UNCHANGED)
         result_album_id = canonical_id
     else:
@@ -207,10 +301,7 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
         # (старая идентичность), упавшие — там же. Разводим их по идентичности:
         # успешные -> новый альбом с новой идентичностью, упавшие остаются в
         # исходном (старая идентичность, старые теги).
-        new_album_id = db.resolve_album(new_title, album_artist=new_artist, year=new_year)
-        if new_album_id != album_id:
-            db.rebind_tracks_to_album(succeeded, new_album_id)
-        db.update_album_fields(new_album_id, year=new_year if "year" in fs else UNCHANGED)
+        new_album_id = _split_album(album_id, new_title, new_artist, new_year, succeeded)
         result_album_id = new_album_id
 
     db.delete_empty_albums()

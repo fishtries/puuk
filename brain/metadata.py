@@ -33,6 +33,8 @@ class AudioMetadata:
     artist: str = ""
     album: str = ""
     album_artist: Optional[str] = None
+    artists: Optional[list[str]] = None
+    album_artists: Optional[list[str]] = None
     year: Optional[str] = None
     genre: Optional[str] = None
     track_number: Optional[str] = None
@@ -150,6 +152,15 @@ def _parse_num_total(val: Optional[str]) -> Tuple[int, int]:
     return num, total
 
 
+def _tag_values(tags, *keys):
+    for key in keys:
+        for variant in (key, key.lower(), key.upper()):
+            if variant in tags:
+                values = tags[variant]
+                return [str(value) for value in values if str(value).strip()]
+    return None
+
+
 def read_mp3_metadata(file_path: str) -> AudioMetadata:
     meta = AudioMetadata()
     stat = os.stat(file_path)
@@ -172,13 +183,15 @@ def read_mp3_metadata(file_path: str) -> AudioMetadata:
                 meta.title = str(tags["TIT2"].text[0])
             # Artist
             if "TPE1" in tags:
-                meta.artist = str(tags["TPE1"].text[0])
+                meta.artists = [str(v) for v in tags["TPE1"].text if str(v).strip()]
+                meta.artist = meta.artists[0] if meta.artists else ""
             # Album
             if "TALB" in tags:
                 meta.album = str(tags["TALB"].text[0])
             # Album Artist
             if "TPE2" in tags:
-                meta.album_artist = str(tags["TPE2"].text[0])
+                meta.album_artists = [str(v) for v in tags["TPE2"].text if str(v).strip()]
+                meta.album_artist = meta.album_artists[0] if meta.album_artists else None
             # Year
             if "TDRC" in tags:
                 meta.year = str(tags["TDRC"].text[0])
@@ -250,6 +263,8 @@ def read_flac_metadata(file_path: str) -> AudioMetadata:
             cleaned = [v for v in cleaned if v]
             return "; ".join(cleaned) if cleaned else None
 
+        meta.artists = _tag_values(tags, "ARTIST")
+        meta.album_artists = _tag_values(tags, "ALBUMARTIST", "ALBUM ARTIST")
         meta.title = _first("TITLE") or os.path.splitext(os.path.basename(file_path))[0]
         meta.artist = _first("ARTIST") or ""
         meta.album = _first("ALBUM") or ""
@@ -294,6 +309,8 @@ def read_mp4_metadata(file_path: str) -> AudioMetadata:
                 return str(val[0])
             return None
 
+        meta.artists = _tag_values(tags, "\xa9ART")
+        meta.album_artists = _tag_values(tags, "aART")
         meta.title = _str_atom("\xa9nam") or os.path.splitext(os.path.basename(file_path))[0]
         meta.artist = _str_atom("\xa9ART") or ""
         meta.album = _str_atom("\xa9alb") or ""
@@ -351,6 +368,8 @@ def read_ogg_metadata(file_path: str) -> AudioMetadata:
                 cleaned = [v for v in cleaned if v]
                 return "; ".join(cleaned) if cleaned else None
 
+            meta.artists = _tag_values(tags, "ARTIST")
+            meta.album_artists = _tag_values(tags, "ALBUMARTIST", "ALBUM ARTIST")
             meta.title = _first("TITLE") or os.path.splitext(os.path.basename(file_path))[0]
             meta.artist = _first("ARTIST") or ""
             meta.album = _first("ALBUM") or ""

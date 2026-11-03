@@ -1,6 +1,8 @@
 import os
 import sys
 import unittest
+import tempfile
+from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -12,6 +14,12 @@ from security import hash_password, verify_password
 class TestPhase1(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # This class assumes its own small catalog, independent of other suites.
+        directory = tempfile.TemporaryDirectory(prefix="puuk_phase1_")
+        cls.addClassCleanup(directory.cleanup)
+        environment = patch.dict(os.environ, {"PUUK_DB_PATH": os.path.join(directory.name, "test.db")})
+        environment.start()
+        cls.addClassCleanup(environment.stop)
         db.init_db()
 
     def test_01_pragmas(self):

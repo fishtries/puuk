@@ -204,6 +204,9 @@ app.include_router(streaming_router)
 from routers.albums import router as albums_router
 app.include_router(albums_router)
 
+from routers.artists import router as artists_router
+app.include_router(artists_router)
+
 from routers.playlists import router as playlists_router
 app.include_router(playlists_router)
 

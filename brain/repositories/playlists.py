@@ -2,6 +2,7 @@
 import sqlite3
 
 from repositories.base import get_connection, TRACK_SUMMARY_COLUMNS
+from repositories.artist_credits import hydrate_track_credits
 
 
 def get_all_playlists(user_id: int = None):
@@ -64,7 +65,7 @@ def get_playlist_tracks(playlist_id: int):
         WHERE pt.playlist_id = ?
         ORDER BY pt.position ASC, pt.added_at ASC
     """, (playlist_id,))
-    tracks = [dict(row) for row in cursor.fetchall()]
+    tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
     return tracks
 

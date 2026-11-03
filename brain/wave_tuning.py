@@ -224,8 +224,8 @@ def simulate_weight(
                 alignments.append(cosine(vec, user_vec))
                 seed_closes.append(cosine(vec, anchor_vec))
 
-            artists = {resolver.key(p.payload or {}, tid) for p, tid in zip(batch, batch_ids)}
-            artists.discard(None)  # паритет с [SmartRec]-метрикой: считаются только известные исполнители
+            resolver.prefetch(batch_ids)
+            artists = set().union(*(resolver.keys(p.payload or {}, tid) for p, tid in zip(batch, batch_ids)))
             artist_batch_sizes.append(len(artists))
 
             # Выданное пополняет exclude (следующая пачка этого не возвращает —

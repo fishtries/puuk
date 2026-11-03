@@ -67,13 +67,15 @@ def add_wave_feedback(
 ):
     """Записать событие фидбека ('like', 'skip', 'finish') от пользователя."""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO user_wave_feedback (user_id, track_id, event_type, listen_duration_ms, track_duration_ms)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_id, track_id, event_type, listen_duration_ms, track_duration_ms))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_wave_feedback (user_id, track_id, event_type, listen_duration_ms, track_duration_ms)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, track_id, event_type, listen_duration_ms, track_duration_ms))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_user_listening_history(user_id: int, limit: int = 100) -> list[str]:
     """
@@ -130,42 +132,73 @@ def get_recent_artists(user_id: int, limit: int = 5) -> list[str]:
             break
     return artists
 
+
+def get_recent_artist_counts(user_id: int, limit: int = 5) -> dict[str, int]:
+    """Count each participant once per event in the latest listening window."""
+    if limit <= 0:
+        return {}
+    from collections import Counter
+    from repositories.artist_credits import get_credit_states
+    conn = get_connection()
+    try:
+        events = conn.execute("""
+            SELECT track_id FROM (
+                SELECT track_id, played_at AS ts, 0 AS source, rowid AS event_row
+                FROM user_history WHERE user_id=?
+                UNION ALL
+                SELECT track_id, created_at AS ts, 1 AS source, rowid AS event_row
+                FROM user_wave_feedback WHERE user_id=?
+            ) ORDER BY ts DESC, track_id ASC, source ASC, event_row DESC LIMIT ?
+        """, (user_id, user_id, limit)).fetchall()
+        ids = [str(row['track_id']) for row in events]
+        states = get_credit_states('track', ids, conn=conn)
+        counts = Counter()
+        for track_id in ids:
+            state = states.get(track_id)
+            if state:
+                counts.update({artist['id'] for artist in state['artists']})
+        return dict(counts)
+    finally:
+        conn.close()
+
 def update_track_stats(track_id: str, event_type: str, listen_pct: float):
     """Обновить агрегированную глобальную статистику прослушиваний трека."""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM track_stats WHERE track_id = ?", (track_id,))
-    row = cursor.fetchone()
-    if not row:
-        play_cnt = 1 if event_type in ("finish", "skip") else 0
-        skip_cnt = 1 if event_type == "skip" else 0
-        like_cnt = 1 if event_type == "like" else 0
-        cursor.execute("""
-            INSERT INTO track_stats (track_id, play_count, skip_count, like_count, avg_listen_pct, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (track_id, play_cnt, skip_cnt, like_cnt, float(listen_pct)))
-    else:
-        current_plays = row["play_count"]
-        current_skips = row["skip_count"]
-        current_likes = row["like_count"]
-        current_avg = row["avg_listen_pct"]
-
-        new_plays = current_plays + (1 if event_type in ("finish", "skip") else 0)
-        new_skips = current_skips + (1 if event_type == "skip" else 0)
-        new_likes = current_likes + (1 if event_type == "like" else 0)
-
-        if new_plays > 0:
-            new_avg = ((current_avg * current_plays) + listen_pct) / new_plays
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM track_stats WHERE track_id = ?", (track_id,))
+        row = cursor.fetchone()
+        if not row:
+            play_cnt = 1 if event_type in ("finish", "skip") else 0
+            skip_cnt = 1 if event_type == "skip" else 0
+            like_cnt = 1 if event_type == "like" else 0
+            cursor.execute("""
+                INSERT INTO track_stats (track_id, play_count, skip_count, like_count, avg_listen_pct, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (track_id, play_cnt, skip_cnt, like_cnt, float(listen_pct)))
         else:
-            new_avg = current_avg
+            current_plays = row["play_count"]
+            current_skips = row["skip_count"]
+            current_likes = row["like_count"]
+            current_avg = row["avg_listen_pct"]
 
-        cursor.execute("""
-            UPDATE track_stats
-            SET play_count = ?, skip_count = ?, like_count = ?, avg_listen_pct = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE track_id = ?
-        """, (new_plays, new_skips, new_likes, float(new_avg), track_id))
-    conn.commit()
-    conn.close()
+            new_plays = current_plays + (1 if event_type in ("finish", "skip") else 0)
+            new_skips = current_skips + (1 if event_type == "skip" else 0)
+            new_likes = current_likes + (1 if event_type == "like" else 0)
+
+            if new_plays > 0:
+                new_avg = ((current_avg * current_plays) + listen_pct) / new_plays
+            else:
+                new_avg = current_avg
+
+            cursor.execute("""
+                UPDATE track_stats
+                SET play_count = ?, skip_count = ?, like_count = ?, avg_listen_pct = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE track_id = ?
+            """, (new_plays, new_skips, new_likes, float(new_avg), track_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_user_profile_stats(user_id: int) -> dict:
     """Получить статистику персонализации вкуса пользователя для фронтенд-индикатора."""

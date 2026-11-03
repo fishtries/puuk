@@ -9,6 +9,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import socket
 from urllib.parse import urlparse
 from typing import Optional, Dict, Any, Tuple
@@ -199,6 +200,20 @@ def fetch_cover_from_url_safe(url: str) -> bytes:
         raise ValueError(f"Failed to fetch cover from URL: {e}")
 
 
+def _album_for_audio_metadata(db_track, meta):
+    """Resolve source album identity without deriving album credits from track artists."""
+    from repositories.albums import normalize_text
+    existing = db.get_album(db_track.get("album_id")) if db_track.get("album_id") else None
+    if not meta.album:
+        return db_track.get("album_id")
+    observed_artist = getattr(meta, "album_artist", None)
+    if existing and normalize_text(meta.album) == normalize_text(existing['title']) and (
+        not observed_artist or normalize_text(observed_artist) == normalize_text(existing.get('album_artist'))
+    ):
+        return existing['id']
+    return db.resolve_album(meta.album, album_artist=observed_artist, year=meta.year)
+
+
 def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base_url: str = "") -> Dict[str, Any]:
     """
     Reads track details. For the editor, reads live from audio file on disk
@@ -222,16 +237,7 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     stat = os.stat(abs_path)
     if stat.st_mtime_ns != db_track.get("file_mtime_ns") or stat.st_size != db_track.get("file_size"):
         # Auto-resync SQLite with actual file state
-        if actual_meta.album:
-            fallback_artist = (
-                actual_meta.album_artist
-                or db_track.get("album_artist")
-                or actual_meta.artist
-                or db_track.get("artist")
-            )
-            album_id = db.resolve_album(actual_meta.album, album_artist=fallback_artist, year=actual_meta.year)
-        else:
-            album_id = db_track.get("album_id")
+        album_id = _album_for_audio_metadata(db_track, actual_meta)
 
         if (not actual_meta.title or actual_meta.title == file_stem) and db_track.get("title"):
             actual_meta.title = db_track["title"]
@@ -277,12 +283,22 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
     if (not effective_artist or effective_artist == "Неизвестный исполнитель") and db_track.get("artist"):
         effective_artist = db_track["artist"]
 
+    from repositories.artist_credits import hydrate_track_credits
+    credit_row = hydrate_track_credits([db_track])[0]
+    from serializers import serialize_track
+    favorite_ids = db.get_favorite_track_ids(current_user["id"]) if current_user and current_user.get("id") is not None else set()
     return {
+        **serialize_track(credit_row, base_url, favorite_ids),
+        "artists": credit_row.get("artists", []),
+        "artists_revision": credit_row.get("artists_revision", 0),
+        "artist_id": credit_row.get("artist_id"),
+        "album_artists": credit_row.get("album_artists", []),
+        "album_artists_revision": credit_row.get("album_artists_revision", 0),
         "id": track_id,
         "title": effective_title or db_track["title"],
-        "artist": effective_artist or db_track["artist"],
+        "artist": credit_row.get("artist", ""),
         "album": album_name,
-        "album_artist": actual_meta.album_artist or db_track.get("album_artist"),
+        "album_artist": credit_row.get("album_artist", ""),
         "year": actual_meta.year or db_track.get("year"),
         "genre": actual_meta.genre or db_track.get("genre"),
         "auto_genres": auto_genres_val,
@@ -359,12 +375,58 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     """
     db_track = db.get_track(track_id)
     if not db_track:
-        from services.media_locations import ensure_track_in_db
-        db_track = ensure_track_in_db(track_id)
-    if not db_track:
         raise HTTPException(status_code=404, detail="Track not found")
 
     check_track_edit_permissions(db_track, current_user)
+
+    from repositories.artist_credits import hydrate_track_credits, normalize_artist_name, artist_id_for_name
+    from services.artist_credit_service import set_track_artists
+    hydrated = hydrate_track_credits([db_track])[0]
+    fs = set(getattr(payload, "model_fields_set", set()))
+    # A position-only edit must also change the tag used for album ordering.
+    # Preserve an explicitly supplied track number, including its total ("1/12").
+    if "album_track_position" in fs and "track_number" not in fs:
+        position = getattr(payload, "album_track_position", None)
+        payload = payload.model_copy(update={
+            "track_number": str(position) if position is not None else None,
+        })
+        fs.add("track_number")
+    changed = set()
+    for field in fs - {"artist", "album_artist", "cover_action", "cover_base64", "cover_url", "cover_mime"}:
+        old = db_track.get(field)
+        if field == "album" and db_track.get("album_id"):
+            old = (db.get_album(db_track["album_id"]) or {}).get("title")
+        new = getattr(payload, field, None)
+        old = "" if old is None else str(old)
+        new = "" if new is None else str(new)
+        if field in {"title", "year"}:
+            old, new = old.strip(), new.strip()
+        if old != new:
+            changed.add(field)
+    if getattr(payload, "cover_action", "keep") != "keep" or getattr(payload, "cover_base64", None) or getattr(payload, "cover_url", None) or getattr(payload, "cover_mime", None):
+        changed.add("cover_action")
+    if "album_artist" in fs:
+        value = normalize_artist_name(getattr(payload, "album_artist", None))
+        if value not in {normalize_artist_name(hydrated.get("album_artist")), normalize_artist_name(db_track.get("album_artist"))}:
+            raise HTTPException(409, detail={"code": "album_artists_edit_separately", "message": "Измените состав альбома отдельно"})
+    artist_changed = False
+    if "artist" in fs:
+        value = normalize_artist_name(getattr(payload, "artist", None))
+        artist_changed = value not in {normalize_artist_name(hydrated.get("artist")), normalize_artist_name(db_track.get("artist"))}
+        if artist_changed and len(hydrated.get("artists", [])) > 1:
+            raise HTTPException(409, detail={"code": "structured_artists_required", "message": "Используйте редактор состава"})
+        if artist_changed and changed:
+            raise HTTPException(409, detail={"code": "artists_edit_separately", "message": "Измените состав отдельно"})
+        if artist_changed:
+            selectors = [{"name": value}] if artist_id_for_name(value) else []
+            return set_track_artists(track_id, selectors, hydrated["artists_revision"], current_user, base_url)
+    if target_album_id is not None:
+        changed.update(fs - {"artist", "album_artist"})
+    if not changed:
+        from serializers import serialize_track
+        return serialize_track(hydrated, base_url, db.get_favorite_track_ids(current_user["id"]))
+    # Echoed attribution must never be written into audio tags.
+    fs -= {"artist", "album_artist"}
 
     abs_path, effective_dir = resolve_track_file_path(db_track)
 
@@ -377,7 +439,6 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     )
 
     # Build MetadataPatch with explicit model_fields_set
-    fs = set(payload.model_fields_set) if hasattr(payload, "model_fields_set") else set()
     raw_year = getattr(payload, "year", None)
     normalized_year = str(raw_year).strip() if raw_year is not None else None
     if normalized_year == "":
@@ -414,20 +475,23 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
                 if target_album_id is not None:
                     album_id = target_album_id
                 else:
-                    fallback_artist = (
-                        actual_meta.album_artist
-                        or actual_meta.artist
-                        or db_track.get("album_artist")
-                        or db_track.get("artist")
-                    )
+                    # Preserve the stored source identity, never the effective display.
+                    source_album = db.get_album(db_track.get("album_id")) if db_track.get("album_id") else None
+                    source_artist = (source_album or {}).get("album_artist") or db_track.get("album_artist")
                     album_id = db.resolve_album(
                         actual_meta.album or db.UNKNOWN_ALBUM_TITLE,
-                        album_artist=fallback_artist,
-                        year=actual_meta.year,
+                        album_artist=source_artist, year=actual_meta.year,
                     )
 
             cover_inc = (cover_action in ("replace", "remove"))
-            album_track_pos = getattr(payload, "album_track_position", None)
+            if "album_track_position" in fs:
+                album_track_pos = getattr(payload, "album_track_position", None)
+            elif "track_number" in fs:
+                raw_tn = getattr(payload, "track_number", None)
+                m = re.match(r'^\s*(\d+)', str(raw_tn or ''))
+                album_track_pos = int(m.group(1)) if m else None
+            else:
+                album_track_pos = db.UNCHANGED
             db.update_track_metadata_from_audio(
                 track_id=track_id,
                 meta=actual_meta,
@@ -478,16 +542,7 @@ def resync_track_from_disk(track_id: str, current_user: Optional[Dict[str, Any]]
 
     with track_mutation_lock(track_id, effective_dir):
         actual_meta = read_audio_metadata(abs_path)
-        if actual_meta.album:
-            fallback_artist = (
-                actual_meta.album_artist
-                or db_track.get("album_artist")
-                or actual_meta.artist
-                or db_track.get("artist")
-            )
-            album_id = db.resolve_album(actual_meta.album, album_artist=fallback_artist, year=actual_meta.year)
-        else:
-            album_id = db_track.get("album_id")
+        album_id = _album_for_audio_metadata(db_track, actual_meta)
 
         db.update_track_metadata_from_audio(
             track_id=track_id,

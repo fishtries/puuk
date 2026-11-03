@@ -109,13 +109,44 @@ def resync_loudness_from_qdrant(client: QdrantClient) -> int:
     logger.info(f"Loudness перенесено для {counters['synced']} треков.")
     return counters["synced"]
 
+def _index_scanned_file(file_path, rel_path, track_id):
+    """Commit source metadata before publishing a queue point."""
+    import db
+    from metadata import read_audio_metadata
+    from repositories.artist_credits import audio_artist_source
+    from services.media_locations import resolve_import_album
+
+    meta = read_audio_metadata(str(file_path))
+    previous = db.get_track(track_id)
+    file_changed = bool(previous and (
+        (previous.get('file_size') is not None and previous['file_size'] != meta.file_size) or
+        (previous.get('file_mtime_ns') is not None and previous['file_mtime_ns'] != meta.file_mtime_ns)
+    ))
+    album_id = resolve_import_album(track_id, meta.album, meta.album_artist,
+                                    year=meta.year, artist_source=audio_artist_source(meta, album=True))
+    db.add_or_update_track(track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
+                           duration=meta.duration, genre=meta.genre, file_size=meta.file_size,
+                           file_mtime_ns=meta.file_mtime_ns, track_number=meta.track_number,
+                           disc_number=meta.disc_number, artist_source=audio_artist_source(meta))
+    db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
+    if file_changed:
+        db.reset_track_loudness_pending(track_id, file_size=meta.file_size, file_mtime_ns=meta.file_mtime_ns)
+    return db.get_tracks_by_ids([track_id])[str(track_id)]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Сканер треков для Puuk")
     parser.add_argument("--reset", action="store_true", help="Принудительно пересоздать коллекцию Qdrant (все векторы будут удалены)")
     parser.add_argument("--resync-loudness", action="store_true", help="Перенести готовые loudness-результаты из Qdrant в локальную SQLite и выйти")
     args = parser.parse_args()
 
-    client = init_qdrant(reset=args.reset)
+    try:
+        client = init_qdrant(reset=args.reset)
+    except Exception as exc:
+        if args.reset or args.resync_loudness:
+            raise
+        logger.warning("Qdrant initialization failed; scanning SQLite: %s", exc)
+        client = QdrantClient(url=QDRANT_URL)
 
     if args.resync_loudness:
         resync_loudness_from_qdrant(client)
@@ -136,13 +167,21 @@ def main():
                 file_size = stat.st_size
                 file_mtime_ns = stat.st_mtime_ns
 
-                # Проверяем, существует ли уже трек в Qdrant
-                existing = client.retrieve(
-                    collection_name=COLLECTION_NAME,
-                    ids=[point_id],
-                    with_payload=True,
-                    with_vectors=True
-                )
+                try:
+                    indexed = _index_scanned_file(file_path, rel_path, point_id)
+                except Exception as db_err:
+                    logger.warning("SQLite ingest failed for %s: %s", file_path.name, db_err)
+                    continue
+
+                # Qdrant failure must not prevent SQLite ingest.
+                try:
+                    existing = client.retrieve(
+                        collection_name=COLLECTION_NAME, ids=[point_id],
+                        with_payload=True, with_vectors=True,
+                    )
+                except Exception as qdrant_err:
+                    logger.warning("Qdrant unavailable for %s: %s", file_path.name, qdrant_err)
+                    continue
                 if existing:
                     record = existing[0]
                     payload = record.payload or {}
@@ -164,6 +203,9 @@ def main():
                     logger.info(
                         f"Файл изменился: {file_path.name} (size: {stored_size} -> {file_size}, mtime: {stored_mtime} -> {file_mtime_ns}). Обновляем метаданные и loudness..."
                     )
+                    payload["artist"] = indexed.get("artist") or ""
+                    payload["artists"] = indexed.get("artists", [])
+                    payload["album_artists"] = indexed.get("album_artists", [])
                     payload["file_size"] = file_size
                     payload["file_mtime_ns"] = file_mtime_ns
                     payload["loudness_status"] = "pending"
@@ -187,21 +229,9 @@ def main():
 
                     try:
                         import db
-                        from metadata import read_audio_metadata
-                        meta = read_audio_metadata(file_path)
-                        if meta:
-                            album_id = db.resolve_album(meta.album, album_artist=meta.album_artist or meta.artist)
-                            db.add_or_update_track(
-                                point_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
-                                duration=meta.duration, genre=meta.genre,
-                                file_size=file_size, file_mtime_ns=file_mtime_ns,
-                                track_number=meta.track_number, disc_number=meta.disc_number,
-                            )
-                            db.update_track_metadata_from_audio(point_id, meta, album_id, preserve_empty_genre=True)
                         db.reset_track_loudness_pending(point_id, file_size=file_size, file_mtime_ns=file_mtime_ns)
-                        logger.info(f"SQLite метаданные и loudness успешно обновлены для {file_path.name}")
                     except Exception as db_err:
-                        logger.warning(f"Не удалось обновить SQLite для {file_path.name}: {db_err}")
+                        logger.warning("Loudness reset failed for %s: %s", file_path.name, db_err)
                     continue
 
                 logger.info(f"Новый трек обнаружен: {file_path.name}")
@@ -215,20 +245,14 @@ def main():
                 # Заглушка для эмбеддинга (512 нулей)
                 vector_placeholder = [0.0] * VECTOR_SIZE
                 
-                # Метаданные извлекаются один раз: идут в payload Qdrant (для diversity)
-                # и в SQLite, без второго прохода по файлу.
-                sql_meta = None
-                try:
-                    from services.media_locations import extract_full_metadata_with_genre
-                    title_, artist_, album_, genre_, lyrics_, duration_ = extract_full_metadata_with_genre(metadata['file_path'])
-                    metadata["artist"] = artist_
-                    metadata["title"] = title_
-                    if genre_:
-                        metadata["genre"] = genre_
-                    sql_meta = (title_, artist_, album_, genre_, lyrics_, duration_)
-                except Exception as meta_err:
-                    logger.warning(f"Не удалось извлечь метаданные для {metadata['file_path']}: {meta_err}")
-                
+                # Publish the effective SQLite decision, including manual empty lists.
+                metadata["title"] = indexed.get("title")
+                metadata["artist"] = indexed.get("artist") or ""
+                metadata["artists"] = indexed.get("artists", [])
+                metadata["album_artists"] = indexed.get("album_artists", [])
+                if indexed.get("genre"):
+                    metadata["genre"] = indexed["genre"]
+
                 try:
                     client.upsert(
                         collection_name=COLLECTION_NAME,
@@ -242,34 +266,6 @@ def main():
                     )
                     logger.info(f"Успешно сохранено в Qdrant: {metadata['file_path']} с needs_embedding=True")
                     
-                    # Также обновляем SQLite базу (puuk.db), чтобы трек сразу отображался в приложении
-                    try:
-                        import db
-                        if sql_meta is not None:
-                            title_, artist_, album_, genre_, lyrics_, duration_ = sql_meta
-                            album_id = db.resolve_album(album_, album_artist=artist_)
-                            db.add_or_update_track(
-                                point_id,
-                                metadata['file_path'],
-                                title_,
-                                album_id,
-                                artist_,
-                                lyrics_,
-                                duration=duration_,
-                                genre=genre_,
-                                file_size=metadata.get('file_size'),
-                                file_mtime_ns=metadata.get('file_mtime_ns'),
-                            )
-                            try:
-                                from metadata import read_audio_metadata
-                                file_meta = read_audio_metadata(file_path)
-                                if file_meta:
-                                    db.update_track_metadata_from_audio(point_id, file_meta, album_id, preserve_empty_genre=True)
-                            except Exception as meta_read_err:
-                                logger.warning(f"Не удалось прочитать расширенные теги для {file_path.name}: {meta_read_err}")
-                            logger.info(f"Синхронизировано с базой данных SQLite (puuk.db): {title_} - {artist_}")
-                    except Exception as db_err:
-                        logger.warning(f"Не удалось обновить SQLite для {metadata['file_path']}: {db_err}")
                 except Exception as e:
                     logger.error(f"Ошибка при записи в Qdrant для {metadata['file_path']}: {e}")
                     

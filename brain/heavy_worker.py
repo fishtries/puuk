@@ -344,6 +344,8 @@ def sync_sqlite_tracks_to_qdrant(
             "file_path": file_path,
             "title": track.get("title") or track_id,
             "artist": track.get("artist") or "Неизвестный исполнитель",
+            "artists": track.get("artists", []),
+            "album_artists": track.get("album_artists", []),
             "duration": track.get("duration"),
             "genre": track.get("genre"),
             "lyrics": track.get("lyrics"),
@@ -822,8 +824,9 @@ def ensure_track_in_sqlite(track_id: str, payload: dict) -> None:
     artist = payload.get("artist") or parse_artist_from_path(file_path) or "Неизвестный исполнитель"
     album_title = payload.get("album") or payload.get("album_title")
     album_artist = payload.get("album_artist") or payload.get("albumartist")
+    from services.media_locations import payload_artist_source, resolve_import_album
     album_id = (
-        db.resolve_album(str(album_title), album_artist=(album_artist or artist) if album_title else None)
+        resolve_import_album(track_id, str(album_title), album_artist, artist_source=payload_artist_source(payload, "album_artists"))
         if album_title else None
     )
     db.add_or_update_track(
@@ -837,6 +840,7 @@ def ensure_track_in_sqlite(track_id: str, payload: dict) -> None:
         genre=payload.get("genre"),
         file_size=payload.get("file_size"),
         file_mtime_ns=payload.get("file_mtime_ns"),
+        artist_source=payload_artist_source(payload, "artists"),
     )
 
 
