@@ -5,7 +5,7 @@ import TrackLoadingBadge from '../TrackLoadingBadge';
 import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
 import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
-import { ActionSheetIOS, TouchableOpacity } from 'react-native';
+import { ActionSheetIOS, TouchableOpacity, Text } from 'react-native';
 import Constants from 'expo-constants';
 
 jest.mock('@expo/vector-icons', () => ({
@@ -109,6 +109,18 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     artist: 'Queen',
     coverArt: 'https://puuk.app/cover.jpg',
   };
+
+  it('does not give the empty player a track ID for background or lyrics requests', async () => {
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <FullPlayerModal isPlayerVisible={true} currentTrack={null} />,
+      );
+    });
+    expect(renderer.root.findByType('AmbientBackground').props.currentTrack.id).toBeUndefined();
+    expect(renderer.root.findByType('AppleLyricsView').props.currentTrack.id).toBeUndefined();
+    await act(async () => renderer.unmount());
+  });
 
   it('renders TrackLoadingBadge before MenuView in topHeaderRight', async () => {
     let renderer;
@@ -275,5 +287,165 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
       delete Constants.appOwnership;
       showActionSheetSpy.mockRestore();
     }
+  });
+
+  describe('artist navigation control (contracts 3.4 & 6.2)', () => {
+    const artistTrack = {
+      id: 'trk-100',
+      title: 'Paranoid Android',
+      artist: 'Radiohead',
+      artist_id: 'art_radiohead_123',
+    };
+
+    it('renders accessible tappable artist control with touch target >= 44pt and VoiceOver label', async () => {
+      const onArtistPressMock = jest.fn();
+      let renderer;
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal
+            isPlayerVisible={true}
+            currentTrack={artistTrack}
+            isPlaying={true}
+            currentTime={30}
+            duration={383}
+            onArtistPress={onArtistPressMock}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      const artistButton = root.findByProps({ testID: 'player-artist-button' });
+      expect(artistButton).toBeTruthy();
+      expect(artistButton.props.accessibilityRole).toBe('button');
+      expect(artistButton.props.accessibilityLabel).toBe('Страница артиста Radiohead');
+      expect(artistButton.props.hitSlop.top).toBeGreaterThanOrEqual(8);
+      expect(artistButton.props.hitSlop.bottom).toBeGreaterThanOrEqual(8);
+      expect(artistButton.props.hitSlop.left).toBeGreaterThanOrEqual(8);
+      expect(artistButton.props.hitSlop.right).toBeGreaterThanOrEqual(8);
+      expect(artistButton.props.style.minHeight).toBeUndefined();
+
+      const artistText = artistButton.findByType(Text);
+      expect(artistText.props.children).toBe('Radiohead');
+      expect(artistText.props.numberOfLines).toBe(1);
+      expect(artistText.props.ellipsizeMode).toBe('tail');
+    });
+
+    it('pressing artist control navigates by stable artistId without altering playback or queue', async () => {
+      const onArtistPressMock = jest.fn();
+      const togglePlayPauseMock = jest.fn();
+      const fetchNextTrackMock = jest.fn();
+      const playPreviousTrackMock = jest.fn();
+
+      let renderer;
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal
+            isPlayerVisible={true}
+            currentTrack={artistTrack}
+            isPlaying={true}
+            currentTime={30}
+            duration={383}
+            togglePlayPause={togglePlayPauseMock}
+            fetchNextTrack={fetchNextTrackMock}
+            playPreviousTrack={playPreviousTrackMock}
+            onArtistPress={onArtistPressMock}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      const artistButton = root.findByProps({ testID: 'player-artist-button' });
+
+      act(() => {
+        artistButton.props.onPress();
+      });
+
+      expect(onArtistPressMock).toHaveBeenCalledTimes(1);
+      expect(onArtistPressMock).toHaveBeenCalledWith('art_radiohead_123');
+
+      // Playback and queue controls must be completely untouched
+      expect(togglePlayPauseMock).not.toHaveBeenCalled();
+      expect(fetchNextTrackMock).not.toHaveBeenCalled();
+      expect(playPreviousTrackMock).not.toHaveBeenCalled();
+    });
+
+    it('does not render tappable button when artist_id is missing', async () => {
+      const trackWithoutArtistId = {
+        id: 'trk-101',
+        title: 'Various Song',
+        artist: 'Various Artists',
+      };
+
+      let renderer;
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal
+            isPlayerVisible={true}
+            currentTrack={trackWithoutArtistId}
+            isPlaying={true}
+            currentTime={10}
+            duration={200}
+            onArtistPress={jest.fn()}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      expect(root.findAllByProps({ testID: 'player-artist-button' })).toHaveLength(0);
+
+      const texts = root.findAllByType(Text);
+      const plainArtistText = texts.find((t) => t.props.children === 'Various Artists');
+      expect(plainArtistText).toBeTruthy();
+      expect(plainArtistText.props.numberOfLines).toBe(1);
+      expect(plainArtistText.props.ellipsizeMode).toBe('tail');
+    });
+
+    it('does not render tappable button when onArtistPress is not provided', async () => {
+      let renderer;
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal
+            isPlayerVisible={true}
+            currentTrack={artistTrack}
+            isPlaying={true}
+            currentTime={10}
+            duration={200}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      expect(root.findAllByProps({ testID: 'player-artist-button' })).toHaveLength(0);
+    });
+
+    it('renders long artist names with ellipsis without breaking layout', async () => {
+      const longArtistTrack = {
+        id: 'trk-102',
+        title: 'Epic Journey',
+        artist: 'A Very Long Symphony Orchestra Featuring Multiple Guest Soloists And Ensemble Collaborators',
+        artist_id: 'art_long_456',
+      };
+
+      let renderer;
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal
+            isPlayerVisible={true}
+            currentTrack={longArtistTrack}
+            isPlaying={true}
+            currentTime={0}
+            duration={600}
+            onArtistPress={jest.fn()}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      const artistButton = root.findByProps({ testID: 'player-artist-button' });
+      expect(artistButton).toBeTruthy();
+      const text = artistButton.findByType(Text);
+      expect(text.props.numberOfLines).toBe(1);
+      expect(text.props.ellipsizeMode).toBe('tail');
+    });
   });
 });

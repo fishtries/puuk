@@ -39,7 +39,7 @@ const QueuePanel = ({
               index={index}
               isVisible={isQueueVisible}
               shouldAnimate={queueAnimationRef.current}
-              onPress={() => playTrack(item)}
+              onPress={() => playTrack(item, { source: 'queue', queueIndex: index })}
             />
           )}
         />

@@ -16,7 +16,7 @@ describe('PlayerNetworkBanner', () => {
           networkStatus="good"
           nextTrackStatus={TRACK_STATUS.DOWNLOADING}
           isBufferingSlow={false}
-        />
+        />,
       );
     });
 
@@ -30,7 +30,7 @@ describe('PlayerNetworkBanner', () => {
         <PlayerNetworkBanner
           networkStatus="good"
           nextTrackStatus={TRACK_STATUS.IDLE}
-        />
+        />,
       );
     });
 
@@ -50,7 +50,7 @@ describe('PlayerNetworkBanner', () => {
           networkError="Сбой загрузки"
           onRetry={onRetry}
           onSkip={onSkip}
-        />
+        />,
       );
     });
 
@@ -76,5 +76,149 @@ describe('PlayerNetworkBanner', () => {
       skipBtn.props.onPress();
     });
     expect(onSkip).toHaveBeenCalled();
+  });
+
+  it('renders recovering banner when current.status is recovering', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <PlayerNetworkBanner
+          current={{ status: 'recovering', error: null }}
+          networkStatus="slow"
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    const textNodes = root.findAllByType('Text');
+    const texts = textNodes.map((n) => n.props.children);
+    expect(texts).toContain('Восстановление воспроизведения...');
+    // No action buttons during automatic recovery
+    const retryButtons = root.findAll(
+      (n) => n.props?.accessibilityLabel === 'Повторить',
+    );
+    expect(retryButtons.length).toBe(0);
+  });
+
+  it('renders safe category error strings for current track errors without raw text', () => {
+    const errorKinds = [
+      { kind: 'auth', expected: 'Ошибка авторизации' },
+      { kind: 'not_found', expected: 'Трек недоступен', retryable: false },
+      { kind: 'timeout', expected: 'Таймаут воспроизведения' },
+      { kind: 'transient', expected: 'Ошибка сети при воспроизведении' },
+      { kind: 'playback', expected: 'Ошибка воспроизведения' },
+    ];
+
+    for (const { kind, expected, retryable } of errorKinds) {
+      let renderer;
+      const onRetryCurrent = jest.fn();
+      const onSkip = jest.fn();
+
+      act(() => {
+        renderer = TestRenderer.create(
+          <PlayerNetworkBanner
+            current={{
+              status: 'error',
+              error: {
+                kind,
+                retryable: retryable ?? true,
+                message: 'https://secret.token.com/leak/error',
+              },
+            }}
+            networkStatus="error"
+            onRetryCurrent={onRetryCurrent}
+            onSkip={onSkip}
+          />,
+        );
+      });
+
+      const root = renderer.root;
+      const textNodes = root.findAllByType('Text');
+      const texts = textNodes.map((n) => n.props.children);
+
+      expect(texts).toContain(expected);
+      // Ensure no raw message or URL leak
+      expect(texts.some((t) => String(t).includes('secret.token'))).toBe(false);
+
+      if (retryable === false) {
+        expect(texts).not.toContain('Повторить');
+      } else {
+        expect(texts).toContain('Повторить');
+        const retryBtn = root.find((n) => n.props?.onPress === onRetryCurrent);
+        act(() => {
+          retryBtn.props.onPress();
+        });
+        expect(onRetryCurrent).toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('renders next-failure banner and routes retry to onRetryNext when current track is healthy', () => {
+    const onRetryCurrent = jest.fn();
+    const onRetryNext = jest.fn();
+    const onSkip = jest.fn();
+
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <PlayerNetworkBanner
+          current={{ status: 'playing', error: null }}
+          next={{ status: TRACK_STATUS.FAILED, error: { kind: 'network' } }}
+          nextTrackStatus={TRACK_STATUS.FAILED}
+          networkStatus="error"
+          onRetryCurrent={onRetryCurrent}
+          onRetryNext={onRetryNext}
+          onSkip={onSkip}
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    const textNodes = root.findAllByType('Text');
+    const texts = textNodes.map((n) => n.props.children);
+    expect(texts).toContain('Сбой загрузки следующего трека');
+    expect(texts).toContain('Повторить');
+
+    const retryBtn = root.find((n) => n.props?.onPress === onRetryNext);
+    act(() => {
+      retryBtn.props.onPress();
+    });
+    expect(onRetryNext).toHaveBeenCalled();
+    expect(onRetryCurrent).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes current track error over next track failure', () => {
+    const onRetryCurrent = jest.fn();
+    const onRetryNext = jest.fn();
+
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <PlayerNetworkBanner
+          current={{
+            status: 'error',
+            error: { kind: 'timeout', retryable: true },
+          }}
+          next={{ status: TRACK_STATUS.FAILED, error: { kind: 'network' } }}
+          networkStatus="error"
+          onRetryCurrent={onRetryCurrent}
+          onRetryNext={onRetryNext}
+        />,
+      );
+    });
+
+    const root = renderer.root;
+    const textNodes = root.findAllByType('Text');
+    const texts = textNodes.map((n) => n.props.children);
+
+    expect(texts).toContain('Таймаут воспроизведения');
+    expect(texts).not.toContain('Сбой загрузки следующего трека');
+
+    const retryBtn = root.find((n) => n.props?.onPress === onRetryCurrent);
+    act(() => {
+      retryBtn.props.onPress();
+    });
+    expect(onRetryCurrent).toHaveBeenCalled();
+    expect(onRetryNext).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,5 @@
+import { normalizeCredits } from './artistCredits';
+
 /**
  * Core Track Data Contract adapter (Stage 8).
  * Provides pure functions for track identifier extraction, equality comparison,
@@ -101,6 +103,10 @@ export function normalizeTrack(rawTrack, options = {}) {
     ...rawTrack,
     id,
     track_id: id,
+    artists: normalizeCredits(rawTrack.artists, rawTrack.artist_id, rawTrack.artist),
+    artists_revision: Number.isInteger(rawTrack.artists_revision) && rawTrack.artists_revision >= 0 ? rawTrack.artists_revision : 0,
+    album_artists: normalizeCredits(rawTrack.album_artists, rawTrack.album_artist_id, rawTrack.album_artist),
+    album_artists_revision: Number.isInteger(rawTrack.album_artists_revision) && rawTrack.album_artists_revision >= 0 ? rawTrack.album_artists_revision : 0,
     title,
     artist,
     coverArt,

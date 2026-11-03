@@ -18,7 +18,8 @@ export function normalizeStreamUrl(track, serverUrl = SERVER_URL) {
   if (trackId === null) return '';
   const trackIdStr = String(trackId).trim().replace(/['"]/g, '');
 
-  const cleanServerUrl = (serverUrl || 'https://web.puuk.fun')
+  const effectiveServerUrl = serverUrl || SERVER_URL || 'https://web.puuk.fun';
+  const cleanServerUrl = String(effectiveServerUrl)
     .trim()
     .replace(/['"]/g, '')
     .replace(/\/+$/, '');

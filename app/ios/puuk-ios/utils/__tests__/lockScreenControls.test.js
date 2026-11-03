@@ -25,8 +25,12 @@ describe('lock screen media controls patch', () => {
     expect(content).toContain(
       'remoteCommandCenter.previousTrackCommand.addTarget',
     );
-    expect(content).toContain('player.emit(event: "nextTrack")');
-    expect(content).toContain('player.emit(event: "previousTrack")');
+    expect(content).toContain(
+      'player.emit(event: "nextTrack", payload: player.currentStatus())',
+    );
+    expect(content).toContain(
+      'player.emit(event: "previousTrack", payload: player.currentStatus())',
+    );
 
     // Enabled state tied to !showSeekForward / !showSeekBackward
     expect(content).toContain(

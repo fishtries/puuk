@@ -20,6 +20,7 @@ import * as Haptics from 'expo-haptics';
 import CoverImage, { prefetchCover } from '../shared/media/CoverImage';
 import { areTrackIdsEqual, getTrackId } from '../shared/domain/trackAdapter';
 import { authFetch } from '../shared/api/api';
+import ArtistSelector from '../shared/components/ArtistSelector';
 
 import Animated, {
   useSharedValue,
@@ -79,12 +80,17 @@ const FullPlayerModal = ({
   insets: propInsets,
   dismissProgress,
   dismissDragY,
+  currentPlayback,
+  nextPlayback,
   networkStatus = 'good',
   nextTrackStatus = 'idle',
   networkError = null,
   isBufferingSlow = false,
   onRetryPreload,
+  onRetryCurrent,
+  onRetry,
   accentColor: propAccentColor,
+  onArtistPress,
 }) => {
   const [coverAccentColor, setCoverAccentColor] = useState(
     () => currentTrack?.cover_color || null,
@@ -1144,7 +1150,6 @@ const FullPlayerModal = ({
 
   const fallbackTrack = useMemo(
     () => ({
-      id: 'placeholder',
       title: 'Puuk Music',
       artist: 'Select a track to start',
       coverArt: null,
@@ -1158,7 +1163,7 @@ const FullPlayerModal = ({
     if (!track) return { displayTitle: '', displayArtist: '' };
     return {
       displayTitle: track.title || 'Puuk Music',
-      displayArtist: track.artist || 'Select a track to start',
+      displayArtist: Array.isArray(track.artists) && track.artists.length ? track.artists.map((artist) => artist.name).join(', ') : (track.artist || 'Select a track to start'),
     };
   };
 
@@ -1360,9 +1365,7 @@ const FullPlayerModal = ({
                           <Text style={styles.titleText} numberOfLines={1}>
                             {displayTitle}
                           </Text>
-                          <Text style={styles.artistText} numberOfLines={1}>
-                            {displayArtist}
-                          </Text>
+                          <ArtistSelector entity={activeTrack} identity={getTrackId(currentTrack)} display={displayArtist} onSelect={onArtistPress} disabled={isEffectivelyCompact} triggerTestID="player-artist-button" controlStyle={styles.artistButton} textStyle={styles.artistText} numberOfLines={1} />
                         </Animated.View>
                         <Animated.View style={trackInfoHeartAnimatedStyle}>
                           <TouchableOpacity
@@ -1415,11 +1418,15 @@ const FullPlayerModal = ({
               style={[{ width: '100%' }, playerControlsAnimatedStyle]}
             >
               <PlayerNetworkBanner
+                current={currentPlayback}
+                next={nextPlayback}
                 networkStatus={networkStatus}
                 nextTrackStatus={nextTrackStatus}
                 networkError={networkError}
                 isBufferingSlow={isBufferingSlow}
-                onRetry={onRetryPreload}
+                onRetry={onRetry || onRetryPreload}
+                onRetryCurrent={onRetryCurrent}
+                onRetryNext={onRetryPreload}
                 onSkip={fetchNextTrack}
               />
               <PlayerControls

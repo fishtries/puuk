@@ -23,13 +23,18 @@ const CELLULAR_TYPES = new Set(['CELLULAR']);
 
 /**
  * Преобразует NetworkState (expo-network) в политику предзагрузки.
+ * Offline никогда не расширяет лимиты: возвращается безопасная политика
+ * (maxConcurrent 1 / lookahead 1), а факт отсутствия связи сообщается отдельно
+ * через policy.isConnected (metadata для диагностики и остановки старта задач).
  * @param {Object|null} state - { type, isConnected, isInternetReachable }
- * @returns {{ type: string, maxConcurrent: number, lookahead: number }}
+ * @returns {{ type: string, maxConcurrent: number, lookahead: number, isConnected?: boolean }}
  */
 export function classifyNetworkPolicy(state) {
-  if (!state || typeof state !== 'object') return NETWORK_POLICY.UNKNOWN;
+  if (!state || typeof state !== 'object') {
+    return SAFE_NETWORK_POLICY;
+  }
   if (state.isConnected === false || state.isInternetReachable === false) {
-    return NETWORK_POLICY.UNKNOWN;
+    return SAFE_NETWORK_POLICY;
   }
   const type = String(state.type || '').toUpperCase();
   if (WIFI_TYPES.has(type)) return NETWORK_POLICY.WIFI;
@@ -37,13 +42,40 @@ export function classifyNetworkPolicy(state) {
   return NETWORK_POLICY.UNKNOWN;
 }
 
+/**
+ * Возвращает true, если политика разрешает старт фоновых загрузок.
+ * Offline (isConnected:false) — ноль задач; undefined считается online для совместимости.
+ * @param {Object|null} policy
+ * @returns {boolean}
+ */
+export function isPolicyOnline(policy) {
+  return !policy || policy.isConnected !== false;
+}
+
 let currentPolicy = SAFE_NETWORK_POLICY; // SAFE baseline before async network detection completes
 let observationStarted = false;
 const listeners = new Set();
 
+/**
+ * Строит публичную политику из NetworkState: базовые лимиты из classifyNetworkPolicy
+ * плюс metadata isConnected (false = сеть недоступна, старт фоновых задач запрещён).
+ * @param {Object|null} state
+ * @returns {{ type: string, maxConcurrent: number, lookahead: number, isConnected: boolean }}
+ */
+export function buildNetworkPolicy(state) {
+  const base = classifyNetworkPolicy(state);
+  const offline = Boolean(
+    state && typeof state === 'object' && state.isConnected === false,
+  );
+  return offline ? { ...base, isConnected: false } : base;
+}
+
 function applyPolicy(state) {
-  const next = classifyNetworkPolicy(state);
-  const changed = !currentPolicy || next.type !== currentPolicy.type;
+  const next = buildNetworkPolicy(state);
+  const changed =
+    !currentPolicy ||
+    next.type !== currentPolicy.type ||
+    next.isConnected !== currentPolicy.isConnected;
   currentPolicy = next;
   if (changed) {
     for (const listener of Array.from(listeners)) {
@@ -104,7 +136,10 @@ export function startNetworkObserving() {
       });
     }
   } catch (err) {
-    console.warn('[NetworkPolicy] Failed to observe network state:', err?.message);
+    console.warn(
+      '[NetworkPolicy] Failed to observe network state:',
+      err?.message,
+    );
   }
 }
 

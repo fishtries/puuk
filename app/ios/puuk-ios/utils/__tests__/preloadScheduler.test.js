@@ -62,6 +62,8 @@ describe('PreloadScheduler', () => {
           rejectFn = rej;
         });
 
+        promise.catch(() => {});
+
         activeFetches.set(idStr, {
           resolve: () => {
             mockCache.cachedIds.add(idStr);
@@ -155,6 +157,9 @@ describe('PreloadScheduler', () => {
     jest.advanceTimersByTime(3000);
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.CANCELLED);
+    // The slot is held until the cancelled cache promise settles.
+    expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
+    await Promise.resolve();
     expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
     jest.useRealTimers();
   });
@@ -205,6 +210,9 @@ describe('PreloadScheduler', () => {
     const urgentPromise = scheduler.preloadImmediate({ id: 77 });
 
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
+    // The slot is occupied until the cancelled cache promise settles.
+    expect(scheduler.getStatus(77)).toBe(TRACK_STATUS.QUEUED);
+    await Promise.resolve();
     expect(scheduler.getStatus(77)).toBe(TRACK_STATUS.DOWNLOADING);
 
     activeFetches.get('77').resolve();
@@ -281,10 +289,14 @@ describe('PreloadScheduler', () => {
     });
 
     // Track 30 was promoted to priority 0 and preempted track 20
-    expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
-    expect(scheduler.activeTasks.has('30')).toBe(true);
+    expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
     expect(scheduler.queue.find((q) => q.trackId === '20')).toBeDefined();
+    // Slot is held until cancelled task settles
+    expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
+    await Promise.resolve();
+    expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
+    expect(scheduler.activeTasks.has('30')).toBe(true);
 
     // Complete track 30
     activeFetches.get('30').resolve();
@@ -367,6 +379,10 @@ describe('PreloadScheduler', () => {
     // Track 20 was preempted and returned to queue
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
+
+    // Slot is held until cancelled task settles
+    expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
+    await Promise.resolve();
 
     // Track 99 took over the single active slot (concurrency limit 1 is NOT exceeded!)
     expect(scheduler.activeTasks.size).toBe(1);
@@ -536,6 +552,8 @@ describe('PreloadScheduler', () => {
         title: 'Urgent',
       });
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
+      await Promise.resolve();
+      expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Urgent task completes
       activeFetches.get('99').resolve();
@@ -585,7 +603,7 @@ describe('PreloadScheduler', () => {
       mockCache.getOrFetch = jest.fn((id) => {
         attemptCount++;
         const currentAttempt = attemptCount;
-        return new Promise((res, rej) => {
+        const promise = new Promise((res, rej) => {
           if (String(id) === '99') {
             urgentResolve = res;
           } else if (currentAttempt === 1) {
@@ -594,6 +612,8 @@ describe('PreloadScheduler', () => {
             attempt2Resolve = res;
           }
         });
+        promise.catch(() => {});
+        return promise;
       });
 
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
@@ -603,10 +623,13 @@ describe('PreloadScheduler', () => {
 
       // Urgent preload preempts track 20
       const urgentPromise = scheduler.preloadImmediate({ id: 99 });
-      expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
-
-      // Track 20 was preempted and is back in queue
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
+      // Attempt 1 cancellation settles
+      if (attempt1Reject) {
+        attempt1Reject(new Error('Download cancelled'));
+      }
+      await Promise.resolve();
+      expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Urgent preload finishes
       urgentResolve('file:///mock/99.audio');
@@ -616,14 +639,8 @@ describe('PreloadScheduler', () => {
       // Now scheduler restarts track 20 (attempt 2)
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
-      // Attempt 2 completes IMMEDIATELY before attempt 1 rejection settles
+      // Attempt 2 completes
       attempt2Resolve('file:///mock/20.audio');
-      await Promise.resolve();
-
-      // Later, attempt 1 rejects with cancellation
-      if (attempt1Reject) {
-        attempt1Reject(new Error('Download cancelled'));
-      }
       await Promise.resolve();
 
       // The original promise MUST resolve successfully with the uri of attempt 2!
@@ -654,7 +671,11 @@ describe('PreloadScheduler', () => {
       jest.advanceTimersByTime(3000);
       expect(scheduler.getStatus(10)).not.toBe(TRACK_STATUS.CANCELLED);
 
-      activeFetches.get('99')?.resolve();
+      // Track 10 is current track, so it remains downloading in concurrency 1 slot
+      activeFetches.get('10')?.resolve('file:///mock/10.audio');
+      await Promise.resolve();
+      // Track 99 now starts downloading in the freed slot
+      activeFetches.get('99')?.resolve('file:///mock/99.audio');
       await urgentPromise;
       jest.useRealTimers();
     });
@@ -719,6 +740,7 @@ describe('PreloadScheduler', () => {
       const promiseLegacy = scheduler.preloadImmediate({
         track_id: 'immediate-legacy',
       });
+      await Promise.resolve();
       activeFetches
         .get('immediate-legacy')
         ?.resolve('file:///mock/immediate-legacy.audio');
@@ -727,8 +749,177 @@ describe('PreloadScheduler', () => {
       );
 
       const promiseZero = scheduler.preloadImmediate({ id: 0 });
+      await Promise.resolve();
       activeFetches.get('0')?.resolve('file:///mock/0.audio');
       await expect(promiseZero).resolves.toBe('file:///mock/0.audio');
+    });
+  });
+
+  describe('Dynamic URL configuration and server switch (Gate A / J06)', () => {
+    let originalServerUrl;
+
+    beforeEach(() => {
+      const api = require('../../shared/api/api');
+      originalServerUrl = api.SERVER_URL;
+    });
+
+    afterEach(() => {
+      const api = require('../../shared/api/api');
+      api.setServerUrl(originalServerUrl);
+    });
+
+    test('explicit serverUrl option stays fixed for dependency injection even if global SERVER_URL changes', () => {
+      const s = new PreloadScheduler({
+        serverUrl: 'https://fixed.scheduler.org',
+        cache: mockCache,
+      });
+
+      const api = require('../../shared/api/api');
+      api.setServerUrl('https://global-mutated.scheduler.org');
+
+      s.syncQueue({ id: 10 }, [{ id: 20 }]);
+
+      expect(s.serverUrl).toBe('https://fixed.scheduler.org');
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '20',
+        'https://fixed.scheduler.org/api/stream/20',
+        expect.any(Object),
+      );
+    });
+
+    test('explicit getStreamUrl remains authoritative in scheduler tests', () => {
+      const customGetStreamUrl = jest.fn(
+        (track) => `https://authoritative.cdn/tracks/${track.id}`,
+      );
+      const s = new PreloadScheduler({
+        serverUrl: 'https://ignored.scheduler.org',
+        getStreamUrl: customGetStreamUrl,
+        cache: mockCache,
+      });
+
+      s.syncQueue({ id: 10 }, [{ id: 30 }]);
+
+      expect(customGetStreamUrl).toHaveBeenCalledWith({ id: 30 });
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '30',
+        'https://authoritative.cdn/tracks/30',
+        expect.any(Object),
+      );
+    });
+
+    test('getServerUrl option is called dynamically at background task start', async () => {
+      let dynamicHost = 'https://dynamic-a.org';
+      const s = new PreloadScheduler({
+        getServerUrl: () => dynamicHost,
+        cache: mockCache,
+        maxConcurrent: 1,
+      });
+
+      s.syncQueue({ id: 1 }, [{ id: 2 }]);
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '2',
+        'https://dynamic-a.org/api/stream/2',
+        expect.any(Object),
+      );
+
+      dynamicHost = 'https://dynamic-b.org';
+      // Next task starts after host change
+      activeFetches.get('2')?.resolve();
+      await Promise.resolve();
+
+      s.preloadImmediate({ id: 3 });
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '3',
+        'https://dynamic-b.org/api/stream/3',
+        expect.any(Object),
+      );
+    });
+
+    test('default scheduler instance resolves updated SERVER_URL loaded after singleton import', () => {
+      const s = new PreloadScheduler({
+        cache: mockCache,
+      });
+
+      const api = require('../../shared/api/api');
+      api.setServerUrl('https://settings-cold-start.puuk.fun');
+
+      s.syncQueue({ id: 10 }, [{ id: 40 }]);
+
+      expect(s.serverUrl).toBe('https://settings-cold-start.puuk.fun');
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '40',
+        'https://settings-cold-start.puuk.fun/api/stream/40',
+        expect.any(Object),
+      );
+    });
+
+    test('server switch cancels incompatible queued/in-flight tasks, bumps epoch and fences late results', async () => {
+      const api = require('../../shared/api/api');
+      api.setServerUrl('https://server-one.puuk.fun');
+
+      const s = new PreloadScheduler({
+        cache: mockCache,
+        maxConcurrent: 1,
+        lookahead: 2,
+      });
+
+      // Start queue on server one: task 50 downloads, task 60 is queued
+      s.syncQueue({ id: 10 }, [{ id: 50 }, { id: 60 }]);
+      expect(s.getStatus(50)).toBe(TRACK_STATUS.DOWNLOADING);
+      expect(s.getStatus(60)).toBe(TRACK_STATUS.QUEUED);
+      const initialEpoch = s.epoch;
+
+      // Server changes in settings
+      api.setServerUrl('https://server-two.puuk.fun');
+
+      // syncQueue called on server two with new track list
+      s.syncQueue({ id: 10 }, [{ id: 70 }]);
+
+      // Epoch was invalidated
+      expect(s.epoch).toBeGreaterThan(initialEpoch);
+      // In-flight task 50 was cancelled
+      expect(mockCache.cancel).toHaveBeenCalledWith('50');
+      // Queued task 60 was cancelled
+      expect(s.getStatus(60)).toBe(TRACK_STATUS.CANCELLED);
+
+      // Late resolution of old task 50 cannot publish or alter state
+      activeFetches.get('50')?.resolve('file:///mock/50.audio');
+      await Promise.resolve();
+      // Status must not be set to READY by late old-origin result
+      expect(s.getStatus(50)).not.toBe(TRACK_STATUS.READY);
+
+      // New task on server two starts with the new URL
+      expect(mockCache.getOrFetch).toHaveBeenCalledWith(
+        '70',
+        'https://server-two.puuk.fun/api/stream/70',
+        expect.any(Object),
+      );
+    });
+
+    test('persistent cache keys retain content-ID semantics across server change', () => {
+      const api = require('../../shared/api/api');
+      api.setServerUrl('https://server-alpha.puuk.fun');
+
+      const s = new PreloadScheduler({
+        cache: mockCache,
+      });
+
+      // Track 80 was already cached on disk
+      mockCache.cachedIds.add('80');
+
+      // Server changes in settings
+      api.setServerUrl('https://server-beta.puuk.fun');
+
+      // Sync queue with track 80 on new server
+      s.syncQueue({ id: 10 }, [{ id: 80 }]);
+
+      // Immediately ready from local cache without downloading from server-beta
+      expect(s.getStatus(80)).toBe(TRACK_STATUS.READY);
+      expect(mockCache.getOrFetch).not.toHaveBeenCalledWith(
+        '80',
+        expect.any(String),
+        expect.any(Object),
+      );
     });
   });
 });

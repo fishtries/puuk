@@ -52,7 +52,6 @@ import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
 import {
-  authFetch,
   checkAuth,
   addAuthListener,
   SERVER_URL,
@@ -67,6 +66,7 @@ import {
 } from './shared/storage/settings';
 import { getTrackId, areTrackIdsEqual } from './shared/domain/trackAdapter';
 import defaultAudioCache from './utils/audioCache';
+import useSavedCreditsSync from './hooks/useSavedCreditsSync';
 
 const { width, height } = Dimensions.get('window');
 
@@ -118,6 +118,11 @@ function AppContent() {
     handleToggleLike,
     startWave,
     dismissPlayer,
+    seekTo,
+    currentPlayback,
+    nextPlayback,
+    retryCurrent,
+    onRetry,
     networkStatus,
     nextTrackStatus,
     networkError,
@@ -171,6 +176,8 @@ function AppContent() {
       subDeleted.remove();
     };
   }, [currentTrack, setCurrentTrack, setTracks]);
+
+  useSavedCreditsSync(currentTrack, currentUser);
 
   const activeTrack = currentTrack;
   const displayTitle = activeTrack?.title || 'Puuk Music';
@@ -545,9 +552,9 @@ function AppContent() {
 
   const handleSeekTo = useCallback(
     (pos) => {
-      player.seekTo(pos);
+      seekTo(pos);
     },
-    [player],
+    [seekTo],
   );
 
   const handleAddToPlaylist = useCallback(
@@ -562,6 +569,15 @@ function AppContent() {
       navigationRef.navigate('TrackEdit', { track: track || activeTrack });
     },
     [activeTrack, navigationRef],
+  );
+
+  const handleArtistPress = useCallback(
+    (artistId) => {
+      if (!artistId) return;
+      setIsPlayerVisible(false);
+      navigationRef.navigate('ArtistDetail', { artistId });
+    },
+    [setIsPlayerVisible, navigationRef],
   );
 
   const handleToggleActiveLike = useCallback(() => {
@@ -672,12 +688,17 @@ function AppContent() {
         insets={insets}
         dismissProgress={dismissProgress}
         dismissDragY={dismissDragY}
+        currentPlayback={currentPlayback}
+        nextPlayback={nextPlayback}
         networkStatus={networkStatus}
         nextTrackStatus={nextTrackStatus}
         networkError={networkError}
         isBufferingSlow={isBufferingSlow}
         onRetryPreload={retryPreload}
+        onRetryCurrent={retryCurrent}
+        onRetry={onRetry}
         accentColor={accentColor}
+        onArtistPress={handleArtistPress}
       />
 
       {/* СЛОЙ 1 (ПЕРЕДНИЙ ПЛАН): Карточка приложения, поднимающаяся вверх при открытии плеера */}

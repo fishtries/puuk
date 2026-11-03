@@ -63,4 +63,32 @@ describe('normalizeStreamUrl', () => {
       'https://my.server.org/api/stream/1',
     );
   });
+
+  test('dynamically evaluates live SERVER_URL binding when serverUrl is omitted', () => {
+    const { SERVER_URL, setServerUrl } = require('../../shared/api/api');
+    const original = SERVER_URL;
+    try {
+      setServerUrl('https://cold-start-loaded.puuk.fun');
+      const track = { id: 99 };
+      expect(normalizeStreamUrl(track)).toBe(
+        'https://cold-start-loaded.puuk.fun/api/stream/99',
+      );
+
+      // Relative path preserves custom server
+      const relativeTrack = { id: 100, stream_url: '/api/stream/100' };
+      expect(normalizeStreamUrl(relativeTrack)).toBe(
+        'https://cold-start-loaded.puuk.fun/api/stream/100',
+      );
+
+      // Null or empty serverUrl argument falls back to live SERVER_URL
+      expect(normalizeStreamUrl(track, null)).toBe(
+        'https://cold-start-loaded.puuk.fun/api/stream/99',
+      );
+      expect(normalizeStreamUrl(track, '')).toBe(
+        'https://cold-start-loaded.puuk.fun/api/stream/99',
+      );
+    } finally {
+      setServerUrl(original);
+    }
+  });
 });

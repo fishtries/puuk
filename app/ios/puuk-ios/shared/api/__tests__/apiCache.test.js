@@ -114,6 +114,7 @@ import {
   setCachedCatalog,
   removeCachedCatalog,
   clearCatalogCache,
+  invalidateArtistCreditsCache,
   fetchCatalogWithCache,
   resetMemoryCache,
   getCacheFile,
@@ -696,6 +697,58 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(uiTracks).toEqual([{ id: 'u2-song' }]);
       expect(uiTracks).not.toEqual([{ id: 'u1-song' }]);
     });
+
+    it('validates network response data before caching when validate option is provided', async () => {
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ error: 'malformed payload' }),
+      });
+
+      const onError = jest.fn();
+      await expect(
+        fetchCatalogWithCache('/api/history', {
+          key: 'history_test_validate',
+          userId: 1,
+          serverUrl: 'https://puuk.app',
+          validate: (data) => Array.isArray(data),
+          onError,
+        }),
+      ).rejects.toThrow('Validation failed for response data');
+
+      expect(onError).toHaveBeenCalled();
+      const cached = await getCachedCatalog('history_test_validate', {
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+      });
+      expect(cached).toBeNull();
+    });
+
+    it('falls back to stale cache with error if network response fails validate', async () => {
+      await setCachedCatalog('history_test_validate', [{ id: 1 }], {
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+      });
+
+      authFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ error: 'malformed' }),
+      });
+
+      const result = await fetchCatalogWithCache('/api/history', {
+        key: 'history_test_validate',
+        userId: 1,
+        serverUrl: 'https://puuk.app',
+        forceRefresh: true,
+        validate: (data) => Array.isArray(data),
+      });
+
+      expect(result.fromCache).toBe(true);
+      expect(result.isStale).toBe(true);
+      expect(result.data).toEqual([{ id: 1 }]);
+      expect(result.error).toBeTruthy();
+    });
   });
 
   describe('mergeTracks - Дедупликация и сохранение порядка', () => {
@@ -819,6 +872,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
         offset: 0,
         items: [
           {
+            artists: [], artists_revision: 0, album_artists: [], album_artists_revision: 0,
             id: 't-1',
             track_id: 't-1',
             title: 'Track 1',
@@ -826,6 +880,7 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
             coverArt: 'https://web.puuk.fun/api/cover/t-1',
           },
           {
+            artists: [], artists_revision: 0, album_artists: [], album_artists_revision: 0,
             id: 't-2',
             track_id: 't-2',
             title: 'Track 2',
@@ -1306,4 +1361,15 @@ describe('utils/apiCache - Local catalog cache & SWR', () => {
       expect(cached).toBeNull();
     });
   });
+});
+
+
+it('invalidates only the active user and server namespace', async () => {
+  await setCachedCatalog('tracks', ['old'], { serverUrl: 'https://one', userId: 1 });
+  await setCachedCatalog('tracks', ['other server'], { serverUrl: 'https://two', userId: 1 });
+  await setCachedCatalog('tracks', ['other user'], { serverUrl: 'https://one', userId: 2 });
+  await invalidateArtistCreditsCache({ serverUrl: 'https://one', userId: 1 });
+  expect(await getCachedCatalog('tracks', { serverUrl: 'https://one', userId: 1 })).toBeNull();
+  expect((await getCachedCatalog('tracks', { serverUrl: 'https://two', userId: 1 })).data).toEqual(['other server']);
+  expect((await getCachedCatalog('tracks', { serverUrl: 'https://one', userId: 2 })).data).toEqual(['other user']);
 });

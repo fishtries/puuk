@@ -16,6 +16,8 @@ import {
   isNetworkError,
   ApiError,
 } from '../shared/api/api';
+import { recordPlayStart } from '../shared/api/artists';
+import { subscribeArtistCreditsUpdated } from '../shared/domain/artistCreditEvents';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
 import {
   clearSavedLastTrack,
@@ -116,6 +118,9 @@ export default function usePlayerController({ setTracks }) {
 
   // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии
   const isWaveSessionRef = useRef(false);
+  const autoplayAfterQueueRef = useRef(false);
+  const collectionTrackIdsRef = useRef([]);
+  const queueRequestRef = useRef(null);
   // Эпоха очереди: инвалидирует in-flight ответы fetchQueue
   const queueEpochRef = useRef(0);
   // Защита от двойного перехода
@@ -127,6 +132,11 @@ export default function usePlayerController({ setTracks }) {
   const pendingBackgroundEventsRef = useRef([]);
   const isFlushingBackgroundEventsRef = useRef(false);
   const currentTrackRef = useRef(null);
+  const confirmedStartRef = useRef(new Set());
+  const playbackRequestRef = useRef(0);
+  const currentRequestIdRef = useRef(null);
+  const currentPlayUriRef = useRef(null);
+  const [loadedPlayback, setLoadedPlayback] = useState(null);
   const initialUser =
     typeof getCachedUser === 'function' ? getCachedUser() : null;
   const currentUserIdRef = useRef(
@@ -139,7 +149,10 @@ export default function usePlayerController({ setTracks }) {
         )
       : 'anonymous',
   );
-  const sessionIdRef = useRef('sess_' + Math.random().toString(36).slice(2, 9));
+  const initialSessionId =
+    'sess_' + Math.random().toString(36).slice(2, 9);
+  const sessionIdRef = useRef(initialSessionId);
+  const [playbackSessionId, setPlaybackSessionId] = useState(initialSessionId);
   const retryTimerRef = useRef(null);
   const flushPendingBackgroundEventsRef = useRef(null);
   const authEpochRef = useRef(0);
@@ -188,6 +201,22 @@ export default function usePlayerController({ setTracks }) {
   const currentTime = status.currentTime || 0;
   const duration = status.duration || 0;
 
+  useEffect(() => {
+    if (!isPlaying || !currentTrack) return;
+    const trackId = getTrackId(currentTrack);
+    if (trackId === null) return;
+    if (
+      !loadedPlayback ||
+      loadedPlayback.request !== playbackRequestRef.current ||
+      String(loadedPlayback.trackId) !== String(trackId) ||
+      loadedPlayback.authEpoch !== authEpochRef.current
+    ) return;
+    const key = `${currentUserIdRef.current}:${sessionIdRef.current}:${trackId}`;
+    if (confirmedStartRef.current.has(key)) return;
+    confirmedStartRef.current.add(key);
+    recordPlayStart(trackId, { retry: 1 }).catch(() => {});
+  }, [isPlaying, currentTrack, playbackSessionId, loadedPlayback]);
+
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
 
@@ -216,6 +245,7 @@ export default function usePlayerController({ setTracks }) {
       authReadyRef.current = true;
       authEpochRef.current += 1;
       recentHistoryRef.current.clear();
+      confirmedStartRef.current.clear();
       pendingBackgroundEventsRef.current = [];
       if (!preservePendingHistory) {
         pendingHistoryRef.current = [];
@@ -540,6 +570,76 @@ export default function usePlayerController({ setTracks }) {
     };
   }, [currentTrack, upNextQueue]);
 
+  const creditSetTracksRef = useRef(setTracks);
+  creditSetTracksRef.current = setTracks;
+  const creditContextRef = useRef(null);
+  const creditContextKey = JSON.stringify([getTrackId(currentTrack), upNextQueue.map(getTrackId), history.map(getTrackId)]);
+  const creditContextEpoch = (creditContextRef.current?.epoch || 0) + (creditContextRef.current?.key === creditContextKey ? 0 : 1);
+  creditContextRef.current = { key: creditContextKey, epoch: creditContextEpoch, currentTrack, upNextQueue, history };
+
+  // Credit edits patch metadata only; playback and position remain owned by the audio engine.
+  useEffect(() => {
+    let active = true;
+    const versions = new Map();
+    const pending = new Map();
+    let running = 0;
+    const patchTracks = (updates) => {
+      if (!active || !updates.length) return;
+      const byId = new Map(updates.filter((track) => getTrackId(track) !== null).map((track) => [String(getTrackId(track)), track]));
+      const merge = (track) => {
+        const incoming = track && byId.get(String(getTrackId(track)));
+        if (!incoming) return track;
+        const patch = {};
+        for (const key of ['artist', 'artist_id', 'artists', 'artists_revision', 'album_artist', 'album_artists', 'album_artists_revision']) {
+          if (Object.prototype.hasOwnProperty.call(incoming, key)) patch[key] = incoming[key];
+        }
+        return { ...track, ...patch };
+      };
+      setCurrentTrack((previous) => {
+        const updated = merge(previous);
+        if (updated !== previous) currentTrackRef.current = updated;
+        return updated;
+      });
+      setUpNextQueue((previous) => previous.map(merge));
+      setHistory((previous) => previous.map(merge));
+      creditSetTracksRef.current?.((previous) => previous.map(merge));
+    };
+    const pump = () => {
+      while (active && running < 4 && pending.size) {
+        const [id, task] = pending.entries().next().value;
+        pending.delete(id);
+        if (versions.get(id) !== task.version || authEpochRef.current !== task.authEpoch || SERVER_URL !== task.server || creditContextRef.current.epoch !== task.context) continue;
+        running += 1;
+        (async () => {
+          try {
+            const response = await authFetch(`/api/tracks/${encodeURIComponent(id)}?credits_only=true`);
+            const track = response.ok ? await response.json() : null;
+            if (active && versions.get(id) === task.version && authEpochRef.current === task.authEpoch &&
+                SERVER_URL === task.server && creditContextRef.current.epoch === task.context &&
+                track && String(getTrackId(track)) === id) patchTracks([track]);
+          } catch { /* Preserve existing metadata for a later refresh. */ }
+        })().finally(() => { running -= 1; pump(); });
+      }
+    };
+    const unsubscribe = subscribeArtistCreditsUpdated((event) => {
+      const updates = event.scope === 'track' ? [event.track] : event.scope === 'album' ? (event.tracks || []) : [];
+      const ids = event.scope === 'bulk' ? (event.affected?.track_ids || []) : updates.map(getTrackId);
+      const uniqueIds = [...new Set(ids.map(getTrackId).filter((id) => id !== null).map(String))];
+      for (const id of uniqueIds) {
+        versions.set(id, (versions.get(id) || 0) + 1);
+        pending.delete(id);
+      }
+      if (event.scope !== 'bulk') { patchTracks(updates); return; }
+      const context = creditContextRef.current;
+      const relevant = new Set([context.currentTrack, ...context.upNextQueue, ...context.history].map(getTrackId).filter((id) => id !== null).map(String));
+      for (const id of uniqueIds) {
+        if (relevant.has(id)) pending.set(id, { version: versions.get(id), authEpoch: authEpochRef.current, server: SERVER_URL, context: context.epoch });
+      }
+      pump();
+    });
+    return () => { active = false; pending.clear(); unsubscribe(); };
+  }, []);
+
   const requestExpandPlayer = useCallback(() => {
     setIsPlayerVisible(true);
     setPlayerExpandToken((prev) => prev + 1);
@@ -594,6 +694,9 @@ export default function usePlayerController({ setTracks }) {
   /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback(
     (track) => {
+      const request = ++playbackRequestRef.current;
+      const authEpoch = authEpochRef.current;
+      setLoadedPlayback(null);
       const reportPlaybackError = (error) => {
         console.error('[usePlayerController] loadAndPlay error:', {
           message: error?.message,
@@ -627,7 +730,16 @@ export default function usePlayerController({ setTracks }) {
         }
       }
 
-      return Promise.resolve(playbackPromise).catch((error) => {
+      return Promise.resolve(playbackPromise).then((result) => {
+        if (
+          request === playbackRequestRef.current &&
+          authEpoch === authEpochRef.current &&
+          result?.uri && !result.error && !result.superseded
+        ) {
+          setLoadedPlayback({ request, authEpoch, trackId: getTrackId(track) });
+        }
+        return result;
+      }).catch((error) => {
         reportPlaybackError(error);
         return { isLocal: false, uri: null, error };
       });
@@ -635,25 +747,36 @@ export default function usePlayerController({ setTracks }) {
     [player, refreshTrackLoudness],
   );
 
-  const fetchQueue = useCallback(async (trackId, signal, exclusions) => {
+  const fetchQueue = useCallback((trackId, signal, exclusions = {}) => {
     const epoch = queueEpochRef.current;
-    try {
-      const response = await authFetch(buildWaveQueueUrl(trackId, exclusions), {
-        signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      if (epoch !== queueEpochRef.current) return;
-      const normalizedQueue = (Array.isArray(data) ? data : [])
-        .map(normalizeTrackDto)
-        .filter(Boolean);
-      setUpNextQueue((prev) => mergeUniqueQueue(prev, normalizedQueue));
-    } catch (error) {
-      if (error.name !== 'AbortError') {
-        // Не спамим Alert, ошибка видна в UI-баннере
-        console.warn('Failed to load queue:', error.message);
-      }
+    if (queueRequestRef.current?.epoch === epoch) {
+      return queueRequestRef.current.promise;
     }
+    const excludeIds = [...(exclusions.excludeIds || []), ...collectionTrackIdsRef.current];
+    const excluded = new Set([trackId, ...excludeIds, ...(exclusions.queuedIds || [])]
+      .filter((id) => id !== null && id !== undefined).map(String));
+    const promise = (async () => {
+      try {
+        const response = await authFetch(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), { signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (epoch !== queueEpochRef.current) return [];
+        const normalizedQueue = mergeUniqueQueue([], (Array.isArray(data) ? data : [])
+          .map(normalizeTrackDto)
+          .filter((track) => track && !excluded.has(String(getTrackId(track)))));
+        setUpNextQueue((prev) => mergeUniqueQueue(prev, normalizedQueue));
+        return normalizedQueue;
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.warn('Failed to load queue:', error.message);
+        }
+        return [];
+      } finally {
+        if (queueRequestRef.current?.epoch === epoch) queueRequestRef.current = null;
+      }
+    })();
+    queueRequestRef.current = { epoch, promise };
+    return promise;
   }, []);
 
   const playPreviousTrack = useCallback(
@@ -698,13 +821,22 @@ export default function usePlayerController({ setTracks }) {
     if (!currentTrack) return;
     if (isAdvancingRef.current) return;
     isAdvancingRef.current = true;
+    const epoch = queueEpochRef.current;
 
     try {
       setIsLoading(true);
-      setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
-
       let nextTrack;
       let newQueue = [...upNextQueue];
+
+      // A collection remains ordered until its final track has finished.
+      if (newQueue.length === 0 && autoplayAfterQueueRef.current) {
+        newQueue = await fetchQueue(getTrackId(currentTrack), undefined, {
+          excludeIds: history.map(getTrackId).filter((id) => id !== null),
+          queuedIds: [],
+        });
+        if (epoch !== queueEpochRef.current) return;
+        isWaveSessionRef.current = true;
+      }
 
       if (newQueue.length > 0) {
         nextTrack = newQueue.shift();
@@ -712,6 +844,7 @@ export default function usePlayerController({ setTracks }) {
       }
 
       if (nextTrack) {
+        setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
         const nextTrackId = getTrackId(nextTrack);
         const currentTrackId = getTrackId(currentTrack);
 
@@ -757,8 +890,10 @@ export default function usePlayerController({ setTracks }) {
         player.pause();
       }
     } finally {
-      setIsLoading(false);
-      isAdvancingRef.current = false;
+      if (epoch === queueEpochRef.current) {
+        setIsLoading(false);
+        isAdvancingRef.current = false;
+      }
     }
   }, [
     currentTrack,
@@ -820,7 +955,7 @@ export default function usePlayerController({ setTracks }) {
   }, [isPlaying, currentTrack, player, loadAndPlay]);
 
   const playTrack = useCallback(
-    (track) => {
+    (track, { source = 'single', queueIndex } = {}) => {
       if (!track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
@@ -831,22 +966,30 @@ export default function usePlayerController({ setTracks }) {
         setHistory((prev) => [...prev, activeTrack].slice(-MAX_HISTORY));
       }
       if (!activeTrack || !areTrackIdsEqual(activeTrack, trackId)) {
-        sessionIdRef.current =
+        const newSession =
           'track_' +
           Date.now().toString(36) +
           '_' +
           Math.random().toString(36).slice(2, 6);
+        sessionIdRef.current = newSession;
+        setPlaybackSessionId(newSession);
       }
       currentTrackRef.current = track;
-      isWaveSessionRef.current = true;
+      if (source !== 'queue') {
+        isWaveSessionRef.current = source === 'search';
+        autoplayAfterQueueRef.current = source === 'search';
+        collectionTrackIdsRef.current = [];
+      }
       setCurrentTrack(track);
       loadAndPlay(track);
       // Инвалидируем ответы старой очереди до запуска нового запроса.
       // Иначе fetchQueue захватит уже устаревшую эпоху и сможет примешать
       // старый ответ к новой сессии воспроизведения.
       queueEpochRef.current += 1;
-      setUpNextQueue([]);
-      fetchQueue(trackId, undefined, {
+      isAdvancingRef.current = false;
+      setIsLoading(false);
+      setUpNextQueue(source === 'queue' ? upNextQueue.slice(queueIndex + 1) : []);
+      if (source === 'search') fetchQueue(trackId, undefined, {
         excludeIds: [
           ...history.map(getTrackId).filter((id) => id !== null),
           currentId,
@@ -855,7 +998,7 @@ export default function usePlayerController({ setTracks }) {
       });
       recordTrackHistory(trackId);
     },
-    [currentTrack, history, fetchQueue, loadAndPlay, recordTrackHistory],
+    [currentTrack, history, upNextQueue, fetchQueue, loadAndPlay, recordTrackHistory],
   );
 
   const playTrackList = useCallback(
@@ -864,27 +1007,30 @@ export default function usePlayerController({ setTracks }) {
       const track = trackList[startIndex];
       const trackId = getTrackId(track);
       if (trackId === null) return;
-      const activeTrack = currentTrackRef.current || currentTrack;
       const queue = trackList.slice(startIndex + 1);
 
-      if (activeTrack && !areTrackIdsEqual(activeTrack, trackId)) {
-        setHistory((prev) => [...prev, activeTrack].slice(-MAX_HISTORY));
-      }
-      sessionIdRef.current =
+      setHistory(trackList.slice(0, startIndex).slice(-MAX_HISTORY));
+      const newSession =
         'list_' +
         Date.now().toString(36) +
         '_' +
         Math.random().toString(36).slice(2, 6);
+      sessionIdRef.current = newSession;
+      setPlaybackSessionId(newSession);
       currentTrackRef.current = track;
       isWaveSessionRef.current = false;
+      autoplayAfterQueueRef.current = true;
+      collectionTrackIdsRef.current = trackList.map(getTrackId).filter((id) => id !== null);
       setCurrentTrack(track);
       loadAndPlay(track);
       // Ручной плейлист также инвалидирует in-flight wave queue response.
       queueEpochRef.current += 1;
+      isAdvancingRef.current = false;
+      setIsLoading(false);
       setUpNextQueue(queue);
       recordTrackHistory(trackId);
     },
-    [currentTrack, loadAndPlay, recordTrackHistory],
+    [loadAndPlay, recordTrackHistory],
   );
 
   const handleToggleLike = useCallback(
@@ -936,12 +1082,16 @@ export default function usePlayerController({ setTracks }) {
   );
 
   const startWave = useCallback(async () => {
+    const epoch = ++queueEpochRef.current;
+    isAdvancingRef.current = false;
+    setIsLoading(false);
     try {
       const response = await authFetch(
         '/api/wave/next?current_track_id=random',
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      if (epoch !== queueEpochRef.current) return;
       const waveTrack = normalizeTrackDto(data);
       if (!waveTrack) throw new Error('Wave track missing valid identifier');
       const waveTrackId = getTrackId(waveTrack);
@@ -950,16 +1100,22 @@ export default function usePlayerController({ setTracks }) {
       if (currentTrack && !areTrackIdsEqual(currentTrack, waveTrackId)) {
         setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
       }
-      sessionIdRef.current =
+      const newSession =
         'wave_' +
         Date.now().toString(36) +
         '_' +
         Math.random().toString(36).slice(2, 6);
+      sessionIdRef.current = newSession;
+      setPlaybackSessionId(newSession);
       currentTrackRef.current = waveTrack;
       isWaveSessionRef.current = true;
+      autoplayAfterQueueRef.current = true;
+      collectionTrackIdsRef.current = [];
       setCurrentTrack(waveTrack);
       loadAndPlay(waveTrack);
       queueEpochRef.current += 1;
+      isAdvancingRef.current = false;
+      setIsLoading(false);
       setUpNextQueue([]);
       fetchQueue(waveTrackId, undefined, {
         excludeIds: [
@@ -977,6 +1133,8 @@ export default function usePlayerController({ setTracks }) {
   }, [history, currentTrack, fetchQueue, loadAndPlay, recordTrackHistory]);
 
   const dismissPlayer = useCallback(async () => {
+    playbackRequestRef.current += 1;
+    setLoadedPlayback(null);
     try {
       player.pause();
     } catch (e) {
@@ -993,6 +1151,11 @@ export default function usePlayerController({ setTracks }) {
       applyTrackNormalization(player, null, false);
     } catch (e) {}
     isWaveSessionRef.current = false;
+    autoplayAfterQueueRef.current = false;
+    collectionTrackIdsRef.current = [];
+    queueEpochRef.current += 1;
+    isAdvancingRef.current = false;
+    setIsLoading(false);
     currentTrackRef.current = null;
     setCurrentTrack(null);
     setUpNextQueue([]);
