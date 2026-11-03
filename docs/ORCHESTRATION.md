@@ -12,6 +12,30 @@
 
 **Run** — пространство координации и inbox. **Task** — работа с критериями приёмки и зависимостями. **Dispatch** — одна авторитетная попытка задачи. Run сам не запускает готовые задачи: следующую волну выбирает координатор.
 
+## 1.1 Роли и модели: Junior и Senior
+
+- **Junior Gemini (`junior-gemini`):** `antigravity-manager/gemini-3.8-flash` — для более лёгких и быстрых задач (типовые изолированные правки, рутинные обновления импортов, простые тесты).
+  - В puuk определён subagent `junior-gemini` (`.opencode/agents/junior-gemini.md`, модель `antigravity-manager/gemini-3.8-flash`).
+  - Вызов внутри OpenCode: `@junior-gemini` или через `task` с `subagent_type: "junior-gemini"`. Доступен после перезапуска OpenCode.
+  - В Orca через терминал: `--command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build'`.
+- **Junior DeepSeek (`junior-deepseek`):** DeepSeek V4.1 Flash 1017 через TundraLabs API (`tundra/deepseek-v4.1-flash-1017`) — для стандартных самостоятельных junior-задач с явными критериями приёмки и валидацией логики.
+  - В puuk определён subagent `junior-deepseek` (`.opencode/agents/junior-deepseek.md`, модель `tundra/deepseek-v4.1-flash-1017`).
+  - Вызов внутри OpenCode: `@junior-deepseek` или через `task` с `subagent_type: "junior-deepseek"`. Доступен после перезапуска OpenCode.
+  - В Orca тот же junior запускается через терминал: `--command 'opencode --model tundra/deepseek-v4.1-flash-1017 --agent build'`.
+- **Senior:** только **Codex (`gpt-6.1-sol`, reasoning effort `high`)** — координация, декомпозиция, архитектура, сложные фичи и независимая приёмка.
+  - В Orca запускается напрямую через supervised worker:
+    ```bash
+    orca orchestration worker-start \
+      --spec '<спецификация задачи>' \
+      --worktree current \
+      --agent codex \
+      --model gpt-6.1-sol \
+      --effort high \
+      --json
+    ```
+  - В Codex CLI: `codex --model gpt-6.1-sol -c model_reasoning_effort="high"` (в `~/.codex/config.toml` настроен `model = "gpt-6.1-sol"`).
+  - Старшие агенты OpenCode не используются — senior закреплён только за Codex `gpt-6.1-sol` high.
+
 ## 2. Окружение и справка
 
 Выберите executable один раз и используйте его для всей работы:
@@ -34,7 +58,7 @@ opencode --version
 opencode models
 ```
 
-Используйте установленный и авторизованный агентский CLI. Наличие и авторизация Codex при этой проверке не исследовались.
+Используйте установленный и авторизованный агентский CLI. Codex установлен и авторизован (`~/.codex/config.toml` с `model = "gpt-6.1-sol"`), используется для senior-задач.
 
 ## 3. Спецификация задачи
 
@@ -53,7 +77,24 @@ Report: изменённые файлы, выполненные проверки
 
 `--worktree current` разделяет файлы с координатором. Для параллельных правок нужны непересекающиеся области владения либо отдельные checkout. Незакоммиченные изменения текущего каталога нельзя предполагать перенесёнными в новый checkout.
 
-## 4. Запуск и другая модель
+## 4. Запуск и выбор модели
+
+### Senior worker в Codex (`gpt-6.1-sol`, effort `high`)
+
+Для senior-задач (координация, декомпозиция, сложные фичи, архитектура, независимая приёмка) запуск выполняется напрямую через launcher Codex в Orca:
+
+```bash
+orca orchestration run-create --objective '<общая цель>' --json
+orca orchestration worker-start \
+  --spec '<полная спецификация>' \
+  --worktree current \
+  --agent codex \
+  --model gpt-6.1-sol \
+  --effort high \
+  --json
+```
+
+Codex поддерживает `--model` и `--effort` прямо в `worker-start`, в отличие от OpenCode.
 
 ### OpenCode с выбором модели из конфигурации
 
@@ -68,15 +109,15 @@ orca orchestration worker-start \
 
 `--agent opencode` выбирает launcher Orca. Модель нового процесса выбирается средствами OpenCode; модель координатора нельзя считать автоматически переданной worker.
 
-### OpenCode с явным выбором другой модели
+### OpenCode с явным выбором другой модели (например, Junior DeepSeek)
 
 **`worker-start --agent opencode --model …` не поддерживается** в проверенной версии. Для выбора модели при конкретном запуске создайте агентский терминал, затем назначьте ему задачу:
 
 ```bash
 orca orchestration run-create --objective '<общая цель>' --json
 orca terminal create \
-  --worktree current --title 'junior-gemini' \
-  --command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build' \
+  --worktree current --title 'junior-deepseek' \
+  --command 'opencode --model tundra/deepseek-v4.1-flash-1017 --agent build' \
   --json
 orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
 orca orchestration worker-start \

@@ -1,0 +1,87 @@
+# F1R — независимая приёмка personalized credits fix
+
+**Runtime fix принят локально: исходный P1/F1 воспроизводится на старых bytes и устранён на проверенных новых bytes. На production исправление ещё не выпущено.** Independent fail→pass,75 целевых tests, real-library replay и отдельная SQL-сверка подтвердили credits/revisions/manual `[]`, независимость album credits, bounded hydration и сохранность ранжирования. Это не device/listening acceptance и не разрешение на deploy.
+
+Дата2026-10-29 UTC; Run `run_ea37b46b2dc1`; Task `task_cbd4ccd4fefe`; Dispatch `ctx_6d97cb0bf6e7`. Reviewer не реализовывал service/test fix, не редактировал исходники/тесты/F1 report. Ownership: только этот документ и `/tmp/puuk-ma-close/F1R/`. Frozen W1 failure evidence и source-tree сохранены. Использованы root/brain/iOS AGENTS, ранее загруженные version-matched Orca guides, текущий контракт §6/9/10/T03/T16/T17 и MA_ROLLOUT_PREPARATION; для release scope применён `release-it` с mini rules. Подзадач не было.
+
+Это reuse существующего Codex gpt-6.1-sol/high процесса: projection/model/footer проверены; нового launch не было. Исходный launch receipt процесса не вернул requested/effective fields (ограничение уже зафиксировано R1); их равенство не выдумывается. Текущий Dispatch receipt сохранён отдельно, lifecycle использует только новые live IDs.
+
+## Точные проверенные bytes
+
+| Вход | SHA256 / отношение к C0 |
+|---|---|
+| C0/W1/remote service до F1 | `9d6e22da5828abaf51a2aadf703d873478222baa27c3c7963944a83d23365ac7` |
+| Принятый local service `brain/services/personalized_recommendation_service.py` | `bcbd8d490f381aef3fbe25c762d92abf43c2605f229e2261f88835fe5c932912` |
+| Новый regression `brain/test_closeout_personalized_credits.py` | `6be219a212936708e86591f7c99ae497f9aa7ebf457ba9cb5bc8c33b196b5e8f`; absent в C0 inventory |
+| C0 deployment source manifest | `76060b843a4f88511ce7565d835de80b23d441d66de0653757fc30c1be7ec749`,127 runtime/test/config inputs |
+| Frozen real SQLite capture | `ab6ecde1c2868b6f232ee78feff08fad1787d665c704237e4a0a733e0bdd99a3` |
+
+HEAD `671be2ff8bf2d89a1bc11766d18f62b4faebe5a5` — база dirty tree, не идентичность patch. Из127 C0 deployment paths локально изменён ровно один service; новая regression дополнительная, runtime allowlist внизу не включает её. Все117 current Python/SQL inputs зафиксированы в sources.json и скопированы в reviewer old/fixed trees. Старое service содержимое побайтово равно и W1 frozen source, и F1 pre-fix backup. Зависимости/config/schema/router не изменены.
+
+Diff runtime: +11 lines batch hydration после selection, +5 additive fields fallback DTO; удаления отсутствуют. `unhydrated_ids` включает только selected rows без ключа artists; один существующий `db.get_tracks_by_ids` выполняет canonical hydrate_track_credits; merge сохраняет selection order. Already-hydrated `artists: []` не считается отсутствием. Дописаны `artist_id`, `artists`, `artists_revision`, `album_artists`, `album_artists_revision`; ranked path остаётся на build_wave_track_payload. Score/ranking/caps/penalties/selection происходят до нового блока и не менялись.
+
+## Критерии fix — независимые решения
+
+| Критерий | Решение | Evidence |
+|---|---|---|
+| Regression fails original/passes fixed | **accepted** | Один и тот же новый test hash на собственном old tree:3 failures exit1; на fixed tree все3 включены в75 passed exit0. Ошибки old именно missing artist_id/нет batch call, не dependency/setup. |
+| Canonical fallback credits/ordered IDs/revisions | **accepted** | Real user1 copied history:60/60 DTO проверены отдельным SQL oracle по ordered track_artists/artist_credit_state и album_artists; manual confetti+khel сохранены. |
+| Mixed ranked+SQLite refill | **accepted** | Два настоящих six-track Breakcore micro-catalog cases: manual track отдельно ranked и refill. Теперь12/12 DTO содержат exact arrays/revisions; раньше в каждом5/6 rows теряли fields. |
+| Manual track `[]`, ordering, independent joint/empty album | **accepted** | Дополнительные copy-only edits: reversed `[khel,confetti]`, другой track manual `[]`, независимый album `[Independent Album Second,Independent Album First]`, затем album manual `[]`. Возвращены exact SQL lists/revisions/display/artist_id; source capture unchanged. |
+| Hydration bounded/no N+1 | **accepted** | На реальном six-track raw mixed input один batch по всем selected IDs,5 incremental SELECT (track lookup +2 track-credit +2 album-credit); hydrated input даёт0 extra lookup/SELECT. Existing repository chunks IDs400. Public route limit≤20/sections≤3; новый lookup не расширяет candidate pool и не пишет в DB. |
+| Ranking/legacy compatibility | **accepted** | Old/fixed15 W1 cases/IDs/scores/repetitions/1637 penalty rows/Wave DTO audit совпадают. Дополнительно4 full DTO comparisons (sections, mixed manual ranked/refill, raw mixed) равны после удаления только5 additive credit keys; order/scores/URLs/прочие поля неизменны. |
+| Relevant existing checks | **accepted** | Independent75 passed: новая3 + те же6 W1 recommendation suites72. Full backend547+56subtests log исполнителя реально прочитан, но не повторён и не выдаётся за F1R execution. |
+| No production/history/audio side effects | **accepted в scope review** | Все pytest DB/temp/media находятся под own /tmp, Qdrant Local in-memory; socket connect запрещён. Service evaluation не меняла никакую таблицу; явные fixture writes только в своей SQLite. Source capture hash прежний; integrity=ok/FK0. Audio не открывались. |
+
+Существующая regression с названием mixed/unhydrated использует обычный hydrated default catalog; raw hydration проверяется её третьим тестом. Reviewer дополнительно проверил именно **raw mixed** path с ranked+refill и batch trace, поэтому один только неточный test name не используется как proof отсутствующей ветки.
+
+## Фактические executions
+
+Python3.14.8; pytest9.1.1; qdrant-client1.18.0; FastAPI0.141.1; NumPy2.4.6. `run-tests.py` задаёт отдельные PUUK_DB_PATH/PUUK_TESTS_TMP/--basetemp и offline plugin с captured400-D points; новый успешный прогон также явно задаёт MUSIC_DIR собственной пустой fixture directory. No installed dependency/source changes.
+
+| Execution | UTC / cwd / exit | Результат |
+|---|---|---|
+| `brain/venv/bin/python /tmp/puuk-ma-close/F1R/run-tests.py old` |11:30:45.965870–11:30:47.482457; inner cwd `F1R/old/brain`; pytest exit1, runner0 как expected-failure check.|3 expected regression failures. Exact pytest argv в old-tests.json.|
+| `.../run-tests.py fixed` — первая изолированная попытка |11:30:52.200403–11:31:01.636429; `F1R/fixed/brain`; exit1.|72 passed/3 environment failures: default `/mnt/data/...` unavailable в copied tree; original logs сохранены. Это не скрытый product regression.|
+| `.../run-tests.py fixed-isolated` |11:31:16.635985–11:31:25.065501; `F1R/fixed/brain`; exit0.|75 passed,1 Starlette deprecation warning; тот же pinned source, явный own MUSIC_DIR.|
+| Own copies of unchanged W1 harness, old и fixed |11:31:57.905041–11:32:00.649752; repo root; оба exit0.|15 cases/penalties identical; fallback60missing→0; mixed missing5+5→0+0.|
+| `PYTHONPATH=/tmp/puuk-ma-close/F1R PYTHONDONTWRITEBYTECODE=1 brain/venv/bin/python /tmp/puuk-ma-close/F1R/semantics.py` |11:33:09.180045–11:33:10.395288; repo root; exit0.|60 fallback SQL equality,12 mixed rows, manual order/track[]/independent album[]/revisions, batch traces, no evaluation mutations.|
+| Same env + `.../compatibility.py` |11:35:12.032910–11:35:13.004549; repo root; exit0.|4 whole DTO comparisons after removing only5 additive fields.|
+| Read-only SSH service SHA256 |11:33:40.546870–11:33:41.087336; repo root; exit0.|Remote exact original `9d6e22da…365ac7`; no imports/restart/DB/API calls.|
+
+Fixed75 command внутри runner: `brain/venv/bin/python -m pytest -q -p offline_qdrant --basetemp <own-dir> test_closeout_personalized_credits.py test_multi_artist_recommendations.py test_wave_stage2.py test_wave.py test_personalized_recommendations.py test_personalization.py test_effective_genres_recommendations.py`. Cwd pinned copied brain; все absolute paths/start/end/exit содержатся в receipts.
+
+## Evidence исполнителя и documentary finding
+
+Реально прочитаны, hash-проверены: `F1/prefix.log` (`76d43862851a7161bce3039ac3a924cad18e4250045b317b1175c60124580726`) —3failed; `F1/after-suites.log` (`41c090921bd227bf105964e5e5c37090befd4aa4dde00bec7486ab616b9bc0ff`,596bytes) —42passed; `F1/full-suite.log` (`d1a4b7ce92150eff6f7a7d4d19398ad9bebb9bc1b45f2eec265e61c783f0c7f3`) —547passed/56subtests. Эти logs не содержат independently recoverable exact execution start/end: mtime не используется. Отдельного durable standalone3pass log исполнителя нет; F1R independently доказывает pass этих3 в новом75-run.
+
+Во время review F1E ошибочно объявил596-byte42pass log повреждённым/не содержащим pytest output. Это **P2/F1R-DOC-01 documentary**, reproduction: head/tail и SHA этого же файла показывают обычный pytest summary; escalation `msg_1077d8f80ace`. F1E успел settled до correction delivery; coordinator сохранил его outcome, не принял ошибочное content и создал отдельную fix-F1EF Task `task_de2aaf86961c` (сообщение `msg_a53ee1e50033`). Исходный ошибочный claim не используется для оценки source. Статус исправления фиксируется final receipt после повторного чтения F1 report/нового documentary receipt; до положительной проверки finding открыт. Reviewer их не редактирует; product fix принят отдельно от documentary gap.
+
+## Где исправление действует
+
+На11:33:41 UTC серверный `/home/fish/apps/puuk/puuk/brain/services/personalized_recommendation_service.py` по read-only SHA всё ещё **исходный `9d6e22da…365ac7`**. C0 совпадение исходного файла с deployed baseline подтверждено заново; исправленное поведение доказано только локально. Проверка disk bytes не аттестует imports в памяти процесса; ни F1, ни F1R restart/deploy не делали. W1 original P1 failure evidence сохраняется как исторический факт; production P1 остаётся до отдельного успешного release/live API receipt.
+
+## Конкретное предложение совместимого backend-релиза — не выполнено
+
+Runtime allowlist ровно **один** путь: local `brain/services/personalized_recommendation_service.py` → remote `/home/fish/apps/puuk/puuk/brain/services/personalized_recommendation_service.py`; expected-before SHA `9d6e22da5828abaf51a2aadf703d873478222baa27c3c7963944a83d23365ac7`, accepted-after SHA `bcbd8d490f381aef3fbe25c762d92abf43c2605f229e2261f88835fe5c932912`. Regression/tests/reports не передавать как runtime release; migration/config/dependencies/бот/heavy_worker/iOS/audio/data corrections вне allowlist. Общий `./deploy.sh` и его rsync/restart/SIGKILL fallback слишком широки для этого scope.
+
+Совместимость: schema остаётся12; новых imports, signatures, tables, mutation semantics или dependency requirements нет. Canonical get_tracks_by_ids/hydrate helpers уже присутствовали в C0. Import consumer service — API router personalized_recommendations; bot/heavy_worker этот service не импортируют и их bytes не меняются. Поэтому **migration-style freeze всех writers не нужен автоматически**: если свежий preflight подтверждает compatible schema12 writers и неизменные helper/lock contracts, bot/heavy_worker продолжают штатно работать, перезапускается только API. Неустановленная совместимость/старый writer/namespace mismatch — stop и отдельный scope, не основание молча останавливать всех.
+
+Предлагаемый reviewable operator scope после конкретной release authorization:
+
+1. **Fresh preflight до любого write/signal.** Пересверить exact before/after hashes, schema12, deployed canonical helper/config/router hashes относительно C0, actual API unit/process manager/cwd/version/PID/start time, bot/local heavy_worker/scan writer census. Не выводить env/secrets; подтвердить DB canonical path через разрешённую config inspection, не дамп окружения. Любой drift от accepted baseline требует review, не force overwrite.
+2. **Lock compatibility.** Проверить общий канонический DB path и mount namespace, доступ всех реальных writers к `/var/tmp/puuk-artist-credit-locks-v2`, права и стабильный inode. Не удалять/пересоздавать lock sidecars при работающих writers; fail-closed503 сохраняется. Никакой DB-credit mutation этим patch не нужна, и lock не удерживается вокруг network transfer/restart. Не устраивать искусственную production contention для smoke.
+3. **Fresh consistent backup и recovery receipt.** Онлайн SQLite backup API с read-only source connection, schema/counts/catalog/integrity/FK, время/source hash/access permissions. Проверить открытие/restore backup только на isolated copy. Сохранить точные прежние service bytes/mode/owner и minimal relevant version manifest. Active compatible writers допустимы; backup — snapshot, не доказательство возможности откатить поздние writes. Не копировать один WAL main.db и не восстанавливать production DB ради read-only DTO fix.
+4. **Guarded one-file install.** Stage accepted bytes рядом с target, проверить SHA/mode/owner; непосредственно перед atomic replace повторить expected-before check. Сохранить predecessor service artifact и receipt. Не переносить shared dirty tree целиком; не менять env/build/schema/runtime других компонентов. Byte mismatch/permission failure прекращает шаг.
+5. **API-only graceful restart с наблюдаемым восстановлением.** Выполнить ровно restart установленного `puuk-brain` system unit через уже авторизованный manager/operator; фактический historical manager/status не заменяет свежую проверку. Если право restart отсутствует — остановиться до замены либо согласовать операторское выполнение; не применять ad-hoc SIGKILL/pkill fallback. Зафиксировать accepted restart result, новый PID/start time/unit active, startup logs и timeout. Readiness deadline предложен60s с bounded polling; по timeout не повторять вслепую и не объявлять success. Bot/heavy_worker restart не входит в scope.
+6. **Live authenticated API smoke.** Health + schema12/integrity/FK и actual published service hash/version. GET `/api/recommendations/youll-like-this?sections=3&limit=20` существующего разрешённого пользователя: successful sections, все5 credits keys, ordered arrays/revisions/artist_id/display равны свежим DB values для реально returned IDs; URLs/score/дедуп/размер без regressions. Проверить track/album/artist GET и legacy read compatibility; сравнить participant/album attribution отдельно. Не добавлять history/favorites/genres/manual edits ради появления нужного трека; если manual/[] не попали в live response, записать not observed и сослаться на isolated proof. Нормальные derived-cache effects existing GET не считать data correction. Credentials/response-private data не включать в report.
+7. **Limits/monitoring и stop conditions.** Проверить отсутствие ImportError/SQL errors,503 surge, stale workers и degraded GET; записать latency/response-size для actual request без универсальной performance гарантии. IDs/catalog/counts могут штатно расти при активных writers; фиксировать такие дельты отдельно, не объявлять всю live DB byte-identical. Data apply/undo/rescan и любые write-based lock probes не авторизуются этим smoke.
+8. **Rollback/roll-forward.** При install-before-restart failure inspect actual target hash/status; не гадать о состоянии и не повторять широкую команду. Предпочтителен reviewed roll-forward. Для регрессии допускается guard-after-hash atomic возврат **именно compatible schema12 pre-F1 service `9d6e22da…365ac7`**, затем один такой же controlled API restart/health smoke; возвращается старый DTO defect, но manual/schema semantics сохраняются. Это не возврат pre-multi-artist binaries: они несовместимы с overrides. DB restore, schema downgrade, bot/worker rollback и потеря/слияние поздних writes требуют отдельного согласованного recovery scope. Другой target hash означает stop/review.
+
+Operator release receipt должен назвать exact single-file hashes/backup/lock census, restart authority/command/outcome/PID/readiness interval, фактические authenticated GET statuses/DTO comparisons, активные compatible writers, rollback decision и residual risks. До такого receipt локальная приёмка не закрывает production P1. Файл принят для конкретного предложения выпуска, автоматического deploy нет.
+
+## Passed / failed / not tested и артефакты
+
+**Passed F1R:** differential3fail→fixed75pass; old/fixed real15cases;60fallback/12mixed SQL-correct DTO; manual ordered/track[]/album[]/revisions; bounded5SELECT raw/0hydrated;4 compatibility comparisons; source preservation; read-only server old-hash proof. **Failed diagnostics:** первая fixed suite72pass/3 environment failures сохранена, затем устранена только own fixture env; original3failed — ожидаемая репродукция. **Not tested:** production install/restart/backup/lock end-to-end/live API после F1, native/device/listening/performance; broad backend не rerun. F1E documentary status отдельно в final receipt.
+
+Own directory `/tmp/puuk-ma-close/F1R/`: sources.json и runtime.diff; dispatch.json; run-tests.py/offline_qdrant.py/sitecustomize.py; old/fixed source snapshots; old-tests.log/json, fixed-tests.log/json (failed env), fixed-isolated-tests.log/json (75pass); replay-old/replay-fixed copied harness/results/log/receipt и replay-comparison.json; semantics.py/json; compatibility.py/json; remote-source.json; final-receipt.json. Все receipts содержат exact cwd/UTC/exit/version/source identity. Local DB captures/fixture DB приватны, не публиковать. Existing W1/F1/F1E files не изменялись reviewer. Dirty baseline/index сохранены; reset/clean/commit/deploy/audio writes не выполнялись.

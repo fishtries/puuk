@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "proposals": [
+    {
+      "entity_type": "track",
+      "entity_id": "27e48714-ad06-5914-8770-0020e6df2b88",
+      "expected_revision": 1,
+      "before": [
+        {
+          "id": "art_2fc2788896b5726a1f26480f1cd08141",
+          "name": "TV Girl/George Clanton"
+        }
+      ],
+      "after": [
+        {
+          "id": "art_c6c54c3ea0c74315ead8393df5644a7a",
+          "name": "TV Girl"
+        },
+        {
+          "id": "art_65064b6c1e41e167a3e4778a2d60c206",
+          "name": "George Clanton"
+        }
+      ],
+      "source_kind": "legacy",
+      "source_names": [
+        "TV Girl/George Clanton"
+      ],
+      "reason": "Exact reviewed track ID/title/release match; track-only credits correction, no title or album attribution change.",
+      "evidence": "Official Spotify Japanese Deluxe track list explicitly lists ordered performers for Summer 2000 Baby: TV Girl, George Clanton. https://open.spotify.com/embed/album/5MQx9UktIiM86OYBZh1c4M",
+      "ambiguity": "confirmed",
+      "id": "1df2a30337746fe6372a8d9462f4c8ce1db5edf6a2b327af94cd3ec3734956c7"
+    },
+    {
+      "entity_type": "track",
+      "entity_id": "66a3a682-e693-58d3-afbb-b10d6a6fe3f9",
+      "expected_revision": 1,
+      "before": [
+        {
+          "id": "art_13f98ee3ee35bd9b5cc3ad5e13951941",
+          "name": "TV Girl & George Clanton"
+        }
+      ],
+      "after": [
+        {
+          "id": "art_c6c54c3ea0c74315ead8393df5644a7a",
+          "name": "TV Girl"
+        },
+        {
+          "id": "art_65064b6c1e41e167a3e4778a2d60c206",
+          "name": "George Clanton"
+        }
+      ],
+      "source_kind": "legacy",
+      "source_names": [
+        "TV Girl & George Clanton"
+      ],
+      "reason": "Exact reviewed track ID/title/release match; track-only credits correction, no title or album attribution change.",
+      "evidence": "Official Spotify Japanese Deluxe track list explicitly lists ordered performers for Everything Blue: TV Girl, George Clanton. https://open.spotify.com/embed/album/5MQx9UktIiM86OYBZh1c4M",
+      "ambiguity": "confirmed",
+      "id": "892f79ac7316e8d31833f5de94cc072c55ba7c20e6dbf2063bcd8a4c3037aac8"
+    },
+    {
+      "entity_type": "track",
+      "entity_id": "8ef2ef3e-df31-5724-8288-7143843f802f",
+      "expected_revision": 1,
+      "before": [
+        {
+          "id": "art_13f98ee3ee35bd9b5cc3ad5e13951941",
+          "name": "TV Girl & George Clanton"
+        }
+      ],
+      "after": [
+        {
+          "id": "art_c6c54c3ea0c74315ead8393df5644a7a",
+          "name": "TV Girl"
+        },
+        {
+          "id": "art_65064b6c1e41e167a3e4778a2d60c206",
+          "name": "George Clanton"
+        },
+        {
+          "id": "art_a46a22317b146691cca485a0f4e77420",
+          "name": "Neggy Gemmy"
+        }
+      ],
+      "source_kind": "legacy",
+      "source_names": [
+        "TV Girl & George Clanton"
+      ],
+      "reason": "Exact reviewed track ID/title/release match; track-only credits correction, no title or album attribution change.",
+      "evidence": "Official Spotify Japanese Deluxe track list explicitly lists ordered performers for Monday, Monday (feat. Neggy Gemmy): TV Girl, George Clanton, Neggy Gemmy. https://open.spotify.com/embed/album/5MQx9UktIiM86OYBZh1c4M; exact track: https://open.spotify.com/embed/track/14joz9oqnhYORgpKOmE0Aj",
+      "ambiguity": "confirmed",
+      "id": "ad3e8b6184e8836d2702b9265595cb5d4e308c294446aeade215cfb5143024e5"
+    },
+    {
+      "entity_type": "track",
+      "entity_id": "8f441ada-eddc-51c8-84ab-c1cea4833c83",
+      "expected_revision": 1,
+      "before": [
+        {
+          "id": "art_2fc2788896b5726a1f26480f1cd08141",
+          "name": "TV Girl/George Clanton"
+        }
+      ],
+      "after": [
+        {
+          "id": "art_c6c54c3ea0c74315ead8393df5644a7a",
+          "name": "TV Girl"
+        },
+        {
+          "id": "art_65064b6c1e41e167a3e4778a2d60c206",
+          "name": "George Clanton"
+        }
+      ],
+      "source_kind": "legacy",
+      "source_names": [
+        "TV Girl/George Clanton"
+      ],
+      "reason": "Exact reviewed track ID/title/release match; track-only credits correction, no title or album attribution change.",
+      "evidence": "Official Spotify Japanese Deluxe track list explicitly lists ordered performers for Take a Trip: TV Girl, George Clanton. https://open.spotify.com/embed/album/5MQx9UktIiM86OYBZh1c4M",
+      "ambiguity": "confirmed",
+      "id": "8d0b8872afbb46d3f02700340bc3cfc9ce480ff3a4fcedc2a99c447908b902e5"
+    },
+    {
+      "entity_type": "track",
+      "entity_id": "fb47153a-16dc-54c4-b4d5-207da7c47821",
+      "expected_revision": 1,
+      "before": [
+        {
+          "id": "art_d22629b6ccf980577884e5344ad8fe79",
+          "name": "TV Girl, George Clanton"
+        }
+      ],
+      "after": [
+        {
+          "id": "art_c6c54c3ea0c74315ead8393df5644a7a",
+          "name": "TV Girl"
+        },
+        {
+          "id": "art_65064b6c1e41e167a3e4778a2d60c206",
+          "name": "George Clanton"
+        }
+      ],
+      "source_kind": "legacy",
+      "source_names": [
+        "TV Girl, George Clanton"
+      ],
+      "reason": "Exact reviewed track ID/title/release match; track-only credits correction, no title or album attribution change.",
+      "evidence": "Official Spotify Japanese Deluxe track list explicitly lists ordered performers for Fauxllennium: TV Girl, George Clanton. https://open.spotify.com/embed/album/5MQx9UktIiM86OYBZh1c4M",
+      "ambiguity": "confirmed",
+      "id": "3db1e64787563638824e748c84935702400aad1cd60093f2840f17417dda9895"
+    }
+  ],
+  "unresolved": []
+}
