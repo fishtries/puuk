@@ -22,11 +22,20 @@ import {
 } from '../../shared/domain/trackAdapter';
 import CoverImage from '../../shared/media/CoverImage';
 
-export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
-  const { playlistId, playlistName } = route.params;
+export default function PlaylistScreen({ route, navigation, onPlayTrackList }) {
+  const {
+    playlistId,
+    playlistName,
+    tracks: initialTracks,
+    subtitle: customSubtitle,
+    coverArt: customCoverArt,
+    isReadOnly,
+  } = route?.params || {};
   const isFavorites = playlistId === 'favorites';
-  const [tracks, setTracks] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const hasInitialTracks = Array.isArray(initialTracks) && initialTracks.length > 0;
+  const isCustomOrReadOnly = Boolean(isReadOnly || hasInitialTracks);
+  const [tracks, setTracks] = useState(hasInitialTracks ? initialTracks : []);
+  const [isLoading, setIsLoading] = useState(!hasInitialTracks);
   const [accentColor, setAccentColor] = useState(
     () => getSettings().accentColor || '#FFDAB9',
   );
@@ -39,8 +48,10 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
   }, []);
 
   useEffect(() => {
-    fetchPlaylist();
-  }, [playlistId]);
+    if (!hasInitialTracks) {
+      fetchPlaylist();
+    }
+  }, [playlistId, hasInitialTracks]);
 
   const fetchPlaylist = async () => {
     setIsLoading(true);
@@ -120,7 +131,7 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
     <TouchableOpacity
       style={styles.trackRow}
       activeOpacity={0.6}
-      onPress={() => onPlayTrack(item)}
+      onPress={() => onPlayTrackList(tracks, index)}
     >
       <Text style={styles.trackNumber}>{index + 1}</Text>
       {item.coverArt && (
@@ -134,12 +145,14 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
           {item.artist}
         </Text>
       </View>
-      <TouchableOpacity
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        onPress={() => handleRemoveTrack(item)}
-      >
-        <Ionicons name="trash-outline" size={18} color="#ff453a" />
-      </TouchableOpacity>
+      {!isCustomOrReadOnly && (
+        <TouchableOpacity
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          onPress={() => handleRemoveTrack(item)}
+        >
+          <Ionicons name="trash-outline" size={18} color="#ff453a" />
+        </TouchableOpacity>
+      )}
     </TouchableOpacity>
   );
 
@@ -168,21 +181,29 @@ export default function PlaylistScreen({ route, navigation, onPlayTrack }) {
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.playlistHeader}>
-              <View
-                style={[
-                  styles.coverImage,
-                  styles.coverPlaceholder,
-                  isFavorites && styles.favoritesCoverPlaceholder,
-                ]}
-              >
-                <Ionicons
-                  name={isFavorites ? 'heart' : 'list'}
-                  size={52}
-                  color={isFavorites ? accentColor : '#555'}
+              {customCoverArt || (hasInitialTracks && tracks[0]?.coverArt) ? (
+                <CoverImage
+                  source={customCoverArt || tracks[0]?.coverArt}
+                  style={styles.coverImage}
                 />
-              </View>
+              ) : (
+                <View
+                  style={[
+                    styles.coverImage,
+                    styles.coverPlaceholder,
+                    isFavorites && styles.favoritesCoverPlaceholder,
+                  ]}
+                >
+                  <Ionicons
+                    name={isFavorites ? 'heart' : 'list'}
+                    size={52}
+                    color={isFavorites ? accentColor : '#555'}
+                  />
+                </View>
+              )}
               <Text style={styles.playlistTitleText}>{playlistName}</Text>
               <Text style={styles.playlistSubtitleText}>
+                {customSubtitle ? `${customSubtitle} • ` : ''}
                 {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
               </Text>
             </View>

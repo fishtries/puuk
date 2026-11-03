@@ -6,6 +6,9 @@ import AlbumScreen from '../features/albums/AlbumScreen';
 import AlbumEditScreen from '../features/albums/AlbumEditScreen';
 import PlaylistScreen from '../features/playlists/PlaylistScreen';
 import TrackEditScreen from '../features/library/TrackEditScreen';
+import ArtistScreen from '../features/artists/ArtistScreen';
+import ArtistCreditBulkScreen from '../features/artists/ArtistCreditBulkScreen';
+import ArtistArtworkEditScreen from '../features/artists/ArtistArtworkEditScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -62,14 +65,35 @@ const RootNavigator = React.memo(function RootNavigator({
         {(props) => (
           <AlbumScreen
             {...props}
-            onPlayTrack={playTrack}
+            onPlayTrackList={playTrackList}
             onPressEllipsis={(track) => setTrackToManage(track)}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="ArtistDetail">
+        {(props) => (
+          <ArtistScreen
+            {...props}
+            currentUser={currentUser}
+            onPlayTrack={playTrack}
+            onPressEllipsis={setTrackToManage}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="ArtistCreditBulk">
+        {(props) => <ArtistCreditBulkScreen {...props} currentUser={currentUser} />}
+      </Stack.Screen>
+      <Stack.Screen name="ArtistEdit">
+        {(props) => (
+          <ArtistArtworkEditScreen
+            {...props}
+            currentUser={currentUser}
           />
         )}
       </Stack.Screen>
       <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
-        {(props) => <PlaylistScreen {...props} onPlayTrack={playTrack} />}
+        {(props) => <PlaylistScreen {...props} onPlayTrackList={playTrackList} />}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>

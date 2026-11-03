@@ -87,10 +87,12 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
         isPlaying={isPlaying}
         currentTrack={currentTrack}
         onPlayTrack={playTrack}
+        onPlayTrackList={playTrackList}
         onStartWave={startWave}
         onPressEllipsis={setTrackToManage}
         currentUser={currentUser}
         onOpenAuthModal={onOpenAuthModal}
+        accentColor={accentColor}
         onLoadMoreTracks={onLoadMoreTracks}
         hasMoreTracks={hasMoreTracks}
         isLoadingMoreTracks={isLoadingMoreTracks}
@@ -102,10 +104,12 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
       isPlaying,
       currentTrack,
       playTrack,
+      playTrackList,
       startWave,
       setTrackToManage,
       currentUser,
       onOpenAuthModal,
+      accentColor,
       onLoadMoreTracks,
       hasMoreTracks,
       isLoadingMoreTracks,

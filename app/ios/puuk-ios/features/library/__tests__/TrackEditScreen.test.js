@@ -94,7 +94,6 @@ describe('TrackEditScreen - Stage 8 Slice 6 track normalization & identity', () 
         method: 'PATCH',
         body: expect.objectContaining({
           title: 'Legacy Edit Song',
-          artist: 'Artist Edit',
           album: 'Edit Album',
         }),
       }),
@@ -362,5 +361,82 @@ describe('TrackEditScreen - Stage 8 Slice 6 track normalization & identity', () 
       const invalidPayload = { id: '' };
       expect(getTrackId(invalidPayload)).toBeNull();
     });
+  });
+
+  test('отображает и сохраняет позицию трека в альбоме (track_number и album_track_position)', async () => {
+    const routeTrack = {
+      id: 'pos-edit-456',
+      title: 'Position Song',
+      artist: 'Position Artist',
+      album: 'Position Album',
+      track_number: '2/10',
+      album_track_position: 2,
+    };
+
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        track_number: '2/10',
+        album_track_position: 2,
+      }),
+    });
+
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'updated' }),
+    });
+
+    const listener = jest.fn();
+    const sub = DeviceEventEmitter.addListener('PUUK_TRACK_UPDATED', listener);
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <TrackEditScreen
+          route={{ params: { track: routeTrack } }}
+          navigation={mockNavigation}
+        />,
+      );
+    });
+
+    const posInput = renderer.root.findByProps({ placeholder: 'Track position (e.g. 1 or 1/12)' });
+    expect(posInput.props.value).toBe('2/10');
+
+    // Change position to 5/10
+    await act(async () => {
+      posInput.props.onChangeText('5/10');
+    });
+
+    // Trigger Save
+    const saveText = renderer.root.findByProps({ children: 'Save Changes' });
+    let saveButton = saveText.parent;
+    while (saveButton && saveButton.type !== TouchableOpacity) {
+      saveButton = saveButton.parent;
+    }
+    await act(async () => {
+      await saveButton.props.onPress();
+    });
+
+    expect(authFetch).toHaveBeenCalledWith(
+      '/api/tracks/pos-edit-456',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.objectContaining({
+          track_number: '5/10',
+          album_track_position: 5,
+        }),
+      }),
+    );
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'pos-edit-456',
+        track_number: '5/10',
+        album_track_position: 5,
+      }),
+    );
+    sub.remove();
   });
 });

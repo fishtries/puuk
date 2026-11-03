@@ -32,8 +32,24 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
     Alert.alert.mockRestore();
   });
 
+  test('starts the complete ordered collection at the selected index', async () => {
+    const onPlayTrackList = jest.fn();
+    const tracks = [{ id: 'third', title: 'Z' }, { id: 'first', title: 'A' }, { id: 'second', title: 'M' }];
+    authFetch.mockResolvedValue({ ok: true, json: async () => ({ tracks }) });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<PlaylistScreen route={{ params: { playlistId: 'pl-1', playlistName: 'Playlist' } }} navigation={mockNavigation} onPlayTrackList={onPlayTrackList} />);
+    });
+    const list = renderer.root.findByType(FlatList);
+    const row = list.props.renderItem({ item: list.props.data[1], index: 1 });
+    await act(async () => { row.props.onPress(); });
+    expect(onPlayTrackList.mock.calls[0][0].map((track) => track.id)).toEqual(['third', 'first', 'second']);
+    expect(onPlayTrackList.mock.calls[0][1]).toBe(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
   test('нормализует legacy track_id и сохраняет все поля в плейлисте', async () => {
-    const onPlayTrack = jest.fn();
+    const onPlayTrackList = jest.fn();
     authFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -56,7 +72,7 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
         <PlaylistScreen
           route={{ params: { playlistId: 'pl-10', playlistName: 'My Mix' } }}
           navigation={mockNavigation}
-          onPlayTrack={onPlayTrack}
+          onPlayTrackList={onPlayTrackList}
         />,
       );
     });
@@ -224,5 +240,53 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
 
     const flatListAfter = renderer.root.findByType(FlatList);
     expect(flatListAfter.props.data).toHaveLength(0);
+  });
+
+  test('поддерживает переданные готовые треки без запроса к API и без кнопок удаления', async () => {
+    const onPlayTrackList = jest.fn();
+    const readyTracks = [
+      { id: 'mix-1', title: 'Rock Song 1', artist: 'Rocker', coverArt: 'https://puuk.app/cov1.jpg' },
+      { id: 'mix-2', title: 'Rock Song 2', artist: 'Rocker 2', coverArt: 'https://puuk.app/cov2.jpg' },
+    ];
+
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <PlaylistScreen
+          route={{
+            params: {
+              playlistId: 'genre-rock',
+              playlistName: 'Rock Mix',
+              tracks: readyTracks,
+              subtitle: 'made for you',
+              isReadOnly: true,
+            },
+          }}
+          navigation={mockNavigation}
+          onPlayTrackList={onPlayTrackList}
+        />,
+      );
+    });
+
+    // authFetch must NOT be called because tracks were provided directly
+    expect(authFetch).not.toHaveBeenCalled();
+
+    const flatList = renderer.root.findByType(FlatList);
+    expect(flatList.props.data).toHaveLength(2);
+
+    // Verify subtitle contains "made for you"
+    const textNodes = renderer.root.findAllByType('Text');
+    const hasSubtitle = textNodes.some((t) =>
+      typeof t.props.children === 'string'
+        ? t.props.children.includes('made for you')
+        : Array.isArray(t.props.children) && t.props.children.some((c) => String(c).includes('made for you')),
+    );
+    expect(hasSubtitle).toBe(true);
+
+    // Verify trash button is NOT rendered
+    const trashButtons = renderer.root.findAll(
+      (n) => n.props.hitSlop && n.props.hitSlop.top === 12,
+    );
+    expect(trashButtons).toHaveLength(0);
   });
 });
