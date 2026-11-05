@@ -20,6 +20,15 @@ jest.mock('../../utils/playbackCoordinator', () => {
         .fn()
         .mockResolvedValue({ isLocal: false, uri: 'mock://stream' }),
       updateQueue: jest.fn(),
+      cancelCurrent: jest.fn((reason, player) => player?.pause()),
+      handleNativeStatus: jest.fn(() => ({ accepted: false })),
+      retryCurrent: jest.fn().mockResolvedValue({ uri: 'mock://retry' }),
+      setIntent: jest.fn((player, { type, positionSeconds }) => {
+        if (type === 'pause') player.pause();
+        if (type === 'play') player.play();
+        if (type === 'seek') player.seekTo(positionSeconds);
+        return Promise.resolve();
+      }),
       handleBufferingStatus: jest.fn(),
       subscribe: jest.fn((listener) => {
         mockCoordinatorListeners.add(listener);
@@ -785,8 +794,7 @@ describe('usePlayerController', () => {
       });
 
       expect(console.error).toHaveBeenCalledWith(
-        '[usePlayerController] loadAndPlay error:',
-        expect.objectContaining({ type: 'remote_replace_error', trackId: 404 }),
+        '[usePlayerController] Playback command failed',
       );
       console.error = originalError;
     });

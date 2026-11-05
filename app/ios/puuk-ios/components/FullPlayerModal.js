@@ -1302,7 +1302,7 @@ const FullPlayerModal = ({
                       <PlayerHeader
                         styles={styles}
                         handleClose={handleClose}
-                        isLoading={isLoading}
+                        isLoading={isLoading || currentPlayback?.status === 'starting'}
                         isBufferingSlow={isBufferingSlow}
                         networkStatus={networkStatus}
                         nextTrackStatus={nextTrackStatus}

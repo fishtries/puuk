@@ -851,10 +851,7 @@ export class AudioCache {
       attempt.progressSubscription = null;
     }
     if (typeof attempt.settle === 'function' && !attempt.settled) {
-      attempt.settled = true;
       attempt.settle(
-        undefined,
-        undefined,
         record.cancelError || createCancelledError(record.cancelReason),
       );
     }
@@ -1002,6 +999,7 @@ export class AudioCache {
       backoffCancel: null,
       progressSubscription: null,
       settled: false,
+      nativePending: false,
       settle: null,
       lastBytesWritten: undefined,
       armInactivityTimer: null,
@@ -1037,16 +1035,16 @@ export class AudioCache {
 
     try {
       const downloadedFile = await new Promise((resolve, reject) => {
-        const settle = (handler, value, overrideError) => {
+        const settle = (handler, value) => {
           if (attempt.settled) return;
           attempt.settled = true;
           if (attempt.timeoutId) {
             clearTimeout(attempt.timeoutId);
             attempt.timeoutId = null;
           }
-          handler(overrideError || value);
+          handler(value);
         };
-        attempt.settle = settle;
+        attempt.settle = (error) => settle(reject, error);
 
         const armInactivityTimer = () => {
           if (attempt.timeoutId) clearTimeout(attempt.timeoutId);
@@ -1084,10 +1082,22 @@ export class AudioCache {
         }
 
         Promise.resolve()
-          .then(() => downloadTask.downloadAsync())
+          .then(() => {
+            this._throwIfStale(trackIdStr, record);
+            attempt.nativePending = true;
+            return downloadTask.downloadAsync();
+          })
           .then(
-            (result) => settle(resolve, result),
-            (error) => settle(reject, error),
+            (result) => {
+              attempt.nativePending = false;
+              if (attempt.settled) this._deleteAttemptFile(tempFile);
+              else settle(resolve, result);
+            },
+            (error) => {
+              attempt.nativePending = false;
+              if (attempt.settled) this._deleteAttemptFile(tempFile);
+              else settle(reject, error);
+            },
           );
       });
 
@@ -1161,9 +1171,9 @@ export class AudioCache {
 
       return publishUri;
     } catch (error) {
-      try {
-        if (tempFile.exists) tempFile.delete();
-      } catch {}
+      // cancel/release do not prove that the native delegate has stopped writing.
+      // If our wait ended first, its terminal callback owns eventual cleanup.
+      if (!attempt.nativePending) this._deleteAttemptFile(tempFile);
       throw error;
     } finally {
       if (attempt.timeoutId) {
@@ -1183,6 +1193,15 @@ export class AudioCache {
       if (record.attempt === attempt) {
         record.attempt = null;
       }
+    }
+  }
+
+  _deleteAttemptFile(file) {
+    try {
+      if (file.exists) file.delete();
+    } catch {
+      // Keep diagnostics useful without exposing paths, URLs or native errors.
+      console.warn('[AudioCache] Attempt file cleanup failed');
     }
   }
 

@@ -1,0 +1,18 @@
+{
+  "AudioComponentRegistry.swift": "8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0",
+  "AudioExceptions.swift": "dfbb404f42e922564da966f9648182d9ebc8685ce3f545a18ca0de7b0da8e1fa",
+  "AudioModule.swift": "81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e",
+  "AudioPlayer.swift": "016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746",
+  "AudioPlaylist.swift": "56524ad4a486a37d3e494d0f06d8c637a98f4d15fb3a0cfb2c94a1d9c54cceb5",
+  "AudioRecorder.swift": "dda2b6b3b41e8d1b5dd4bf38287389b89770a4ee5ac2c6cd5ab2910bd51edef2",
+  "AudioRecordingRequester.swift": "1b08c50e06d4f6a564506d54f3dd70ec3c72a6e2225077748f798c940b62323b",
+  "AudioRecords.swift": "bfbfe741d117ceed2b20aaf81368fa957170ba9336fac47951b32b879c5f00af",
+  "AudioSource.swift": "89ca837df77f1fabc2f5e5bbd657210ae856fa9f7b0ce9bab2cebdc9a279a70e",
+  "AudioStream.swift": "6738b94de4d4bf93378fe8668d6087c27c310bd10d4689af32c1b06375661f2f",
+  "AudioStreamFileWriter.swift": "8ffed73c80ea0d1441eff303c572293a0ccbdd9f0b60887494523f3101b05feb",
+  "AudioUtils.swift": "7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01",
+  "MediaController.swift": "e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6",
+  "Playable.swift": "6da1518fa4203a23e5c855756885b61ae3cb9a8c07625ebe04160555249944d2",
+  "RecordingDelegate.swift": "8f082ab31410ea6a4f21de6ae2099518aacf06f40e8555fa015c76146493fc87",
+  "StringConversions.swift": "022b0a50f04744f5171175b8aa2056a9368e1fed9af6af4a721223cb29910e9f"
+}

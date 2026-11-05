@@ -132,4 +132,66 @@ describe('networkPolicy', () => {
     getNetworkStateAsync.mockResolvedValue({ type: 'WIFI', isConnected: true });
     await getNetworkPolicy();
   });
+
+  test.each([
+    [
+      { type: 'WIFI', isConnected: true, isInternetReachable: false },
+      false,
+      'unknown',
+    ],
+    [
+      { type: 'WIFI', isConnected: false, isInternetReachable: true },
+      false,
+      'unknown',
+    ],
+    [
+      { type: 'WIFI', isConnected: true, isInternetReachable: true },
+      true,
+      'wifi',
+    ],
+    [
+      { type: 'WIFI', isConnected: true, isInternetReachable: undefined },
+      true,
+      'wifi',
+    ],
+    [{ type: 'UNKNOWN', isInternetReachable: null }, true, 'unknown'],
+  ])(
+    'public policy preserves explicit reachability veto for %j',
+    (state, online, tier) => {
+      const policy = buildNetworkPolicy(state);
+      expect(isPolicyOnline(policy)).toBe(online);
+      expect(policy.type).toBe(tier);
+      if (!online) expect(policy.isConnected).toBe(false);
+    },
+  );
+
+  test('same unknown tier notifies once on reachability loss and once on reconnect', async () => {
+    const listener = jest.fn();
+    const unsubscribe = subscribeNetworkPolicy(listener);
+    getNetworkStateAsync.mockResolvedValue({
+      type: 'UNKNOWN',
+      isConnected: true,
+    });
+    await getNetworkPolicy();
+    listener.mockClear();
+    getNetworkStateAsync.mockResolvedValue({
+      type: 'UNKNOWN',
+      isConnected: true,
+      isInternetReachable: false,
+    });
+    await getNetworkPolicy();
+    await getNetworkPolicy();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(isPolicyOnline(getCurrentNetworkPolicy())).toBe(false);
+    getNetworkStateAsync.mockResolvedValue({
+      type: 'UNKNOWN',
+      isConnected: true,
+      isInternetReachable: true,
+    });
+    await getNetworkPolicy();
+    await getNetworkPolicy();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(isPolicyOnline(getCurrentNetworkPolicy())).toBe(true);
+    unsubscribe();
+  });
 });

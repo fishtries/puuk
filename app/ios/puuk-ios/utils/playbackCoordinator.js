@@ -630,7 +630,7 @@ export class PlaybackCoordinator {
     const previousSource = this.current.source;
     this.current.sourceAttemptId = newAttemptId;
     this.current.source = 'remote';
-    this._seekPending = targetPosition > 0;
+    this._seekPending = true;
     this._loadedAttemptId = null;
     if (
       this.identityAvailable &&
@@ -664,6 +664,23 @@ export class PlaybackCoordinator {
           this.current.sourceAttemptId = previousAttempt;
           this.current.source = previousSource;
           this._seekPending = false;
+          if (
+            this._recoveryGeneration === recoveryGen &&
+            this.playbackGeneration === currentGen &&
+            this.current.requestId === currentReq &&
+            this._authEpoch === currentAuth &&
+            this.current.intent === 'play'
+          ) {
+            // Native veto is final for this episode. Do not leave a spinner or
+            // manufacture play permission; Retry can restore paused, then a
+            // fresh explicit Play authorizes the newly loaded source.
+            this.current.intent = 'pause';
+            this._terminateWithError(
+              new PlaybackError('Recovery source rejected', {
+                type: 'play_error',
+              }),
+            );
+          }
         }
         return;
       }
@@ -691,7 +708,7 @@ export class PlaybackCoordinator {
       Object.keys(cleanHeaders).length > 0 ? cleanHeaders : null;
 
     let seekSucceeded = true;
-    if (targetPosition > 0 && player) {
+    if (player) {
       if (
         this.identityAvailable &&
         typeof player.seekForAttempt === 'function'
@@ -699,7 +716,7 @@ export class PlaybackCoordinator {
         seekSucceeded = false;
 
         // If in public flow with loaded tracking, wait matching loaded before seek
-        if (this._waitForLoaded && this._loadedAttemptId !== newAttemptId) {
+        if (this._loadedAttemptId !== newAttemptId) {
           const loadedTimeout = Math.min(
             5000,
             Math.max(0, this._getActiveEpisodeDeadline() - this.clock()),
@@ -839,6 +856,20 @@ export class PlaybackCoordinator {
             : null,
         );
         if (!playOk) {
+          if (
+            this._recoveryGeneration === recoveryGen &&
+            this.playbackGeneration === currentGen &&
+            this.current.requestId === currentReq &&
+            this._authEpoch === currentAuth &&
+            this.current.intent === 'play'
+          ) {
+            this.current.intent = 'pause';
+            this._terminateWithError(
+              new PlaybackError('Recovery play rejected', {
+                type: 'play_error',
+              }),
+            );
+          }
           return;
         }
       } else if (typeof player.play === 'function') {
@@ -1062,7 +1093,10 @@ export class PlaybackCoordinator {
       return;
     }
 
-    if (this.current.status === 'idle' || !this.current.requestId) {
+    if (
+      !this.current.requestId ||
+      (this.current.status === 'idle' && type !== 'pause')
+    ) {
       return;
     }
 
@@ -1502,8 +1536,25 @@ export class PlaybackCoordinator {
     let didStart = false;
     let didFinish = false;
 
+    // Item failure and intent are separate facts. An error snapshot can have
+    // been captured during installation, before the explicit play command,
+    // and delivered ahead of that command's newer intent event. Its retained
+    // pause field is not a new pause. Explicit intent events and the revision
+    // fence above still own pause/seek ordering.
+    // Command return is not delivery acknowledgement: queued loaded/error
+    // snapshots captured by replace still precede the first native intent.
+    if (
+      event.nativeEvent === 'intent' &&
+      this._explicitInstallAttempt === event.sourceAttemptId
+    ) {
+      this._explicitInstallAttempt = null;
+    }
+    const sourceError = event.nativeEvent === 'error' || Boolean(event.error);
+    const intentEvent =
+      event.nativeEvent === 'intent' || event.nativeEvent === 'seekIntent';
     const pausedPresentation =
-      event.nativeIntent === 'pause' || event.nativeIntent === 'interrupted';
+      (!sourceError || intentEvent) &&
+      (event.nativeIntent === 'pause' || event.nativeIntent === 'interrupted');
     const installingReady =
       ['loaded', 'error', 'snapshot'].includes(event.nativeEvent) &&
       this._explicitInstallAttempt === event.sourceAttemptId;
@@ -1540,7 +1591,11 @@ export class PlaybackCoordinator {
     }
 
     // Native system resume: strictly newer play revision required
-    if (event.nativeIntent === 'play' && this.current.intent === 'pause') {
+    if (
+      (!sourceError || intentEvent) &&
+      event.nativeIntent === 'play' &&
+      this.current.intent === 'pause'
+    ) {
       if (
         incomingRevision !== null &&
         incomingRevision > this._acceptedIntentRevision
@@ -1733,7 +1788,7 @@ export class PlaybackCoordinator {
       }
     }
 
-    if (event.nativeEvent === 'error' || event.error) {
+    if (sourceError) {
       const errorPayload =
         event.error && typeof event.error === 'object'
           ? event.error
@@ -1751,6 +1806,12 @@ export class PlaybackCoordinator {
         classifiedNativeError.type === 'auth_error' ||
         classifiedNativeError.type === 'not_found'
       ) {
+        this._terminateWithError(classifiedNativeError);
+        return { accepted: true, didStart, didFinish };
+      }
+
+      if (this.current.intent !== 'play') {
+        // A source failure cannot resurrect recovery after a newer JS pause.
         this._terminateWithError(classifiedNativeError);
         return { accepted: true, didStart, didFinish };
       }
@@ -2502,8 +2563,6 @@ export class PlaybackCoordinator {
           this._notifyState();
           throw playErr;
         }
-        if (this._explicitInstallAttempt === sourceAttemptId)
-          this._explicitInstallAttempt = null;
         this.current.status = 'starting';
       } else if (!this.identityAvailable) {
         try {

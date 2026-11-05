@@ -65,7 +65,9 @@ const listeners = new Set();
 export function buildNetworkPolicy(state) {
   const base = classifyNetworkPolicy(state);
   const offline = Boolean(
-    state && typeof state === 'object' && state.isConnected === false,
+    state &&
+    typeof state === 'object' &&
+    (state.isConnected === false || state.isInternetReachable === false),
   );
   return offline ? { ...base, isConnected: false } : base;
 }

@@ -61,6 +61,7 @@ const MAX_EXCLUDE_IDS = 100;
 const MAX_QUEUE_BUFFER = 20;
 const MAX_HISTORY = 50;
 const HISTORY_COOLDOWN_MS = 30000;
+let selectionSequence = 0;
 
 function capIds(ids, limit = MAX_EXCLUDE_IDS) {
   const valid = (ids || []).map(getTrackId).filter((id) => id !== null);
@@ -104,12 +105,33 @@ function mergeUniqueQueue(existing, incoming, maxBuffer = MAX_QUEUE_BUFFER) {
 }
 
 export default function usePlayerController({ setTracks }) {
-  const [currentTrack, setCurrentTrack] = useState(null);
+  const [currentTrack, commitCurrentTrack] = useState(null);
+  const currentTrackRef = useRef(null);
+  const setCurrentTrack = useCallback((update) => {
+    const next =
+      typeof update === 'function' ? update(currentTrackRef.current) : update;
+    currentTrackRef.current = next;
+    commitCurrentTrack(next);
+  }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [isPlayerVisible, setIsPlayerVisible] = useState(false);
   const [playerExpandToken, setPlayerExpandToken] = useState(0);
-  const [upNextQueue, setUpNextQueue] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [upNextQueue, commitQueue] = useState([]);
+  const queueRef = useRef([]);
+  const setUpNextQueue = useCallback((update) => {
+    const next =
+      typeof update === 'function' ? update(queueRef.current) : update;
+    queueRef.current = next;
+    commitQueue(next);
+  }, []);
+  const [history, commitHistory] = useState([]);
+  const historyRef = useRef([]);
+  const setHistory = useCallback((update) => {
+    const next =
+      typeof update === 'function' ? update(historyRef.current) : update;
+    historyRef.current = next;
+    commitHistory(next);
+  }, []);
 
   // Состояние сети и предзагрузки для Network UX
   const [networkUX, setNetworkUX] = useState(
@@ -131,11 +153,13 @@ export default function usePlayerController({ setTracks }) {
   const recentHistoryRef = useRef(new Map());
   const pendingBackgroundEventsRef = useRef([]);
   const isFlushingBackgroundEventsRef = useRef(false);
-  const currentTrackRef = useRef(null);
   const confirmedStartRef = useRef(new Set());
   const playbackRequestRef = useRef(0);
   const currentRequestIdRef = useRef(null);
-  const currentPlayUriRef = useRef(null);
+  const mountedRef = useRef(false);
+  const retryPreloadRef = useRef(null);
+  const intentRef = useRef('pause');
+  const transitionEpochRef = useRef(0);
   const [loadedPlayback, setLoadedPlayback] = useState(null);
   const initialUser =
     typeof getCachedUser === 'function' ? getCachedUser() : null;
@@ -149,8 +173,7 @@ export default function usePlayerController({ setTracks }) {
         )
       : 'anonymous',
   );
-  const initialSessionId =
-    'sess_' + Math.random().toString(36).slice(2, 9);
+  const initialSessionId = 'sess_' + Math.random().toString(36).slice(2, 9);
   const sessionIdRef = useRef(initialSessionId);
   const [playbackSessionId, setPlaybackSessionId] = useState(initialSessionId);
   const retryTimerRef = useRef(null);
@@ -193,16 +216,18 @@ export default function usePlayerController({ setTracks }) {
     return unsubscribe;
   }, [player]);
 
-  useEffect(() => {
-    currentTrackRef.current = currentTrack;
-  }, [currentTrack]);
-
   const isPlaying = status.playing;
   const currentTime = status.currentTime || 0;
   const duration = status.duration || 0;
 
   useEffect(() => {
-    if (!isPlaying || !currentTrack) return;
+    // Legacy presentation remains available without attributing v1 events.
+    if (
+      defaultPlaybackCoordinator.getState().identityAvailable ||
+      !isPlaying ||
+      !currentTrack
+    )
+      return;
     const trackId = getTrackId(currentTrack);
     if (trackId === null) return;
     if (
@@ -210,12 +235,13 @@ export default function usePlayerController({ setTracks }) {
       loadedPlayback.request !== playbackRequestRef.current ||
       String(loadedPlayback.trackId) !== String(trackId) ||
       loadedPlayback.authEpoch !== authEpochRef.current
-    ) return;
+    )
+      return;
     const key = `${currentUserIdRef.current}:${sessionIdRef.current}:${trackId}`;
     if (confirmedStartRef.current.has(key)) return;
     confirmedStartRef.current.add(key);
     recordPlayStart(trackId, { retry: 1 }).catch(() => {});
-  }, [isPlaying, currentTrack, playbackSessionId, loadedPlayback]);
+  }, [isPlaying, currentTrack, playbackSessionId, loadedPlayback, player]);
 
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
@@ -241,6 +267,27 @@ export default function usePlayerController({ setTracks }) {
       if (currentUserIdRef.current === newUserId && authReadyRef.current)
         return;
 
+      const hadOwner = authReadyRef.current;
+      if (hadOwner) {
+        currentRequestIdRef.current = null;
+        playbackRequestRef.current += 1;
+        queueEpochRef.current += 1;
+        retryPreloadRef.current = null;
+        intentRef.current = 'pause';
+        defaultPlaybackCoordinator.cancelCurrent(
+          user ? 'auth-change' : 'logout',
+          player,
+        );
+        if (!user) setCurrentTrack(null);
+        setUpNextQueue([]);
+        setHistory([]);
+        setLoadedPlayback(null);
+        setIsLoading(false);
+        isAdvancingRef.current = false;
+        isWaveSessionRef.current = false;
+        autoplayAfterQueueRef.current = false;
+        collectionTrackIdsRef.current = [];
+      }
       currentUserIdRef.current = newUserId;
       authReadyRef.current = true;
       authEpochRef.current += 1;
@@ -258,13 +305,14 @@ export default function usePlayerController({ setTracks }) {
       }
     };
 
+    const savedUserEpoch = authEpochRef.current;
     if (typeof getSavedUser === 'function') {
       try {
         const res = getSavedUser();
         if (res && typeof res.then === 'function') {
           res
             .then((user) => {
-              if (isMounted) {
+              if (isMounted && savedUserEpoch === authEpochRef.current) {
                 resetAuthScopedState(user, {
                   preservePendingHistory: !authReadyRef.current,
                 });
@@ -304,7 +352,7 @@ export default function usePlayerController({ setTracks }) {
       }
       authAbortControllerRef.current?.abort();
     };
-  }, []);
+  }, [player, setCurrentTrack, setUpNextQueue, setHistory]);
 
   const isRetryableError = (err, status = null) => {
     if (status !== null && status !== undefined) {
@@ -550,23 +598,30 @@ export default function usePlayerController({ setTracks }) {
 
   // Синхронизация очереди с координатором и планировщиком предзагрузки
   useEffect(() => {
-    let isMounted = true;
+    let active = true;
+    const epoch = authEpochRef.current;
+    const request = currentRequestIdRef.current;
+    const queueEpoch = queueEpochRef.current;
+    const sync = (headers) => {
+      if (
+        active &&
+        mountedRef.current &&
+        epoch === authEpochRef.current &&
+        request === currentRequestIdRef.current &&
+        queueEpoch === queueEpochRef.current
+      ) {
+        defaultPlaybackCoordinator.updateQueue(
+          currentTrackRef.current,
+          queueRef.current,
+          { headers },
+        );
+      }
+    };
     getAuthHeaders()
-      .then((headers) => {
-        if (isMounted) {
-          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {
-            headers,
-          });
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {});
-        }
-      });
-
+      .then(sync)
+      .catch(() => sync(undefined));
     return () => {
-      isMounted = false;
+      active = false;
     };
   }, [currentTrack, upNextQueue]);
 
@@ -649,12 +704,14 @@ export default function usePlayerController({ setTracks }) {
   const refreshTrackLoudness = useCallback(
     async (trackId) => {
       if (trackId === undefined || trackId === null || trackId === '') return;
+      const authEpoch = authEpochRef.current;
       try {
         const res = await authFetch(
           `/api/tracks/${encodeURIComponent(trackId)}`,
         );
         if (!res.ok) return;
         const fresh = await res.json();
+        if (!mountedRef.current || authEpoch !== authEpochRef.current) return;
         if (
           !fresh ||
           fresh.loudness_status !== 'analyzed' ||
@@ -694,17 +751,19 @@ export default function usePlayerController({ setTracks }) {
   /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback(
     (track) => {
+      if (!mountedRef.current) return Promise.resolve({ superseded: true });
       const request = ++playbackRequestRef.current;
+      const requestId = `selection_${++selectionSequence}`;
       const authEpoch = authEpochRef.current;
+      currentRequestIdRef.current = null;
+      defaultPlaybackCoordinator.cancelCurrent('superseded', player);
+      currentRequestIdRef.current = requestId;
+      currentTimeRef.current = 0;
+      durationRef.current = track?.duration || 0;
+      intentRef.current = 'play';
       setLoadedPlayback(null);
-      const reportPlaybackError = (error) => {
-        console.error('[usePlayerController] loadAndPlay error:', {
-          message: error?.message,
-          name: error?.name,
-          type: error?.type,
-          trackId: getTrackId(track),
-          trackTitle: track?.title,
-        });
+      const reportPlaybackError = () => {
+        console.error('[usePlayerController] Playback command failed');
       };
 
       let playbackPromise;
@@ -717,6 +776,9 @@ export default function usePlayerController({ setTracks }) {
           headers: cached || undefined,
           getHeadersAsync: getAuthHeaders,
           soundCheck: soundCheckRef.current,
+          requestId,
+          authEpoch,
+          getHeaders: getAuthHeaders,
         });
       } catch (e) {
         reportPlaybackError(e);
@@ -730,19 +792,28 @@ export default function usePlayerController({ setTracks }) {
         }
       }
 
-      return Promise.resolve(playbackPromise).then((result) => {
-        if (
-          request === playbackRequestRef.current &&
-          authEpoch === authEpochRef.current &&
-          result?.uri && !result.error && !result.superseded
-        ) {
-          setLoadedPlayback({ request, authEpoch, trackId: getTrackId(track) });
-        }
-        return result;
-      }).catch((error) => {
-        reportPlaybackError(error);
-        return { isLocal: false, uri: null, error };
-      });
+      return Promise.resolve(playbackPromise)
+        .then((result) => {
+          if (
+            mountedRef.current &&
+            request === playbackRequestRef.current &&
+            authEpoch === authEpochRef.current &&
+            result?.uri &&
+            !result.error &&
+            !result.superseded
+          ) {
+            setLoadedPlayback({
+              request,
+              authEpoch,
+              trackId: getTrackId(track),
+            });
+          }
+          return result;
+        })
+        .catch((error) => {
+          reportPlaybackError(error);
+          return { isLocal: false, uri: null, error };
+        });
     },
     [player, refreshTrackLoudness],
   );
@@ -752,18 +823,32 @@ export default function usePlayerController({ setTracks }) {
     if (queueRequestRef.current?.epoch === epoch) {
       return queueRequestRef.current.promise;
     }
-    const excludeIds = [...(exclusions.excludeIds || []), ...collectionTrackIdsRef.current];
-    const excluded = new Set([trackId, ...excludeIds, ...(exclusions.queuedIds || [])]
-      .filter((id) => id !== null && id !== undefined).map(String));
+    const excludeIds = [
+      ...(exclusions.excludeIds || []),
+      ...collectionTrackIdsRef.current,
+    ];
+    const excluded = new Set(
+      [trackId, ...excludeIds, ...(exclusions.queuedIds || [])]
+        .filter((id) => id !== null && id !== undefined)
+        .map(String),
+    );
     const promise = (async () => {
       try {
-        const response = await authFetch(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), { signal });
+        const response = await authFetch(
+          buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }),
+          { signal },
+        );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (epoch !== queueEpochRef.current) return [];
-        const normalizedQueue = mergeUniqueQueue([], (Array.isArray(data) ? data : [])
-          .map(normalizeTrackDto)
-          .filter((track) => track && !excluded.has(String(getTrackId(track)))));
+        const normalizedQueue = mergeUniqueQueue(
+          [],
+          (Array.isArray(data) ? data : [])
+            .map(normalizeTrackDto)
+            .filter(
+              (track) => track && !excluded.has(String(getTrackId(track))),
+            ),
+        );
         setUpNextQueue((prev) => mergeUniqueQueue(prev, normalizedQueue));
         return normalizedQueue;
       } catch (error) {
@@ -772,18 +857,42 @@ export default function usePlayerController({ setTracks }) {
         }
         return [];
       } finally {
-        if (queueRequestRef.current?.epoch === epoch) queueRequestRef.current = null;
+        if (queueRequestRef.current?.epoch === epoch)
+          queueRequestRef.current = null;
       }
     })();
     queueRequestRef.current = { epoch, promise };
     return promise;
   }, []);
 
+  const seekTo = useCallback(
+    (positionSeconds) => {
+      if (
+        !mountedRef.current ||
+        !currentRequestIdRef.current ||
+        !Number.isFinite(positionSeconds)
+      )
+        return;
+      transitionEpochRef.current += 1;
+      currentTimeRef.current = Math.max(0, positionSeconds);
+      return defaultPlaybackCoordinator.setIntent(player, {
+        type: 'seek',
+        positionSeconds: currentTimeRef.current,
+        requestId: currentRequestIdRef.current,
+      });
+    },
+    [player],
+  );
+
   const playPreviousTrack = useCallback(
     (options = {}) => {
+      if (!mountedRef.current || !currentRequestIdRef.current) return;
+      const currentTrack = currentTrackRef.current;
+      const history = historyRef.current;
+      const upNextQueue = queueRef.current;
       const force = typeof options === 'boolean' ? options : !!options?.force;
       if (!force && (currentTimeRef.current || 0) > 3) {
-        player.seekTo(0);
+        seekTo(0);
         return;
       }
 
@@ -804,7 +913,7 @@ export default function usePlayerController({ setTracks }) {
           recordTrackHistory(prevTrackId);
         }
       } else {
-        player.seekTo(0);
+        seekTo(0);
       }
     },
     [
@@ -814,14 +923,22 @@ export default function usePlayerController({ setTracks }) {
       player,
       loadAndPlay,
       recordTrackHistory,
+      seekTo,
     ],
   );
 
   const fetchNextTrack = useCallback(async () => {
-    if (!currentTrack) return;
+    const currentTrack = currentTrackRef.current;
+    const upNextQueue = queueRef.current;
+    const history = historyRef.current;
+    if (!mountedRef.current || !currentTrack || !currentRequestIdRef.current)
+      return;
     if (isAdvancingRef.current) return;
     isAdvancingRef.current = true;
     const epoch = queueEpochRef.current;
+    const transition = transitionEpochRef.current;
+    const currentDur = durationRef.current || currentTrack.duration || 0;
+    const currentPos = currentTimeRef.current || 0;
 
     try {
       setIsLoading(true);
@@ -834,7 +951,11 @@ export default function usePlayerController({ setTracks }) {
           excludeIds: history.map(getTrackId).filter((id) => id !== null),
           queuedIds: [],
         });
-        if (epoch !== queueEpochRef.current) return;
+        if (
+          epoch !== queueEpochRef.current ||
+          transition !== transitionEpochRef.current
+        )
+          return;
         isWaveSessionRef.current = true;
       }
 
@@ -863,8 +984,6 @@ export default function usePlayerController({ setTracks }) {
         }
 
         // Телеметрия волны: finish при дослушивании, иначе skip
-        const currentDur = durationRef.current || currentTrack.duration || 0;
-        const currentPos = currentTimeRef.current || 0;
         const trackMs = Math.round(
           (currentTrack.duration || currentDur || 0) * 1000,
         );
@@ -887,7 +1006,11 @@ export default function usePlayerController({ setTracks }) {
 
         await playPromise;
       } else {
-        player.pause();
+        intentRef.current = 'pause';
+        defaultPlaybackCoordinator.setIntent(player, {
+          type: 'pause',
+          requestId: currentRequestIdRef.current,
+        });
       }
     } finally {
       if (epoch === queueEpochRef.current) {
@@ -917,46 +1040,135 @@ export default function usePlayerController({ setTracks }) {
     playPreviousTrackRef.current = playPreviousTrack;
   }, [playPreviousTrack]);
 
-  // Слушатель команд экрана блокировки, Control Center и гарнитур
+  // Direct transport: React status snapshots can skip a one-event error/finish.
   useEffect(() => {
-    if (!player || typeof player.addListener !== 'function') return;
-
-    const nextSub = player.addListener('nextTrack', () => {
-      fetchNextTrackRef.current?.();
-    });
-
-    const prevSub = player.addListener('previousTrack', () => {
-      playPreviousTrackRef.current?.();
-    });
-
+    mountedRef.current = true;
+    const capable = () =>
+      defaultPlaybackCoordinator.getState().identityAvailable === true;
+    const validSelection = () =>
+      mountedRef.current && currentRequestIdRef.current;
+    const onStatus = (event) => {
+      if (!validSelection()) return;
+      const requestId = currentRequestIdRef.current;
+      const result = defaultPlaybackCoordinator.handleNativeStatus(
+        player,
+        event,
+      );
+      if (!result.accepted || requestId !== currentRequestIdRef.current) return;
+      const state = defaultPlaybackCoordinator.getState().current;
+      if (
+        state?.intent === 'pause' ||
+        (event.nativeEvent === 'seekIntent' && event.seekOrigin === 'user')
+      ) {
+        transitionEpochRef.current += 1;
+      }
+      intentRef.current = state?.intent || intentRef.current;
+      if (Number.isFinite(event.currentTime))
+        currentTimeRef.current = event.currentTime;
+      if (Number.isFinite(event.duration)) durationRef.current = event.duration;
+      if (result.didStart && !confirmedStartRef.current.has(requestId)) {
+        confirmedStartRef.current.add(requestId);
+        const trackId = getTrackId(currentTrackRef.current);
+        if (trackId !== null)
+          recordPlayStart(trackId, { retry: 1 }).catch(() => {});
+      }
+      if (result.didFinish) fetchNextTrackRef.current?.();
+    };
+    const onSkip = (callback, event) => {
+      if (!validSelection()) return;
+      if (
+        capable() &&
+        !defaultPlaybackCoordinator.handleNativeStatus(player, event).accepted
+      )
+        return;
+      callback.current?.();
+    };
+    const statusSub = player?.addListener?.('playbackStatusUpdate', onStatus);
+    const nextSub = player?.addListener?.('nextTrack', (event) =>
+      onSkip(fetchNextTrackRef, event),
+    );
+    const prevSub = player?.addListener?.('previousTrack', (event) =>
+      onSkip(playPreviousTrackRef, event),
+    );
     return () => {
+      mountedRef.current = false;
+      currentRequestIdRef.current = null;
+      playbackRequestRef.current += 1;
+      queueEpochRef.current += 1;
+      intentRef.current = 'pause';
+      statusSub?.remove?.();
       nextSub?.remove?.();
       prevSub?.remove?.();
+      defaultPlaybackCoordinator.cancelCurrent('unmount', player);
     };
   }, [player]);
 
-  // Автоматический переход к следующему треку по окончании воспроизведения
+  // Old binaries retain completion presentation, without v1 recovery attribution.
   useEffect(() => {
-    if (status?.didJustFinish) {
+    if (
+      !defaultPlaybackCoordinator.getState().identityAvailable &&
+      status?.didJustFinish &&
+      currentRequestIdRef.current
+    ) {
       fetchNextTrackRef.current?.();
     }
-  }, [status?.didJustFinish]);
+  }, [player, status?.didJustFinish]);
 
   const togglePlayPause = useCallback(() => {
-    if (isPlaying) {
-      player.pause();
-    } else {
-      if (!currentTimeRef.current && currentTrack) {
-        loadAndPlay(currentTrack);
-      } else {
-        player.play();
-      }
-    }
-  }, [isPlaying, currentTrack, player, loadAndPlay]);
+    if (!mountedRef.current || !currentRequestIdRef.current) return;
+    const current = defaultPlaybackCoordinator.getState().current;
+    const type =
+      (current?.intent || intentRef.current) === 'play' ? 'pause' : 'play';
+    transitionEpochRef.current += 1;
+    intentRef.current = type;
+    return defaultPlaybackCoordinator.setIntent(player, {
+      type,
+      requestId: currentRequestIdRef.current,
+    });
+  }, [player]);
+
+  const retryCurrent = useCallback(() => {
+    if (!mountedRef.current || !currentRequestIdRef.current)
+      return Promise.resolve();
+    return defaultPlaybackCoordinator.retryCurrent(player, {
+      requestId: currentRequestIdRef.current,
+      authEpoch: authEpochRef.current,
+      getHeaders: getAuthHeaders,
+    });
+  }, [player]);
+
+  const retryPreload = useCallback(() => {
+    if (retryPreloadRef.current) return retryPreloadRef.current;
+    const request = currentRequestIdRef.current;
+    const authEpoch = authEpochRef.current;
+    const queueEpoch = queueEpochRef.current;
+    if (!mountedRef.current || !request) return Promise.resolve();
+    const pending = getAuthHeaders()
+      .then((headers) => {
+        if (
+          mountedRef.current &&
+          request === currentRequestIdRef.current &&
+          authEpoch === authEpochRef.current &&
+          queueEpoch === queueEpochRef.current
+        ) {
+          defaultPlaybackCoordinator.updateQueue(
+            currentTrackRef.current,
+            queueRef.current,
+            { headers, force: true },
+          );
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (retryPreloadRef.current === pending) retryPreloadRef.current = null;
+      });
+    retryPreloadRef.current = pending;
+    return pending;
+  }, []);
 
   const playTrack = useCallback(
     (track, { source = 'single', queueIndex } = {}) => {
-      if (!track) return;
+      if (!mountedRef.current || !track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
       const activeTrack = currentTrackRef.current || currentTrack;
@@ -988,22 +1200,32 @@ export default function usePlayerController({ setTracks }) {
       queueEpochRef.current += 1;
       isAdvancingRef.current = false;
       setIsLoading(false);
-      setUpNextQueue(source === 'queue' ? upNextQueue.slice(queueIndex + 1) : []);
-      if (source === 'search') fetchQueue(trackId, undefined, {
-        excludeIds: [
-          ...history.map(getTrackId).filter((id) => id !== null),
-          currentId,
-        ],
-        queuedIds: [],
-      });
+      setUpNextQueue(
+        source === 'queue' ? upNextQueue.slice(queueIndex + 1) : [],
+      );
+      if (source === 'search')
+        fetchQueue(trackId, undefined, {
+          excludeIds: [
+            ...history.map(getTrackId).filter((id) => id !== null),
+            currentId,
+          ],
+          queuedIds: [],
+        });
       recordTrackHistory(trackId);
     },
-    [currentTrack, history, upNextQueue, fetchQueue, loadAndPlay, recordTrackHistory],
+    [
+      currentTrack,
+      history,
+      upNextQueue,
+      fetchQueue,
+      loadAndPlay,
+      recordTrackHistory,
+    ],
   );
 
   const playTrackList = useCallback(
     (trackList, startIndex = 0) => {
-      if (!trackList || trackList.length === 0) return;
+      if (!mountedRef.current || !trackList || trackList.length === 0) return;
       const track = trackList[startIndex];
       const trackId = getTrackId(track);
       if (trackId === null) return;
@@ -1020,7 +1242,9 @@ export default function usePlayerController({ setTracks }) {
       currentTrackRef.current = track;
       isWaveSessionRef.current = false;
       autoplayAfterQueueRef.current = true;
-      collectionTrackIdsRef.current = trackList.map(getTrackId).filter((id) => id !== null);
+      collectionTrackIdsRef.current = trackList
+        .map(getTrackId)
+        .filter((id) => id !== null);
       setCurrentTrack(track);
       loadAndPlay(track);
       // Ручной плейлист также инвалидирует in-flight wave queue response.
@@ -1082,6 +1306,7 @@ export default function usePlayerController({ setTracks }) {
   );
 
   const startWave = useCallback(async () => {
+    if (!mountedRef.current) return;
     const epoch = ++queueEpochRef.current;
     isAdvancingRef.current = false;
     setIsLoading(false);
@@ -1133,19 +1358,18 @@ export default function usePlayerController({ setTracks }) {
   }, [history, currentTrack, fetchQueue, loadAndPlay, recordTrackHistory]);
 
   const dismissPlayer = useCallback(async () => {
+    currentRequestIdRef.current = null;
+    intentRef.current = 'pause';
     playbackRequestRef.current += 1;
+    retryPreloadRef.current = null;
     setLoadedPlayback(null);
-    try {
-      player.pause();
-    } catch (e) {
-      console.warn('[usePlayerController] dismissPlayer pause error:', e);
-    }
+    defaultPlaybackCoordinator.cancelCurrent('dismiss', player);
     try {
       if (typeof player.setActiveForLockScreen === 'function') {
         player.setActiveForLockScreen(false);
       }
     } catch (e) {
-      console.warn('[usePlayerController] dismissPlayer lock screen error:', e);
+      console.warn('[usePlayerController] Could not clear lock screen');
     }
     try {
       applyTrackNormalization(player, null, false);
@@ -1203,13 +1427,12 @@ export default function usePlayerController({ setTracks }) {
     nextTrackStatus: networkUX.nextTrackStatus,
     networkError: networkUX.networkError,
     isBufferingSlow: networkUX.isBufferingSlow,
-    retryPreload: () => {
-      getAuthHeaders().then((headers) => {
-        defaultPlaybackCoordinator.updateQueue(currentTrack, upNextQueue, {
-          headers,
-        });
-      });
-    },
+    currentPlayback: networkUX.current,
+    nextPlayback: networkUX.next,
+    identityAvailable: networkUX.identityAvailable,
+    seekTo,
+    retryCurrent,
+    retryPreload,
     skipToNext: fetchNextTrack,
   };
 }

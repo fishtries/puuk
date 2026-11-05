@@ -618,7 +618,7 @@ describe('S1N corrections (static source/fixture regression checks, not native i
     );
     expect(handler).toContain('player.togglePlayback()');
     expect(handler).toContain(
-      '} else if playable.isPlaying {\n        AudioModule.pauseExplicitly(playable)',
+      '} else if playable.isPlaying {\n        if let modulePlayable = playable as? Playable {\n          AudioModule.pauseExplicitly(modulePlayable)',
     );
     expect(handler).toContain('playable.play(at: Float(playable.currentRate');
   });
@@ -1060,12 +1060,160 @@ describe('R2 module ownership (static source/fixture checks, not native interlea
     expect(module()).toContain('Self.pauseExplicitly(playlist)');
     expect(
       expected['MediaController.swift'].split(
-        'AudioModule.pauseExplicitly(playable)',
+        'AudioModule.pauseExplicitly(modulePlayable)',
       ).length,
     ).toBe(3);
     expect(module()).toContain('selector: #selector(handleExplicitPause(_:))');
     expect(module()).toContain(
       'NotificationCenter.default.removeObserver(self)',
     );
+  });
+});
+
+describe('S2 remote pause type correction (source-only, not Swift compilation)', () => {
+  function r2() {
+    const tree = pristine();
+    const patch = path.join(tree.root, 'r2-patch.cjs');
+    fs.copyFileSync(path.join(fixtures, 's1n-r2-patch.cjs'), patch);
+    expect(hash(fs.readFileSync(patch))).toBe(
+      '0923ad325ded9385e0bc6c95afad478a1ff2bff6453fb403201eed5d408a8d6c',
+    );
+    success(run(tree.ios, patch));
+    return tree;
+  }
+
+  test('exact R2 migrates and repeats with only MediaController changed', () => {
+    const { ios } = r2();
+    const before = contents(ios);
+    expect(hash(before['MediaController.swift'])).toBe(
+      '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
+    );
+    success(run(ios));
+    expect(contents(ios)).toEqual(expected);
+    for (const name of names.filter((name) => name !== 'MediaController.swift'))
+      expect(expected[name]).toBe(before[name]);
+    expect(hash(expected['MediaController.swift'])).toBe(
+      'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
+    );
+    success(run(ios));
+    expect(contents(ios)).toEqual(expected);
+  });
+
+  test.each([
+    ['    let pauseTarget', '    let togglePlayPauseTarget', '      '],
+    [
+      '    let togglePlayPauseTarget',
+      '    let changePlaybackPositionTarget',
+      '        ',
+    ],
+  ])(
+    'typed pause and generic fallback stay inside %s',
+    (start, end, indent) => {
+      const handler = method(expected['MediaController.swift'], start, end);
+      expect(handler).toContain(
+        `${indent}if let modulePlayable = playable as? Playable {\n${indent}  AudioModule.pauseExplicitly(modulePlayable)\n${indent}} else {\n${indent}  playable.pause()\n${indent}}`,
+      );
+      expect(handler).not.toContain('AudioModule.pauseExplicitly(playable)');
+      expect(handler).toContain('return .success');
+      if (start.includes('togglePlayPauseTarget')) {
+        expect(handler).toContain('player.togglePlayback()');
+        expect(handler).toContain('} else if playable.isPlaying {');
+        expect(handler).toContain('playable.play(at:');
+      }
+      expect(expected['MediaController.swift']).toContain(
+        'protocol LockScreenPlayable: AnyObject {',
+      );
+      expect(expected['AudioModule.swift']).toContain(
+        'static func pauseExplicitly(_ playable: Playable)',
+      );
+    },
+  );
+
+  test('failed type correction leaves every exact R2 input intact', () => {
+    const { root, ios } = r2();
+    const source = fs.readFileSync(script, 'utf8');
+    const changed = source.replace(
+      /s,\s*`      AudioModule.pauseExplicitly\(playable\)\n      return .success`/,
+      's, `      MISSING TYPE CORRECTION INPUT`',
+    );
+    expect(changed).not.toBe(source);
+    const broken = path.join(root, 'broken-type.cjs');
+    fs.writeFileSync(broken, changed);
+    const before = contents(ios);
+    const result = run(ios, broken);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Source drift: expected one occurrence');
+    expect(contents(ios)).toEqual(before);
+  });
+
+  test.each(names)('rejects R2 drift in %s before writing', (name) => {
+    const { ios } = r2();
+    fs.appendFileSync(path.join(ios, name), '\n// unknown R2 drift\n');
+    const before = contents(ios);
+    expect(run(ios).status).toBe(1);
+    expect(contents(ios)).toEqual(before);
+  });
+
+  test('rejects a complete-hash mixed R1/R2 tree before writing', () => {
+    const { ios } = r2();
+    const old = pristine();
+    const patch = path.join(old.root, 'r1.cjs');
+    fs.copyFileSync(path.join(fixtures, 's1n-r1-patch.cjs'), patch);
+    success(run(old.ios, patch));
+    fs.copyFileSync(
+      path.join(old.ios, 'AudioModule.swift'),
+      path.join(ios, 'AudioModule.swift'),
+    );
+    const before = contents(ios);
+    const result = run(ios);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unsupported mixed SDK source generations');
+    expect(contents(ios)).toEqual(before);
+  });
+
+  test('changed output pin rejects the staged correction before writing', () => {
+    const { root, ios } = r2();
+    const source = fs.readFileSync(script, 'utf8');
+    const changed = source.replace(
+      'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
+      '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
+    );
+    expect(changed).not.toBe(source);
+    // Use pristine input so the deliberately wrong final pin cannot trigger R2 no-op.
+    const fresh = pristine();
+    const broken = path.join(root, 'broken-output.cjs');
+    fs.writeFileSync(broken, changed);
+    const before = contents(fresh.ios);
+    const result = run(fresh.ios, broken);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'Incomplete patch output: MediaController.swift',
+    );
+    expect(contents(fresh.ios)).toEqual(before);
+    expect(contents(ios)['MediaController.swift']).not.toEqual(
+      expected['MediaController.swift'],
+    );
+  });
+});
+
+test('S2 concurrent disk change is detected before any staged correction is written', () => {
+  const { root, ios } = pristine();
+  const broken = path.join(root, 'concurrent-change.cjs');
+  const source = fs.readFileSync(script, 'utf8');
+  const marker =
+    '  // Fail before the first disk write on unsupported or partially modified inputs.';
+  const changed = source.replace(
+    marker,
+    `  nodeFs.appendFileSync(path.join(iosDir, 'AudioUtils.swift'), '\\n// concurrent change\\n');\n${marker}`,
+  );
+  expect(changed).not.toBe(source);
+  fs.writeFileSync(broken, changed);
+  const before = contents(ios);
+  const result = run(ios, broken);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('Concurrent modification:');
+  expect(contents(ios)).toEqual({
+    ...before,
+    'AudioUtils.swift': before['AudioUtils.swift'] + '\n// concurrent change\n',
   });
 });

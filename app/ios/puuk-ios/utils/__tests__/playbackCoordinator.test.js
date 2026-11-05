@@ -1206,6 +1206,26 @@ describe('PlaybackCoordinator', () => {
       };
     }
 
+    async function completeAutomaticRestore(coord, player, attempt) {
+      const event = {
+        sourceIdentityVersion: 1,
+        sourceAttemptId: attempt,
+        intentRevision: 1,
+        nativeIntent: 'play',
+        isLoaded: true,
+        currentTime: 0,
+      };
+      coord.handleNativeStatus(player, { ...event, nativeEvent: 'loaded' });
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      coord.handleNativeStatus(player, {
+        ...event,
+        nativeEvent: 'seek',
+        seekOrigin: 'recovery',
+        seekCompleted: true,
+      });
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    }
+
     test('fails closed on legacy binary missing native identity capability', async () => {
       const legacyPlayer = {
         replace: jest.fn(() => Promise.resolve()),
@@ -1370,6 +1390,12 @@ describe('PlaybackCoordinator', () => {
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);
       const newAttemptId = identifiedPlayer.replaceWithAttempt.mock.calls[1][1];
       expect(newAttemptId).not.toBe(res.sourceAttemptId);
+      expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(1);
+      await completeAutomaticRestore(
+        coordinator,
+        identifiedPlayer,
+        newAttemptId,
+      );
       expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(2);
 
       // Second error event on the recovered attempt is terminal in this episode
@@ -1457,6 +1483,11 @@ describe('PlaybackCoordinator', () => {
       const recoveredAttempt =
         coordWithClock.getState().current.sourceAttemptId;
       expect(recoveredAttempt).not.toBe(res.sourceAttemptId);
+      await completeAutomaticRestore(
+        coordWithClock,
+        identifiedPlayer,
+        recoveredAttempt,
+      );
 
       // Advancing progress arrives on recovered attempt
       coordWithClock.handleNativeStatus(identifiedPlayer, {
@@ -3175,5 +3206,269 @@ describe('public Retry with native source and revision guards', () => {
     expect(c.current.positionSeconds).toBe(0);
     expect(c.current.status).toBe('paused');
     expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
+  });
+
+  test('early initial item error ends safely on native veto without ever playing failed source', async () => {
+    const replace = player.replaceWithAttempt.getMockImplementation();
+    player.replaceWithAttempt.mockImplementationOnce((...args) => {
+      const accepted = replace(...args);
+      emit('error', { error: 'synthetic initial failure' });
+      return accepted;
+    });
+    await c.play(player, { id: 'A' }, { requestId: 'early' });
+    expect(c.current.status).toBe('recovering');
+    await jest.advanceTimersByTimeAsync(800);
+    expect(player.playForAttempt).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(c.current.status).toBe('error');
+    expect(c.current.error.kind).toBe('playback');
+    expect(c.current.intent).toBe('pause');
+    expect(c.current.requestId).toBe('early');
+    expect(c.current.recoveryCount).toBe(1);
+    await jest.advanceTimersByTimeAsync(40000);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(['pause', 'seek'])(
+    'new native %s during initial failed installation forbids delayed play/replacement',
+    async (action) => {
+      const replace = player.replaceWithAttempt.getMockImplementation();
+      player.replaceWithAttempt.mockImplementationOnce((...args) => {
+        const accepted = replace(...args);
+        emit('error', { error: 'synthetic initial failure' });
+        if (action === 'pause') player.pause();
+        else player.seekForAttempt(installed, 19, null);
+        return accepted;
+      });
+      await c.play(player, { id: 'A' });
+      await jest.advanceTimersByTimeAsync(40000);
+      expect(player.playForAttempt).not.toHaveBeenCalled();
+      expect(player.play).not.toHaveBeenCalled();
+      expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
+      expect(c.current.intent).toBe('pause');
+    },
+  );
+
+  test('guarded recovery play rejection terminates immediately without unguarded fallback', async () => {
+    await start();
+    player.playForAttempt.mockImplementationOnce(() => false);
+    emit('error', { error: 'synthetic error' });
+    await jest.advanceTimersByTimeAsync(800);
+    await ready();
+    await seekAck();
+    await flush();
+    expect(c.current.status).toBe('error');
+    expect(c.current.error.kind).toBe('playback');
+    expect(player.play).not.toHaveBeenCalled();
+  });
+
+  test('finished valid selection permits pause only, while absent/stale IDs remain inert', async () => {
+    await start();
+    emit('finish', { didJustFinish: true });
+    const plays = player.playForAttempt.mock.calls.length;
+    await c.setIntent(player, { type: 'play', requestId: 'selection-A' });
+    expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
+    const pauses = player.pause.mock.calls.length;
+    await c.setIntent(player, { type: 'pause', requestId: 'stale' });
+    expect(player.pause).toHaveBeenCalledTimes(pauses);
+    await c.setIntent(player, { type: 'pause', requestId: 'selection-A' });
+    expect(player.pause).toHaveBeenCalledTimes(pauses + 1);
+    expect(c.current.intent).toBe('pause');
+    emit('finish', { didJustFinish: true });
+    expect(results.filter((x) => x.didFinish)).toHaveLength(1);
+    c.cancelCurrent('dismiss', player);
+    const cancelledPauses = player.pause.mock.calls.length;
+    await c.setIntent(player, { type: 'pause', requestId: 'selection-A' });
+    expect(player.pause).toHaveBeenCalledTimes(cancelledPauses);
+  });
+
+  test.each(['pause', 'seek'])(
+    'new user %s inside rejected guarded recovery is never overwritten by terminal handling',
+    async (action) => {
+      await start();
+      player.replaceWithAttempt.mockImplementationOnce(() => {
+        c.setIntent(player, { type: action, positionSeconds: 23 });
+        return false;
+      });
+      const plays = player.playForAttempt.mock.calls.length;
+      emit('error', { error: 'synthetic error' });
+      await jest.advanceTimersByTimeAsync(800);
+      expect(c.current.error).toBeNull();
+      expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
+      if (action === 'pause') expect(c.current.status).toBe('paused');
+      else expect(c.current.positionSeconds).toBe(23);
+    },
+  );
+
+  test('automatic zero restore waits matching loaded and successful nonnull seek before guarded play', async () => {
+    await c.play(player, { id: 'A' }, { requestId: 'zero' });
+    emit('error', { error: 'zero source failed' });
+    await jest.advanceTimersByTimeAsync(800);
+    expect(player.playForAttempt).toHaveBeenCalledTimes(1);
+    expect(player.seekForAttempt).not.toHaveBeenCalled();
+    const attempt = installed;
+    const rev = revision;
+    const premature = c.handleNativeStatus(player, {
+      sourceIdentityVersion: 1,
+      sourceAttemptId: attempt,
+      intentRevision: rev,
+      nativeEvent: 'progress',
+      nativeIntent: 'play',
+      playing: true,
+      isLoaded: true,
+      currentTime: 7,
+    });
+    expect(premature.didStart).toBe(false);
+    await ready();
+    expect(player.seekForAttempt).toHaveBeenLastCalledWith(attempt, 0, rev);
+    expect(player.playForAttempt).toHaveBeenCalledTimes(1);
+    expect(
+      c.handleNativeStatus(player, {
+        sourceIdentityVersion: 1,
+        sourceAttemptId: 'obsolete',
+        intentRevision: rev,
+        nativeEvent: 'seek',
+        nativeIntent: 'play',
+        seekOrigin: 'recovery',
+        seekCompleted: true,
+      }).accepted,
+    ).toBe(false);
+    expect(player.playForAttempt).toHaveBeenCalledTimes(1);
+    await seekAck();
+    expect(player.playForAttempt).toHaveBeenLastCalledWith(attempt, rev);
+    expect(player.playForAttempt).toHaveBeenCalledTimes(2);
+    expect(results.filter((x) => x.didStart)).toHaveLength(0);
+    position = 0.5;
+    emit('progress');
+    expect(results.filter((x) => x.didStart)).toHaveLength(1);
+  });
+
+  test.each([
+    'false-command',
+    'failed-ack',
+    'loaded-timeout',
+    'seek-timeout',
+    'pause',
+    'seek',
+    'new-track',
+  ])('automatic zero restore cannot autoplay after %s', async (mode) => {
+    await c.play(player, { id: 'A' }, { requestId: 'zero' });
+    emit('error', { error: 'zero source failed' });
+    await jest.advanceTimersByTimeAsync(800);
+    if (mode === 'false-command')
+      player.seekForAttempt.mockReturnValueOnce(false);
+    if (mode !== 'loaded-timeout') await ready();
+    if (mode === 'failed-ack') await seekAck({ seekCompleted: false });
+    if (mode === 'pause') await c.setIntent(player, { type: 'pause' });
+    if (mode === 'seek')
+      await c.setIntent(player, { type: 'seek', positionSeconds: 11 });
+    if (mode === 'new-track')
+      await c.play(player, { id: 'B' }, { requestId: 'new' });
+    const plays = player.playForAttempt.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(5000);
+    if (['pause', 'seek'].includes(mode)) await seekAck();
+    expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
+    expect(player.play).not.toHaveBeenCalled();
+    if (
+      mode.endsWith('timeout') ||
+      mode === 'false-command' ||
+      mode === 'failed-ack'
+    )
+      expect(c.current.status).toBe('error');
+    if (mode === 'seek') expect(c.current.positionSeconds).toBe(11);
+    if (mode === 'new-track') expect(c.current.requestId).toBe('new');
+  });
+
+  test.each(['none', 'pause', 'seek'])(
+    'FIFO immutable error captured during install preserves source failure and newer intent: %s',
+    async (newer) => {
+      const queued = [];
+      listeners.clear();
+      listeners.add((event) => queued.push(event));
+      const replace = player.replaceWithAttempt.getMockImplementation();
+      player.replaceWithAttempt.mockImplementationOnce((...args) => {
+        const accepted = replace(...args);
+        emit('error', { error: 'captured before initial play' });
+        return accepted;
+      });
+      await c.play(player, { id: 'A' }, { requestId: 'fifo' });
+      expect(queued[0]).toEqual(
+        expect.objectContaining({
+          nativeEvent: 'error',
+          nativeIntent: 'pause',
+          intentRevision: 0,
+        }),
+      );
+      expect(queued[1]).toEqual(
+        expect.objectContaining({
+          nativeEvent: 'intent',
+          nativeIntent: 'play',
+          intentRevision: 1,
+        }),
+      );
+      if (newer === 'pause') player.pause();
+      if (newer === 'seek') player.seekForAttempt(installed, 21, null);
+      const error = queued[0];
+      while (queued.length)
+        results.push(c.handleNativeStatus(player, queued.shift()));
+      if (newer === 'none') {
+        expect(c.current.status).toBe('recovering');
+        expect(c.current.recoveryCount).toBe(1);
+      } else {
+        expect(c.handleNativeStatus(player, error).accepted).toBe(false);
+        expect(c.current.intent).toBe(newer === 'pause' ? 'pause' : 'play');
+        if (newer === 'seek') expect(c.current.positionSeconds).toBe(21);
+      }
+      await jest.advanceTimersByTimeAsync(800);
+      expect(player.replaceWithAttempt).toHaveBeenCalledTimes(
+        newer === 'none' ? 2 : 1,
+      );
+      expect(player.playForAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test('a source error play snapshot cannot grant resume permission after JS pause', async () => {
+    await start();
+    const stalePresentation = {
+      sourceIdentityVersion: 1,
+      sourceAttemptId: installed,
+      intentRevision: revision + 1,
+      nativeEvent: 'error',
+      nativeIntent: 'play',
+      error: 'captured failure',
+    };
+    listeners.clear();
+    await c.setIntent(player, { type: 'pause' });
+    c.handleNativeStatus(player, stalePresentation);
+    expect(c.current.intent).toBe('pause');
+    expect(c.current.status).toBe('error');
+    const count = player.replaceWithAttempt.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(35000);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(count);
+  });
+
+  test('FIFO readiness captured before initial play cannot consume installation error as pause', async () => {
+    const queued = [];
+    listeners.clear();
+    listeners.add((event) => queued.push(event));
+    const replace = player.replaceWithAttempt.getMockImplementation();
+    player.replaceWithAttempt.mockImplementationOnce((...args) => {
+      const accepted = replace(...args);
+      emit('loaded');
+      emit('error', { error: 'failed during install after readiness' });
+      return accepted;
+    });
+    await c.play(player, { id: 'A' });
+    expect(queued.map((event) => event.nativeEvent)).toEqual([
+      'loaded',
+      'error',
+      'intent',
+    ]);
+    for (const event of queued) c.handleNativeStatus(player, event);
+    expect(c.current.intent).toBe('play');
+    expect(c.current.status).toBe('recovering');
+    expect(c.current.recoveryCount).toBe(1);
+    await jest.advanceTimersByTimeAsync(800);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
   });
 });

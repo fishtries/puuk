@@ -1975,12 +1975,50 @@ function patchModuleInterruptionOwnership() {
   fs.writeFileSync(media, s);
 }
 
+// R2's lock-screen existential is not nominally a Playable. Keep the locked
+// module pause for conformers and the original pause for other lock-screen types.
+function patchRemotePauseTypes() {
+  for (const name of Object.keys(acceptedInputs)) {
+    if (
+      digest(fs.readFileSync(path.join(iosDir, name), 'utf8')) !==
+      acceptedInputs[name][5]
+    )
+      throw new Error(`Incomplete R2 input: ${name}`);
+  }
+  const file = path.join(iosDir, 'MediaController.swift');
+  let s = fs.readFileSync(file, 'utf8');
+  s = replaceOnce(
+    s,
+    `      AudioModule.pauseExplicitly(playable)
+      return .success`,
+    `      if let modulePlayable = playable as? Playable {
+        AudioModule.pauseExplicitly(modulePlayable)
+      } else {
+        playable.pause()
+      }
+      return .success`,
+  );
+  s = replaceOnce(
+    s,
+    `      } else if playable.isPlaying {
+        AudioModule.pauseExplicitly(playable)`,
+    `      } else if playable.isPlaying {
+        if let modulePlayable = playable as? Playable {
+          AudioModule.pauseExplicitly(modulePlayable)
+        } else {
+          playable.pause()
+        }`,
+  );
+  fs.writeFileSync(file, s);
+}
+
 const acceptedInputs = {
   'AudioPlayer.swift': [
     '05f1431a451513e62cb14400e60d9d3e2b56271584169f7f1603226236be78cd',
     'a36e2f1a316813a08e7d3654c3aa7a0528ecb0a071c9529f6afa37a0ae57dba2',
     '7618a05d110f31624073f91e2be9c40ad60229cfb8a22f40a8fd425b9346bd04',
     'b42d76b1585f790c8fb15a6ca9a62ba41203a1a39f753cfa4f9cf904d69c7cd7',
+    '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
   ],
@@ -1991,6 +2029,7 @@ const acceptedInputs = {
     '25e1dbae1b86d5b86755c1d1bc8fc4598a5146fa7416c5a7875258c8af896efd',
     '07c2e437e9d99c44cc7b5c0500fb51d91d1e95283bbb93359890241037370b33',
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
+    '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
   ],
   'MediaController.swift': [
     '8e0b972ef7548b174ec5b1daff1dfb69f201095e61567111dc48298182e5d0ab',
@@ -1999,6 +2038,7 @@ const acceptedInputs = {
     'd59f4d3d13fd8546cd21dfd103718b3c573cf04554c8c59dcac029e6fd029e86',
     'd59f4d3d13fd8546cd21dfd103718b3c573cf04554c8c59dcac029e6fd029e86',
     '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
+    'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
   ],
   'AudioComponentRegistry.swift': [
     '45af89001f159d392b991cfd2111050e31ea3c9a23f94600e142f9974732621f',
@@ -2007,9 +2047,11 @@ const acceptedInputs = {
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
+    '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
   ],
   'AudioUtils.swift': [
     'b78865fa35bcc5b3d91279a1d1399f832b283fd5b0c326128f0ce66933b8c537',
+    '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
@@ -2043,37 +2085,55 @@ function run() {
       .includes('private struct SourceContext')
   ) {
     console.log(
-      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2 corrections already patched (verified hashes).',
+      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2 and remote pause type corrections already patched (verified hashes).',
     );
     return;
   }
-  const isR1 = [...before].every(
-    ([file, content]) =>
-      digest(content) === acceptedInputs[path.basename(file)][4],
-  );
-  if (!isR1) {
-    const isFirstCorrection = [...before].every(
+  const supportedGeneration = Array.from(
+    { length: 7 },
+    (_, index) => index,
+  ).some((index) =>
+    [...before].every(
       ([file, content]) =>
-        digest(content) === acceptedInputs[path.basename(file)][3],
+        digest(content) === acceptedInputs[path.basename(file)][index],
+    ),
+  );
+  if (!supportedGeneration)
+    throw new Error('Unsupported mixed SDK source generations');
+  const isR2 = [...before].every(
+    ([file, content]) =>
+      digest(content) === acceptedInputs[path.basename(file)][5],
+  );
+  if (!isR2) {
+    const isR1 = [...before].every(
+      ([file, content]) =>
+        digest(content) === acceptedInputs[path.basename(file)][4],
     );
-    if (!isFirstCorrection) {
-      const isPreCorrectionS1 = [...before].every(
+    if (!isR1) {
+      const isFirstCorrection = [...before].every(
         ([file, content]) =>
-          digest(content) === acceptedInputs[path.basename(file)][2],
+          digest(content) === acceptedInputs[path.basename(file)][3],
       );
-      if (!isPreCorrectionS1) {
-        patchMediaController();
-        patchAudioPlayer();
-        patchAudioModule();
-        patchAudioComponentRegistry();
-        patchAudioUtils();
-        patchSourceIdentity();
+      if (!isFirstCorrection) {
+        const isPreCorrectionS1 = [...before].every(
+          ([file, content]) =>
+            digest(content) === acceptedInputs[path.basename(file)][2],
+        );
+        if (!isPreCorrectionS1) {
+          patchMediaController();
+          patchAudioPlayer();
+          patchAudioModule();
+          patchAudioComponentRegistry();
+          patchAudioUtils();
+          patchSourceIdentity();
+        }
+        patchNativeCorrections();
       }
-      patchNativeCorrections();
+      patchResumeCauses();
     }
-    patchResumeCauses();
+    patchModuleInterruptionOwnership();
   }
-  patchModuleInterruptionOwnership();
+  patchRemotePauseTypes();
   // Verify complete outputs too: a missing legacy transform must not produce partial success.
   for (const name of Object.keys(acceptedInputs)) {
     const file = path.join(iosDir, name);
@@ -2089,7 +2149,7 @@ function run() {
   for (const [file, content] of staged)
     nodeFs.writeFileSync(file, content, 'utf8');
   console.log(
-    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2 corrections; rebuild the iOS binary.',
+    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2 and remote pause type corrections; rebuild the iOS binary.',
   );
 }
 

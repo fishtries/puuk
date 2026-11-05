@@ -1123,6 +1123,111 @@ describe('AudioCache reliability (Gate A)', () => {
     }
   });
 
+  test.each(
+    ['cancel', 'total', 'inactivity'].flatMap((stop) =>
+      ['resolve', 'reject'].flatMap((nativeOutcome) =>
+        [false, true].map((failDelete) => ({
+          stop,
+          nativeOutcome,
+          failDelete,
+        })),
+      ),
+    ),
+  )(
+    '$stop cleans captured temp after late native $nativeOutcome (delete failure: $failDelete)',
+    async ({ stop, nativeOutcome, failDelete }) => {
+      const cache = makeCache({
+        inactivityTimeoutMs: stop === 'inactivity' ? 100 : 20000,
+        totalTimeoutMs: stop === 'total' ? 100 : 180000,
+        retryDelaysMs: [],
+      });
+      await cache.init();
+      let finishNative;
+      let oldTempUri;
+      const nativeGate = new Promise((resolve, reject) => {
+        finishNative = () => {
+          // Model didFinishDownloadingTo writing before didCompleteWithError.
+          mockFs.set(oldTempUri, { content: 'LATE', size: 100, isDir: false });
+          if (nativeOutcome === 'resolve') resolve(new MockFile(oldTempUri));
+          else reject(new Error('synthetic native cancellation'));
+        };
+      });
+      const create = jest
+        .spyOn(MockFile, 'createDownloadTask')
+        .mockImplementationOnce((url, dest, opts) => {
+          oldTempUri = dest.uri;
+          const task = new MockDownloadTask(url, dest, opts);
+          task.cancel = jest.fn(); // Ignored until native completion.
+          task.release = jest.fn();
+          task.downloadAsync = () => {
+            mockFs.set(oldTempUri, {
+              content: 'PARTIAL',
+              size: 10,
+              isDir: false,
+            });
+            return nativeGate;
+          };
+          return task;
+        });
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const originalDelete = MockFile.prototype.delete;
+      const deletion = jest
+        .spyOn(MockFile.prototype, 'delete')
+        .mockImplementation(function () {
+          if (failDelete && this.uri === oldTempUri) {
+            throw new Error('synthetic private filesystem error');
+          }
+          return originalDelete.call(this);
+        });
+      try {
+        cache.cancel('unknown');
+        const old = cache.getOrFetch('same', 'https://fixture.invalid/old');
+        old.catch(() => {});
+        await jest.advanceTimersByTimeAsync(0);
+        expect(new MockFile(oldTempUri).exists).toBe(true);
+        const oldTask = mockActiveDownloadTasks[0];
+        if (stop === 'cancel') cache.cancel('same');
+        else await jest.advanceTimersByTimeAsync(100);
+        await expect(old).rejects.toMatchObject(
+          stop === 'cancel'
+            ? { name: 'AbortError' }
+            : { cacheErrorKind: 'transient' },
+        );
+        cache.cancel('same');
+        cache.cancel('unknown');
+        expect(cache.ongoingDownloads.size).toBe(0);
+        expect(oldTask.cancel).toHaveBeenCalled();
+        expect(oldTask.release).toHaveBeenCalled();
+        // Caller is already rejected, but native can still write: do not delete yet.
+        expect(new MockFile(oldTempUri).exists).toBe(true);
+        expect(warn).not.toHaveBeenCalled();
+        const freshUri = await cache.getOrFetch(
+          'same',
+          'https://fixture.invalid/new',
+        );
+        const freshContent = await new MockFile(freshUri).text();
+        expect(freshUri).not.toBe(oldTempUri);
+        finishNative();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(new MockFile(oldTempUri).exists).toBe(failDelete);
+        expect(cache.getCachedUri('same')).toBe(freshUri);
+        expect(await new MockFile(freshUri).text()).toBe(freshContent);
+        expect(mockActiveDownloadTasks).toHaveLength(2);
+        if (failDelete) {
+          expect(warn.mock.calls).toEqual([
+            ['[AudioCache] Attempt file cleanup failed'],
+          ]);
+        } else expect(warn).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        create.mockRestore();
+        deletion.mockRestore();
+        warn.mockRestore();
+      }
+    },
+  );
+
   test('invalidate removes only the exact expected URI and leaves newer copy', async () => {
     mockFs.clear();
     const cache = makeCache();

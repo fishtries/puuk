@@ -3,26 +3,6 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { TRACK_STATUS } from '../../utils/preloadScheduler';
 
-function sanitizeErrorMessage(
-  msg,
-  fallback = 'Сбой загрузки следующего трека',
-) {
-  if (!msg || typeof msg !== 'string') return fallback;
-  if (
-    msg.includes('http://') ||
-    msg.includes('https://') ||
-    msg.includes('://') ||
-    msg.includes('token') ||
-    msg.includes('Bearer') ||
-    msg.includes('Authorization') ||
-    msg.includes('/') ||
-    msg.includes('?')
-  ) {
-    return fallback;
-  }
-  return msg;
-}
-
 /**
  * Компактный ненавязчивый баннер сетевого статуса и ошибок подготовки треков.
  * Не прерывает текущий трек, заменяет спам модальных Alert'ов.
@@ -32,7 +12,6 @@ export default function PlayerNetworkBanner({
   next,
   networkStatus = 'good',
   nextTrackStatus = TRACK_STATUS.IDLE,
-  networkError = null,
   isBufferingSlow = false,
   onRetry,
   onRetryCurrent,
@@ -62,6 +41,9 @@ export default function PlayerNetworkBanner({
       </View>
     );
   }
+
+  // During startup the header spinner takes precedence over next-track errors.
+  if (current?.status === 'starting') return null;
 
   // 2. Текущий поток завис (stall)
   if (current?.status === 'stalled') {
@@ -179,10 +161,7 @@ export default function PlayerNetworkBanner({
 
   if (isNextError) {
     const nextRetryHandler = onRetryNext || onRetry;
-    const message = sanitizeErrorMessage(
-      !next ? networkError : null,
-      'Сбой загрузки следующего трека',
-    );
+    const message = 'Сбой загрузки следующего трека';
 
     return (
       <View

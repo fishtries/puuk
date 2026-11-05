@@ -57,7 +57,7 @@ describe('PlayerNetworkBanner', () => {
     const root = renderer.root;
     const textNodes = root.findAllByType('Text');
     const texts = textNodes.map((n) => n.props.children);
-    expect(texts).toContain('Сбой загрузки');
+    expect(texts).toContain('Сбой загрузки следующего трека');
     expect(texts).toContain('Повторить');
     expect(texts).toContain('Пропустить');
 
@@ -221,4 +221,35 @@ describe('PlayerNetworkBanner', () => {
     expect(onRetryCurrent).toHaveBeenCalled();
     expect(onRetryNext).not.toHaveBeenCalled();
   });
+});
+
+test('never renders arbitrary compatibility error text or secrets', () => {
+  let renderer;
+  act(() => {
+    renderer = TestRenderer.create(
+      <PlayerNetworkBanner
+        networkStatus="error"
+        networkError="credential=privatevalue"
+      />,
+    );
+  });
+  expect(JSON.stringify(renderer.toJSON())).not.toContain('privatevalue');
+  expect(JSON.stringify(renderer.toJSON())).toContain(
+    'Сбой загрузки следующего трека',
+  );
+  act(() => renderer.unmount());
+});
+
+test('current startup has loading priority over next failure', () => {
+  let renderer;
+  act(() => {
+    renderer = TestRenderer.create(
+      <PlayerNetworkBanner
+        current={{ status: 'starting' }}
+        next={{ status: TRACK_STATUS.FAILED }}
+      />,
+    );
+  });
+  expect(renderer.toJSON()).toBeNull();
+  act(() => renderer.unmount());
 });
