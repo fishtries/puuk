@@ -1257,53 +1257,92 @@ export default function usePlayerController({ setTracks }) {
     [loadAndPlay, recordTrackHistory],
   );
 
+  const pendingLikesRef = useRef(new Set());
   const handleToggleLike = useCallback(
     async (track) => {
-      if (!track) return;
+      if (!mountedRef.current || !track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
-      const currentLiked = !!track.is_liked;
+      const key = String(trackId);
+      if (pendingLikesRef.current.has(key)) return;
+      pendingLikesRef.current.add(key);
+      const epoch = authEpochRef.current;
+      const active = currentTrackRef.current;
+      const currentLiked = !!(
+        areTrackIdsEqual(active, trackId) ? active : track
+      ).is_liked;
       const newLiked = !currentLiked;
-
-      setCurrentTrack((prev) => {
-        return prev && areTrackIdsEqual(prev, trackId)
-          ? { ...prev, is_liked: newLiked }
-          : prev;
-      });
-      setTracks((prev) =>
-        prev.map((t) => {
-          return areTrackIdsEqual(t, trackId)
-            ? { ...t, is_liked: newLiked }
-            : t;
-        }),
-      );
-
+      const applyLiked = (liked) => {
+        const patch = (item) =>
+          areTrackIdsEqual(item, trackId) ? { ...item, is_liked: liked } : item;
+        setCurrentTrack((prev) => (prev ? patch(prev) : prev));
+        setTracks((prev) => prev.map(patch));
+        setUpNextQueue((prev) => prev.map(patch));
+        setHistory((prev) => prev.map(patch));
+        if (areTrackIdsEqual(currentTrackRef.current, trackId)) {
+          player?.setFavoriteState?.(
+            currentRequestIdRef.current || '',
+            liked,
+            false,
+          );
+        }
+      };
+      applyLiked(newLiked);
       try {
         const response = await authFetch(
           `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
-          {
-            method: newLiked ? 'POST' : 'DELETE',
-          },
+          { method: newLiked ? 'POST' : 'DELETE' },
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
       } catch (err) {
         console.warn('Failed to toggle like:', err);
-        setCurrentTrack((prev) => {
-          return prev && areTrackIdsEqual(prev, trackId)
-            ? { ...prev, is_liked: currentLiked }
-            : prev;
-        });
-        setTracks((prev) =>
-          prev.map((t) => {
-            return areTrackIdsEqual(t, trackId)
-              ? { ...t, is_liked: currentLiked }
-              : t;
-          }),
-        );
+        if (mountedRef.current && epoch === authEpochRef.current)
+          applyLiked(currentLiked);
+      } finally {
+        pendingLikesRef.current.delete(key);
+        if (
+          mountedRef.current &&
+          epoch === authEpochRef.current &&
+          areTrackIdsEqual(currentTrackRef.current, trackId)
+        ) {
+          player?.setFavoriteState?.(
+            currentRequestIdRef.current || '',
+            !!currentTrackRef.current.is_liked,
+            !!currentUserIdRef.current,
+          );
+        }
       }
     },
-    [setTracks],
+    [setTracks, player, setCurrentTrack, setUpNextQueue, setHistory],
   );
+
+  // The selection token belongs to the track shown when the remote command fired.
+  // Never apply a delayed command to a newer selection.
+  const toggleLikeRef = useRef(handleToggleLike);
+  toggleLikeRef.current = handleToggleLike;
+  useEffect(() => {
+    const subscription = player?.addListener?.('toggleFavorite', (event) => {
+      if (
+        !mountedRef.current ||
+        !event?.favoriteSelectionId ||
+        event.favoriteSelectionId !== currentRequestIdRef.current
+      )
+        return;
+      toggleLikeRef.current(currentTrackRef.current);
+    });
+    return () => subscription?.remove?.();
+  }, [player]);
+
+  const favoriteSelectionId = currentRequestIdRef.current || '';
+  useEffect(() => {
+    player?.setFavoriteState?.(
+      favoriteSelectionId,
+      !!currentTrack?.is_liked,
+      !!currentTrack &&
+        !!currentUserIdRef.current &&
+        !pendingLikesRef.current.has(String(getTrackId(currentTrack))),
+    );
+  }, [player, currentTrack, favoriteSelectionId]);
 
   const startWave = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -1404,6 +1443,16 @@ export default function usePlayerController({ setTracks }) {
     currentTime,
     duration,
     isLoading,
+    // Legacy binaries cannot confirm coordinator startup through source-tagged events.
+    // Once this selection is installed, use Expo's loaded status for presentation.
+    isStartingPlayback: networkUX.current?.status === 'starting' && (
+      networkUX.identityAvailable === true ||
+      !(
+        loadedPlayback?.request === playbackRequestRef.current &&
+        loadedPlayback?.authEpoch === authEpochRef.current &&
+        status.isLoaded === true
+      )
+    ),
     isPlayerVisible,
     setIsPlayerVisible,
     playerExpandToken,

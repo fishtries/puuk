@@ -1082,7 +1082,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     return tree;
   }
 
-  test('exact R2 migrates and repeats with only MediaController changed', () => {
+  test('exact R2 migrates and repeats with favorite command support', () => {
     const { ios } = r2();
     const before = contents(ios);
     expect(hash(before['MediaController.swift'])).toBe(
@@ -1090,10 +1090,10 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     );
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
-    for (const name of names.filter((name) => name !== 'MediaController.swift'))
+    for (const name of names.filter((name) => !['MediaController.swift', 'AudioModule.swift'].includes(name)))
       expect(expected[name]).toBe(before[name]);
     expect(hash(expected['MediaController.swift'])).toBe(
-      'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
+      'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
     );
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
@@ -1175,7 +1175,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     const { root, ios } = r2();
     const source = fs.readFileSync(script, 'utf8');
     const changed = source.replace(
-      'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
+      'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
       '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
     );
     expect(changed).not.toBe(source);
@@ -1215,5 +1215,29 @@ test('S2 concurrent disk change is detected before any staged correction is writ
   expect(contents(ios)).toEqual({
     ...before,
     'AudioUtils.swift': before['AudioUtils.swift'] + '\n// concurrent change\n',
+  });
+});
+
+
+describe('system favorite command boundary (source only)', () => {
+  test('bridges favorite state and ties each command to its selection', () => {
+    expect(expected['AudioModule.swift']).toContain('Function("setFavoriteState")');
+    const media = expected['MediaController.swift'];
+    expect(media).toContain('remoteCommandCenter.likeCommand.addTarget');
+    expect(media).toContain('command.isActive = favoriteLiked');
+    expect(media).toContain('payload: ["favoriteSelectionId": self.favoriteSelectionId]');
+    expect(media).toContain('player.id == self.activePlayable?.id');
+    expect(media).toContain('self.favoriteEnabled = false');
+    expect(media).toContain('remoteCommandTargets.append((remoteCommandCenter.likeCommand, favoriteTarget))');
+    expect(media).toContain('remoteCommandCenter.likeCommand.isEnabled = false');
+  });
+
+  test('favorite requests have a separate background task with acknowledgment and expiration cleanup', () => {
+    const media = expected['MediaController.swift'];
+    expect(media).toContain('beginBackgroundTask(withName: "PuukFavorite")');
+    expect(media).toContain('if enabled || self.favoriteSelectionId != selectionId');
+    expect(media).toContain('self?.performOnMain { self?.endFavoriteBackgroundTask() }');
+    expect(media).toContain('UIApplication.shared.endBackgroundTask(task)');
+    expect(method(media, '  private func disableRemoteCommands()', '\n}')).toContain('endFavoriteBackgroundTask()');
   });
 });

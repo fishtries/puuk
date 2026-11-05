@@ -2012,12 +2012,112 @@ function patchRemotePauseTypes() {
   fs.writeFileSync(file, s);
 }
 
+// Add the system favorite command after the pinned playback corrections.
+function patchFavoriteCommand() {
+  const moduleFile = path.join(iosDir, 'AudioModule.swift');
+  let s = fs.readFileSync(moduleFile, 'utf8');
+  s = replaceOnce(
+    s,
+    '      Function("updateLockScreenMetadata") { (player: AudioPlayer, metadata: Metadata?) in',
+    `      Function("setFavoriteState") { (player: AudioPlayer, selectionId: String, liked: Bool, enabled: Bool) in
+        MediaController.shared.setFavoriteState(for: player, selectionId: selectionId, liked: liked, enabled: enabled)
+      }
+
+      Function("updateLockScreenMetadata") { (player: AudioPlayer, metadata: Metadata?) in`,
+  );
+  fs.writeFileSync(moduleFile, s);
+
+  const mediaFile = path.join(iosDir, 'MediaController.swift');
+  s = fs.readFileSync(mediaFile, 'utf8');
+  s = replaceOnce(
+    s,
+    '  private var remoteCommandCenter = MPRemoteCommandCenter.shared()',
+    `  private weak var favoritePlayer: AudioPlayer?
+  private var favoriteSelectionId = ""
+  private var favoriteLiked = false
+  private var favoriteEnabled = false
+  private var favoriteBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+  private func endFavoriteBackgroundTask() {
+    guard favoriteBackgroundTask != .invalid else { return }
+    let task = favoriteBackgroundTask
+    favoriteBackgroundTask = .invalid
+    UIApplication.shared.endBackgroundTask(task)
+  }
+
+  func setFavoriteState(for player: AudioPlayer, selectionId: String, liked: Bool, enabled: Bool) {
+    performOnMain {
+      if enabled || self.favoriteSelectionId != selectionId {
+        self.endFavoriteBackgroundTask()
+      }
+      self.favoritePlayer = player
+      self.favoriteSelectionId = selectionId
+      self.favoriteLiked = liked
+      self.favoriteEnabled = enabled
+      self.updateFavoriteCommand()
+    }
+  }
+
+  private func updateFavoriteCommand() {
+    let command = remoteCommandCenter.likeCommand
+    command.isEnabled = favoriteEnabled && !favoriteSelectionId.isEmpty &&
+      favoritePlayer != nil && favoritePlayer?.id == activePlayable?.id
+    command.isActive = favoriteLiked
+    command.localizedTitle = favoriteLiked ? "Remove from Favorites" : "Add to Favorites"
+  }
+
+  private var remoteCommandCenter = MPRemoteCommandCenter.shared()`,
+  );
+  s = replaceOnce(
+    s,
+    '    let nextArtworkItemIdentifier = playable.lockScreenPlayer.currentItem.map { ObjectIdentifier($0) }',
+    '    updateFavoriteCommand()\n\n    let nextArtworkItemIdentifier = playable.lockScreenPlayer.currentItem.map { ObjectIdentifier($0) }',
+  );
+  s = replaceOnce(
+    s,
+    '    let playTarget = remoteCommandCenter.playCommand.addTarget { [weak self] _ in',
+    `    let favoriteTarget = remoteCommandCenter.likeCommand.addTarget { [weak self] _ in
+      let action: () -> MPRemoteCommandHandlerStatus = {
+        guard let self, let player = self.favoritePlayer,
+              player.id == self.activePlayable?.id,
+              self.favoriteEnabled, !self.favoriteSelectionId.isEmpty else {
+          return .commandFailed
+        }
+        // Disable until JS acknowledges success or restores the previous state.
+        self.favoriteEnabled = false
+        self.updateFavoriteCommand()
+        self.endFavoriteBackgroundTask()
+        self.favoriteBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PuukFavorite") { [weak self] in
+          self?.performOnMain { self?.endFavoriteBackgroundTask() }
+        }
+        player.emit(event: "toggleFavorite", payload: ["favoriteSelectionId": self.favoriteSelectionId])
+        return .success
+      }
+      return Thread.isMainThread ? action() : DispatchQueue.main.sync(execute: action)
+    }
+    remoteCommandTargets.append((remoteCommandCenter.likeCommand, favoriteTarget))
+    updateFavoriteCommand()
+
+    let playTarget = remoteCommandCenter.playCommand.addTarget { [weak self] _ in`,
+  );
+  s = replaceOnce(
+    s,
+    '  private func disableRemoteCommands() {',
+    `  private func disableRemoteCommands() {
+    endFavoriteBackgroundTask()
+    remoteCommandCenter.likeCommand.isEnabled = false
+    remoteCommandCenter.likeCommand.isActive = false`,
+  );
+  fs.writeFileSync(mediaFile, s);
+}
+
 const acceptedInputs = {
   'AudioPlayer.swift': [
     '05f1431a451513e62cb14400e60d9d3e2b56271584169f7f1603226236be78cd',
     'a36e2f1a316813a08e7d3654c3aa7a0528ecb0a071c9529f6afa37a0ae57dba2',
     '7618a05d110f31624073f91e2be9c40ad60229cfb8a22f40a8fd425b9346bd04',
     'b42d76b1585f790c8fb15a6ca9a62ba41203a1a39f753cfa4f9cf904d69c7cd7',
+    '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
@@ -2030,6 +2130,7 @@ const acceptedInputs = {
     '07c2e437e9d99c44cc7b5c0500fb51d91d1e95283bbb93359890241037370b33',
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
+    '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
   ],
   'MediaController.swift': [
     '8e0b972ef7548b174ec5b1daff1dfb69f201095e61567111dc48298182e5d0ab',
@@ -2039,6 +2140,7 @@ const acceptedInputs = {
     'd59f4d3d13fd8546cd21dfd103718b3c573cf04554c8c59dcac029e6fd029e86',
     '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
     'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
+    'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
   ],
   'AudioComponentRegistry.swift': [
     '45af89001f159d392b991cfd2111050e31ea3c9a23f94600e142f9974732621f',
@@ -2048,9 +2150,11 @@ const acceptedInputs = {
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
+    '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
   ],
   'AudioUtils.swift': [
     'b78865fa35bcc5b3d91279a1d1399f832b283fd5b0c326128f0ce66933b8c537',
+    '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
@@ -2090,7 +2194,7 @@ function run() {
     return;
   }
   const supportedGeneration = Array.from(
-    { length: 7 },
+    { length: 8 },
     (_, index) => index,
   ).some((index) =>
     [...before].every(
@@ -2100,40 +2204,47 @@ function run() {
   );
   if (!supportedGeneration)
     throw new Error('Unsupported mixed SDK source generations');
-  const isR2 = [...before].every(
+  const isRemotePauseCorrected = [...before].every(
     ([file, content]) =>
-      digest(content) === acceptedInputs[path.basename(file)][5],
+      digest(content) === acceptedInputs[path.basename(file)][6],
   );
-  if (!isR2) {
-    const isR1 = [...before].every(
+  if (!isRemotePauseCorrected) {
+    const isR2 = [...before].every(
       ([file, content]) =>
-        digest(content) === acceptedInputs[path.basename(file)][4],
+        digest(content) === acceptedInputs[path.basename(file)][5],
     );
-    if (!isR1) {
-      const isFirstCorrection = [...before].every(
+    if (!isR2) {
+      const isR1 = [...before].every(
         ([file, content]) =>
-          digest(content) === acceptedInputs[path.basename(file)][3],
+          digest(content) === acceptedInputs[path.basename(file)][4],
       );
-      if (!isFirstCorrection) {
-        const isPreCorrectionS1 = [...before].every(
+      if (!isR1) {
+        const isFirstCorrection = [...before].every(
           ([file, content]) =>
-            digest(content) === acceptedInputs[path.basename(file)][2],
+            digest(content) === acceptedInputs[path.basename(file)][3],
         );
-        if (!isPreCorrectionS1) {
-          patchMediaController();
-          patchAudioPlayer();
-          patchAudioModule();
-          patchAudioComponentRegistry();
-          patchAudioUtils();
-          patchSourceIdentity();
+        if (!isFirstCorrection) {
+          const isPreCorrectionS1 = [...before].every(
+            ([file, content]) =>
+              digest(content) === acceptedInputs[path.basename(file)][2],
+          );
+          if (!isPreCorrectionS1) {
+            patchMediaController();
+            patchAudioPlayer();
+            patchAudioModule();
+            patchAudioComponentRegistry();
+            patchAudioUtils();
+            patchSourceIdentity();
+          }
+          patchNativeCorrections();
         }
-        patchNativeCorrections();
+        patchResumeCauses();
       }
-      patchResumeCauses();
+      patchModuleInterruptionOwnership();
     }
-    patchModuleInterruptionOwnership();
+    patchRemotePauseTypes();
   }
-  patchRemotePauseTypes();
+  patchFavoriteCommand();
   // Verify complete outputs too: a missing legacy transform must not produce partial success.
   for (const name of Object.keys(acceptedInputs)) {
     const file = path.join(iosDir, name);
