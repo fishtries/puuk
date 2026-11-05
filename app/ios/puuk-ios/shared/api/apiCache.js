@@ -609,6 +609,9 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
   // 3. Дедупликация параллельных запросов (если не forceRefresh)
   // Проверяем ДО инкремента epoch, чтобы второй запрос не аннулировал epoch первого!
   if (!forceRefresh && inFlightRequests.has(cacheKey)) {
+    if (typeof options.onNetworkStart === 'function') {
+      options.onNetworkStart();
+    }
     try {
       const pendingPromise = inFlightRequests.get(cacheKey);
       let sharedResult;
@@ -698,6 +701,9 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
   let networkPromise;
   networkPromise = (async () => {
     try {
+      if (typeof options.onNetworkStart === 'function') {
+        options.onNetworkStart();
+      }
       const response = await authFetch(endpoint, {
         signal: internalAbortController.signal,
       });
@@ -766,6 +772,9 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
       if (typeof options.onFreshData === 'function') {
         options.onFreshData(freshData);
       }
+      if (typeof options.onNetworkSuccess === 'function') {
+        options.onNetworkSuccess(freshData);
+      }
 
       return {
         data: freshData,
@@ -773,6 +782,9 @@ export const fetchCatalogWithCache = async (endpoint, options = {}) => {
         isStale: false,
       };
     } catch (err) {
+      if (typeof options.onNetworkError === 'function') {
+        options.onNetworkError(err);
+      }
       if (err?.name === 'AbortError') {
         throw err;
       }

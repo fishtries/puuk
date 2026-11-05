@@ -1,9 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { fetchRecentlyListened, normalizeHistoryTracks, RECENTLY_LISTENED_CACHE_KEY, RECENTLY_LISTENED_TTL_MS } from '../../shared/api/history';
+import {
+  fetchRecentlyListened,
+  normalizeHistoryTracks,
+  RECENTLY_LISTENED_CACHE_KEY,
+  RECENTLY_LISTENED_TTL_MS,
+} from '../../shared/api/history';
 import { getCachedCatalog } from '../../shared/api/apiCache';
-import { SERVER_URL, addAuthListener, getCachedUser } from '../../shared/api/api';
+import {
+  SERVER_URL,
+  addAuthListener,
+  getCachedUser,
+  isNetworkError,
+} from '../../shared/api/api';
+import { syncStateManager } from '../../shared/sync/syncState';
 import { selectRecentlyListened } from './recentlyListenedSelection';
 
 export const ERROR_COOLDOWN_MS = 60 * 1000; // 60 seconds
@@ -39,9 +50,14 @@ export function useRecentlyListened(options = {}) {
   } catch {
     navFocused = true;
   }
-  const isFocused = options.isFocused !== undefined ? Boolean(options.isFocused) : Boolean(navFocused);
+  const isFocused =
+    options.isFocused !== undefined
+      ? Boolean(options.isFocused)
+      : Boolean(navFocused);
 
-  const [authUser, setAuthUser] = useState(() => propUser !== undefined ? propUser : getCachedUser());
+  const [authUser, setAuthUser] = useState(() =>
+    propUser !== undefined ? propUser : getCachedUser(),
+  );
   useEffect(() => {
     if (propUser !== undefined) {
       setAuthUser(propUser);
@@ -55,7 +71,9 @@ export function useRecentlyListened(options = {}) {
     return unsub;
   }, []);
 
-  const userId = authUser ? authUser.id ?? authUser.user_id ?? authUser : null;
+  const userId = authUser
+    ? (authUser.id ?? authUser.user_id ?? authUser)
+    : null;
 
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,92 +85,145 @@ export function useRecentlyListened(options = {}) {
   const prevUserNamespaceRef = useRef(null);
   const prevFocusedRef = useRef(isFocused);
 
-  const loadData = useCallback(async (isForced = false) => {
-    if (!userId) {
-      setTracks([]);
-      setIsLoading(false);
-      return;
-    }
+  const loadData = useCallback(
+    async (isForced = false) => {
+      if (!userId) {
+        setTracks([]);
+        setIsLoading(false);
+        return;
+      }
 
-    const namespaceKey = `${serverUrl}__${userId}`;
-    const lastErrorTime = errorCooldowns.get(namespaceKey) || 0;
-    const inCooldown = !isForced && (Date.now() - lastErrorTime < ERROR_COOLDOWN_MS);
+      const namespaceKey = `${serverUrl}__${userId}`;
+      const lastErrorTime = errorCooldowns.get(namespaceKey) || 0;
+      const inCooldown =
+        !isForced && Date.now() - lastErrorTime < ERROR_COOLDOWN_MS;
 
-    // Cancel previous in-flight request
-    if (activeAbortRef.current) {
-      activeAbortRef.current.abort();
-    }
-    const abortController = new AbortController();
-    activeAbortRef.current = abortController;
+      // Cancel previous in-flight request
+      if (activeAbortRef.current) {
+        activeAbortRef.current.abort();
+      }
+      const abortController = new AbortController();
+      activeAbortRef.current = abortController;
 
-    // If currently displaying 0 tracks, show skeleton loading
-    if (tracksRef.current.length === 0) {
-      setIsLoading(true);
-    }
+      // If currently displaying 0 tracks, show skeleton loading
+      if (tracksRef.current.length === 0) {
+        setIsLoading(true);
+      }
 
-    if (inCooldown) {
+      if (inCooldown) {
+        try {
+          const cached = await getCachedCatalog(RECENTLY_LISTENED_CACHE_KEY, {
+            serverUrl,
+            userId,
+            ttlMs: RECENTLY_LISTENED_TTL_MS,
+          });
+          if (abortController.signal.aborted) return;
+          if (cached && Array.isArray(cached.data)) {
+            const normalized = normalizeHistoryTracks(cached.data, serverUrl);
+            setTracks(selectRecentlyListened(normalized, 20));
+          }
+        } catch {
+          // ignore in cooldown
+        } finally {
+          if (!abortController.signal.aborted) {
+            setIsLoading(false);
+          }
+        }
+        return;
+      }
+
       try {
-        const cached = await getCachedCatalog(RECENTLY_LISTENED_CACHE_KEY, {
+        const res = await fetchRecentlyListened({
           serverUrl,
           userId,
-          ttlMs: RECENTLY_LISTENED_TTL_MS,
+          signal: abortController.signal,
+          forceRefresh: isForced,
+          onNetworkStart: () => {
+            syncStateManager.startOperation('recently_listened', {
+              retryFn: () => loadData(true),
+            });
+          },
+          onNetworkSuccess: () => {
+            syncStateManager.finishOperation('recently_listened', {
+              success: true,
+            });
+          },
+          onNetworkError: (err) => {
+            if (err?.name === 'AbortError') {
+              syncStateManager.cancelOperation('recently_listened');
+            } else {
+              syncStateManager.finishOperation('recently_listened', {
+                success: false,
+                status: err?.status,
+                isServer: err?.status >= 500,
+                isNetwork: isNetworkError(err),
+                message:
+                  err?.status >= 500
+                    ? 'Сервер временно недоступен'
+                    : 'Ошибка загрузки истории',
+              });
+            }
+          },
+          onCachedData: (cachedList) => {
+            if (abortController.signal.aborted) return;
+            if (Array.isArray(cachedList) && cachedList.length > 0) {
+              setTracks(selectRecentlyListened(cachedList, 20));
+              setIsLoading(false);
+            }
+          },
+          onFreshData: (freshList) => {
+            if (abortController.signal.aborted) return;
+            errorCooldowns.delete(namespaceKey);
+            setTracks(selectRecentlyListened(freshList, 20));
+            setIsLoading(false);
+          },
         });
+
         if (abortController.signal.aborted) return;
-        if (cached && Array.isArray(cached.data)) {
-          const normalized = normalizeHistoryTracks(cached.data, serverUrl);
-          setTracks(selectRecentlyListened(normalized, 20));
+
+        if (res.error) {
+          errorCooldowns.set(namespaceKey, Date.now());
+          syncStateManager.finishOperation('recently_listened', {
+            success: false,
+            status: res.error?.status,
+            isServer: res.error?.status >= 500,
+            isNetwork: isNetworkError(res.error),
+            message:
+              res.error?.status >= 500
+                ? 'Сервер временно недоступен'
+                : 'Ошибка загрузки истории',
+          });
+        } else {
+          errorCooldowns.delete(namespaceKey);
         }
-      } catch {
-        // ignore in cooldown
+
+        if (Array.isArray(res.data)) {
+          setTracks(selectRecentlyListened(res.data, 20));
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') {
+          syncStateManager.cancelOperation('recently_listened');
+          return;
+        }
+        errorCooldowns.set(namespaceKey, Date.now());
+        syncStateManager.finishOperation('recently_listened', {
+          success: false,
+          status: err?.status,
+          isServer: err?.status >= 500,
+          isNetwork: isNetworkError(err),
+          message:
+            err?.status >= 500
+              ? 'Сервер временно недоступен'
+              : 'Ошибка загрузки истории',
+        });
       } finally {
         if (!abortController.signal.aborted) {
           setIsLoading(false);
         }
       }
-      return;
-    }
-
-    try {
-      const res = await fetchRecentlyListened({
-        serverUrl,
-        userId,
-        signal: abortController.signal,
-        forceRefresh: isForced,
-        onCachedData: (cachedList) => {
-          if (abortController.signal.aborted) return;
-          if (Array.isArray(cachedList) && cachedList.length > 0) {
-            setTracks(selectRecentlyListened(cachedList, 20));
-            setIsLoading(false);
-          }
-        },
-        onFreshData: (freshList) => {
-          if (abortController.signal.aborted) return;
-          errorCooldowns.delete(namespaceKey);
-          setTracks(selectRecentlyListened(freshList, 20));
-          setIsLoading(false);
-        },
-      });
-
-      if (abortController.signal.aborted) return;
-
-      if (res.error) {
-        errorCooldowns.set(namespaceKey, Date.now());
-      } else {
-        errorCooldowns.delete(namespaceKey);
-      }
-
-      if (Array.isArray(res.data)) {
-        setTracks(selectRecentlyListened(res.data, 20));
-      }
-    } catch (err) {
-      if (err?.name === 'AbortError') return;
-      errorCooldowns.set(namespaceKey, Date.now());
-    } finally {
-      if (!abortController.signal.aborted) {
-        setIsLoading(false);
-      }
-    }
-  }, [userId, serverUrl]);
+    },
+    [userId, serverUrl],
+  );
 
   // Account switch / logout effect
   useEffect(() => {

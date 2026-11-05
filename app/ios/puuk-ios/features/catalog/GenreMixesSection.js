@@ -12,8 +12,18 @@ import Animated, { FadeInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import CoverImage from '../../shared/media/CoverImage';
 import { fetchPersonalizedRecommendations } from '../../shared/api/recommendations';
-import { getSettings, addSettingsListener } from '../../shared/storage/settings';
-import { getAuthToken, addAuthListener, getCachedUser } from '../../shared/api/api';
+import {
+  getSettings,
+  addSettingsListener,
+} from '../../shared/storage/settings';
+import {
+  getAuthToken,
+  addAuthListener,
+  getCachedUser,
+  isNetworkError,
+} from '../../shared/api/api';
+import { getCachedCatalog, setCachedCatalog } from '../../shared/api/apiCache';
+import { syncStateManager } from '../../shared/sync/syncState';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -25,7 +35,11 @@ let memoryCachedSections = null;
  */
 export function formatMixTitle(section) {
   if (!section) return 'Mix';
-  if (section.genre && typeof section.genre === 'string' && section.genre.trim()) {
+  if (
+    section.genre &&
+    typeof section.genre === 'string' &&
+    section.genre.trim()
+  ) {
     const trimmed = section.genre.trim();
     // Capitalize first letter if needed
     const genreName = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
@@ -171,41 +185,82 @@ export default function GenreMixesSection({
     }
   }, [propSections]);
 
-  const loadRecommendations = useCallback(async () => {
-    if (propSections !== undefined) return;
+  const loadRecommendations = useCallback(
+    async (isForced = false) => {
+      if (propSections !== undefined) return;
 
-    const token = await getAuthToken();
-    if (!token && !currentUser && !getCachedUser()) {
-      setSections([]);
-      return;
-    }
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    try {
-      const response = await fetchPersonalizedRecommendations({
-        limit: 20,
-        sections: 3,
-        signal: controller.signal,
-      });
-      if (!controller.signal.aborted) {
-        const resultSections = Array.isArray(response.sections) ? response.sections : [];
-        memoryCachedSections = resultSections;
-        setSections(resultSections);
+      const token = await getAuthToken();
+      if (!token && !currentUser && !getCachedUser()) {
+        setSections([]);
+        return;
       }
-    } catch (e) {
-      if (e?.name !== 'AbortError' && !controller.signal.aborted) {
+
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      // Сначала читаем локальный кэш, если секции ещё не загружены в память
+      let cached = null;
+      if (!memoryCachedSections && !isForced) {
+        try {
+          cached = await getCachedCatalog('genre_mixes', {
+            ttlMs: 10 * 60 * 1000,
+          });
+          if (controller.signal.aborted) return;
+          if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
+            memoryCachedSections = cached.data;
+            setSections(cached.data);
+            if (!cached.isStale) {
+              return;
+            }
+          }
+        } catch {}
+      }
+
+      syncStateManager.startOperation('genre_mixes', {
+        retryFn: () => loadRecommendations(true),
+      });
+
+      try {
+        const response = await fetchPersonalizedRecommendations({
+          limit: 20,
+          sections: 3,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) {
+          const resultSections = Array.isArray(response.sections)
+            ? response.sections
+            : [];
+          memoryCachedSections = resultSections;
+          setSections(resultSections);
+          setCachedCatalog('genre_mixes', resultSections).catch(() => {});
+          syncStateManager.finishOperation('genre_mixes', { success: true });
+        }
+      } catch (e) {
+        if (e?.name === 'AbortError' || controller.signal.aborted) {
+          syncStateManager.cancelOperation('genre_mixes');
+          return;
+        }
         console.warn('[GenreMixesSection error]', e);
         if (!memoryCachedSections) {
           setSections([]);
         }
+        syncStateManager.finishOperation('genre_mixes', {
+          success: false,
+          status: e?.status,
+          isServer: e?.status >= 500,
+          isNetwork: isNetworkError(e),
+          message:
+            e?.status >= 500
+              ? 'Сервер временно недоступен'
+              : 'Ошибка загрузки миксов',
+        });
       }
-    }
-  }, [currentUser, propSections]);
+    },
+    [currentUser, propSections],
+  );
 
   useEffect(() => {
     loadRecommendations();

@@ -7,8 +7,9 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   interpolate,
-  Easing
+  Easing,
 } from 'react-native-reanimated';
+import SyncHeaderIndicator from './SyncHeaderIndicator';
 
 const TABS = [
   { key: 'Home', index: 0, title: 'puuk' },
@@ -54,9 +55,13 @@ export default function AppHeader({
   currentUser,
   onOpenAuthModal,
   onAddPlaylist,
-  rightActions
+  rightActions,
+  syncStatus,
+  onRetry,
 }) {
-  const [accentColor, setAccentColor] = useState(() => getSettings().accentColor || '#FFDAB9');
+  const [accentColor, setAccentColor] = useState(
+    () => getSettings().accentColor || '#FFDAB9',
+  );
 
   useEffect(() => {
     const unsub = addSettingsListener((s) => {
@@ -126,12 +131,20 @@ export default function AppHeader({
 
         {rightActions}
 
+        <SyncHeaderIndicator
+          accentColor={accentColor}
+          syncStatus={syncStatus}
+          onRetry={onRetry}
+        />
+
         {onOpenAuthModal && (
           <TouchableOpacity
             style={styles.profileButton}
             onPress={onOpenAuthModal}
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Профиль"
           >
             <Ionicons
               name={

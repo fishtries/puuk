@@ -53,10 +53,15 @@ import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
 import {
   checkAuth,
+  restoreLocalSession,
+  verifySession,
+  logout,
   addAuthListener,
   SERVER_URL,
   setServerUrl,
+  isNetworkError,
 } from './shared/api/api';
+import { syncStateManager } from './shared/sync/syncState';
 import {
   loadSettings,
   getSavedLastTrack,
@@ -76,6 +81,7 @@ function AppContent() {
   const [trackToManage, setTrackToManage] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [restoreError, setRestoreError] = useState(null);
   const [isAuthModalVisible, setIsAuthModalVisible] = useState(false);
   const [accentColor, setAccentColor] = useState(
     () => getSettings().accentColor || '#FFDAB9',
@@ -122,7 +128,6 @@ function AppContent() {
     currentPlayback,
     nextPlayback,
     retryCurrent,
-    onRetry,
     networkStatus,
     nextTrackStatus,
     networkError,
@@ -584,7 +589,81 @@ function AppContent() {
     handleToggleLike(activeTrack);
   }, [handleToggleLike, activeTrack]);
 
-  // Последовательная инициализация настроек и авторизации при старте приложения
+  const runBackgroundSessionCheck = useCallback(async () => {
+    syncStateManager.startOperation('auth', {
+      retryFn: () => runBackgroundSessionCheck(),
+    });
+    try {
+      const res = await verifySession();
+      if (res.aborted) {
+        syncStateManager.cancelOperation('auth');
+        return;
+      }
+      if (res.success) {
+        syncStateManager.finishOperation('auth', { success: true });
+      } else if (res.status === 401) {
+        syncStateManager.finishOperation('auth', {
+          success: false,
+          status: 401,
+        });
+      } else {
+        syncStateManager.finishOperation('auth', {
+          success: false,
+          status: res.status,
+          isServer: res.isServer,
+          isNetwork: res.isNetwork,
+          message: res.isServer
+            ? 'Сервер временно недоступен'
+            : res.isNetwork
+              ? 'Нет связи с сервером'
+              : 'Ошибка проверки сессии',
+        });
+      }
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        syncStateManager.cancelOperation('auth');
+      } else {
+        syncStateManager.finishOperation('auth', {
+          success: false,
+          status: err?.status,
+          isServer: err?.status >= 500,
+          isNetwork: isNetworkError(err),
+          message: err?.message,
+        });
+      }
+    }
+  }, []);
+
+  const restoreProfileFromServer = useCallback(async () => {
+    setRestoreError(null);
+    setIsAuthChecking(true);
+    try {
+      const res = await verifySession();
+      if (res.success && res.user) {
+        setCurrentUser(res.user);
+        setIsAuthChecking(false);
+      } else if (res.status === 401) {
+        setCurrentUser(null);
+        setIsAuthChecking(false);
+      } else {
+        setIsAuthChecking(false);
+        setRestoreError({
+          isServer: res.isServer,
+          isNetwork: res.isNetwork,
+          message: res.error?.message,
+        });
+      }
+    } catch (err) {
+      setIsAuthChecking(false);
+      setRestoreError({
+        isServer: err?.status >= 500,
+        isNetwork: isNetworkError(err),
+        message: err?.message,
+      });
+    }
+  }, []);
+
+  // Инициализация приложения: локальное открытие интерфейса и фоновая проверка сессии
   useEffect(() => {
     let isMounted = true;
 
@@ -604,11 +683,27 @@ function AppContent() {
           console.warn('[AudioCache init warning]', err);
         });
 
-        const user = await checkAuth();
-        if (isMounted) {
-          if (user) setCurrentUser(user);
+        const session = await restoreLocalSession();
+        if (!isMounted) return;
+
+        if (!session.hasToken) {
+          setCurrentUser(null);
           setIsAuthChecking(false);
+          return;
         }
+
+        if (session.hasUser) {
+          // Открываем приложение мгновенно с локальными данными
+          setCurrentUser(session.user);
+          setIsAuthChecking(false);
+
+          // Проверяем сессию на сервере в фоне
+          runBackgroundSessionCheck();
+          return;
+        }
+
+        // Есть токен, но пользователь не сохранен: восстанавливаем профиль через сервер
+        await restoreProfileFromServer();
       } catch (e) {
         console.warn('[App init error]', e);
         if (isMounted) {
@@ -622,6 +717,9 @@ function AppContent() {
     const unsubscribe = addAuthListener((user) => {
       if (isMounted) {
         setCurrentUser(user);
+        if (!user) {
+          syncStateManager.reset();
+        }
       }
     });
 
@@ -629,7 +727,7 @@ function AppContent() {
       isMounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [runBackgroundSessionCheck, restoreProfileFromServer]);
 
   useEffect(() => {
     if (getTrackId(currentTrack) !== null) {
@@ -637,9 +735,21 @@ function AppContent() {
     }
   }, [currentTrack]);
 
-  if (isAuthChecking) {
+  if (isAuthChecking || restoreError) {
     return (
-      <AppAuthGate isChecking={isAuthChecking} currentUser={currentUser} />
+      <AppAuthGate
+        isChecking={isAuthChecking}
+        currentUser={currentUser}
+        restoreError={restoreError}
+        onRetryRestore={restoreProfileFromServer}
+        onLogout={async () => {
+          await logout();
+          setRestoreError(null);
+          setCurrentUser(null);
+          setIsAuthChecking(false);
+        }}
+        accentColor={accentColor}
+      />
     );
   }
 
@@ -648,7 +758,11 @@ function AppContent() {
       <AppAuthGate
         isChecking={isAuthChecking}
         currentUser={currentUser}
-        onLoginSuccess={(u) => setCurrentUser(u)}
+        onLoginSuccess={(u) => {
+          setRestoreError(null);
+          setCurrentUser(u);
+        }}
+        accentColor={accentColor}
       />
     );
   }
@@ -696,7 +810,6 @@ function AppContent() {
         isBufferingSlow={isBufferingSlow}
         onRetryPreload={retryPreload}
         onRetryCurrent={retryCurrent}
-        onRetry={onRetry}
         accentColor={accentColor}
         onArtistPress={handleArtistPress}
       />
@@ -735,6 +848,7 @@ function AppContent() {
             hasMoreTracks={hasMoreTracks}
             isLoadingMoreTracks={isLoadingMoreTracks}
             onRefreshTracks={refreshTracks}
+            onRetry={() => syncStateManager.retryFailed()}
           />
         </NavigationContainer>
 

@@ -1,11 +1,19 @@
 import * as SecureStore from 'expo-secure-store';
 
-export const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_API_URL || 'https://web.puuk.fun';
+export const DEFAULT_SERVER_URL =
+  process.env.EXPO_PUBLIC_API_URL || 'https://web.puuk.fun';
 export let SERVER_URL = DEFAULT_SERVER_URL;
+
+let authSessionGeneration = 0;
+export const getAuthSessionGeneration = () => authSessionGeneration;
 
 export const setServerUrl = (url) => {
   if (url && typeof url === 'string') {
-    SERVER_URL = url.trim().replace(/\/+$/, '');
+    const trimmed = url.trim().replace(/\/+$/, '');
+    if (trimmed !== SERVER_URL) {
+      SERVER_URL = trimmed;
+      authSessionGeneration += 1;
+    }
   }
 };
 const TOKEN_KEY = 'puuk_auth_token';
@@ -46,7 +54,10 @@ export const getCachedUser = () => cachedUser;
 export const getAuthToken = async () => {
   if (cachedToken) return cachedToken;
   try {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS);
+    const token = await SecureStore.getItemAsync(
+      TOKEN_KEY,
+      SECURE_STORE_OPTIONS,
+    );
     if (token) {
       cachedToken = token;
       return token;
@@ -58,6 +69,9 @@ export const getAuthToken = async () => {
 };
 
 export const setAuthToken = async (token) => {
+  if (token !== cachedToken) {
+    authSessionGeneration += 1;
+  }
   cachedToken = token;
   try {
     if (token) {
@@ -88,7 +102,11 @@ export const setSavedUser = async (user) => {
   cachedUser = user;
   try {
     if (user) {
-      await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user), SECURE_STORE_OPTIONS);
+      await SecureStore.setItemAsync(
+        USER_KEY,
+        JSON.stringify(user),
+        SECURE_STORE_OPTIONS,
+      );
     } else {
       await SecureStore.deleteItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
     }
@@ -99,6 +117,7 @@ export const setSavedUser = async (user) => {
 };
 
 export const logout = async () => {
+  authSessionGeneration += 1;
   await setAuthToken(null);
   await setSavedUser(null);
 };
@@ -107,7 +126,11 @@ export const authHandlers = {
   logout: () => logout(),
 };
 
-const AUTH_EXEMPT_PATHS = ['/api/auth/login', '/api/auth/verify-code', '/api/auth/me'];
+const AUTH_EXEMPT_PATHS = [
+  '/api/auth/login',
+  '/api/auth/verify-code',
+  '/api/auth/me',
+];
 let unauthorizedPromise = null;
 
 const handleUnauthorized = async (url) => {
@@ -143,7 +166,16 @@ export const getAuthHeaders = async () => {
 };
 
 export class ApiError extends Error {
-  constructor(message, { type = 'unknown', status = null, code = null, cause = null, endpoint = null } = {}) {
+  constructor(
+    message,
+    {
+      type = 'unknown',
+      status = null,
+      code = null,
+      cause = null,
+      endpoint = null,
+    } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.type = type;
@@ -159,12 +191,17 @@ export class ApiError extends Error {
 }
 
 export const isRetryableStatus = (status) => {
-  return status === 408 || status === 429 || (typeof status === 'number' && status >= 500 && status <= 599);
+  return (
+    status === 408 ||
+    status === 429 ||
+    (typeof status === 'number' && status >= 500 && status <= 599)
+  );
 };
 
 export const isNetworkError = (err) => {
   if (!err) return false;
-  if (err.name === 'NetworkError' || err.isNetwork || err.type === 'network') return true;
+  if (err.name === 'NetworkError' || err.isNetwork || err.type === 'network')
+    return true;
 
   const msg = (err.message || '').toLowerCase();
   const code = (err.code || '').toUpperCase();
@@ -198,7 +235,11 @@ export const isNetworkError = (err) => {
     return true;
   }
 
-  if (msg.includes('socket hang up') || msg.includes('econnreset') || msg.includes('econnrefused')) {
+  if (
+    msg.includes('socket hang up') ||
+    msg.includes('econnreset') ||
+    msg.includes('econnrefused')
+  ) {
     return true;
   }
 
@@ -209,7 +250,11 @@ export const classifyError = (error, status = null) => {
   if (error?.name === 'AbortError' || error?.type === 'abort') {
     return 'abort';
   }
-  if (error?.name === 'TimeoutError' || error?.isTimeout || error?.type === 'timeout') {
+  if (
+    error?.name === 'TimeoutError' ||
+    error?.isTimeout ||
+    error?.type === 'timeout'
+  ) {
     return 'timeout';
   }
   if (status === 401) {
@@ -230,44 +275,59 @@ export const classifyError = (error, status = null) => {
   return 'unknown';
 };
 
-const delayWithSignal = (ms, signal) => new Promise((resolve, reject) => {
-  if (ms <= 0) {
+const delayWithSignal = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    if (ms <= 0) {
+      if (signal?.aborted) {
+        const err =
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error('The operation was aborted');
+        err.name = 'AbortError';
+        return reject(err);
+      }
+      return resolve();
+    }
     if (signal?.aborted) {
-      const err = signal.reason instanceof Error ? signal.reason : new Error('The operation was aborted');
+      const err =
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error('The operation was aborted');
       err.name = 'AbortError';
       return reject(err);
     }
-    return resolve();
-  }
-  if (signal?.aborted) {
-    const err = signal.reason instanceof Error ? signal.reason : new Error('The operation was aborted');
-    err.name = 'AbortError';
-    return reject(err);
-  }
-  let timer = null;
-  const onAbort = () => {
-    if (timer) clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onAbort);
-    const err = signal.reason instanceof Error ? signal.reason : new Error('The operation was aborted');
-    err.name = 'AbortError';
-    reject(err);
-  };
-  timer = setTimeout(() => {
-    if (signal) signal.removeEventListener('abort', onAbort);
-    resolve();
-  }, ms);
-  if (signal) {
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
-});
+    let timer = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      const err =
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error('The operation was aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+    timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 
 export const authFetch = async (endpoint, options = {}) => {
-  const url = endpoint.startsWith('http') ? endpoint : `${SERVER_URL}${endpoint}`;
+  const url = endpoint.startsWith('http')
+    ? endpoint
+    : `${SERVER_URL}${endpoint}`;
   const method = (options.method || 'GET').toUpperCase();
   const isMutation = ['POST', 'PATCH', 'DELETE', 'PUT'].includes(method);
 
   const defaultTimeout = isMutation ? 10000 : 10000;
-  const timeoutMs = typeof options.timeout === 'number' ? Math.max(0, options.timeout) : defaultTimeout;
+  const timeoutMs =
+    typeof options.timeout === 'number'
+      ? Math.max(0, options.timeout)
+      : defaultTimeout;
 
   let maxRetries;
   if (typeof options.retry === 'number') {
@@ -275,13 +335,18 @@ export const authFetch = async (endpoint, options = {}) => {
   } else if (typeof options.retries === 'number') {
     maxRetries = Math.max(0, options.retries);
   } else {
-    maxRetries = (method === 'GET' || method === 'HEAD') ? 2 : 0;
+    maxRetries = method === 'GET' || method === 'HEAD' ? 2 : 0;
   }
 
-  const retryDelayMs = typeof options.retryDelay === 'number' ? Math.max(0, options.retryDelay) : 100;
+  const retryDelayMs =
+    typeof options.retryDelay === 'number'
+      ? Math.max(0, options.retryDelay)
+      : 100;
 
-  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
-  const isObjectBody = options.body && typeof options.body === 'object' && !isFormData;
+  const isFormData =
+    typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const isObjectBody =
+    options.body && typeof options.body === 'object' && !isFormData;
   const body = isObjectBody ? JSON.stringify(options.body) : options.body;
 
   const token = await getAuthToken();
@@ -316,12 +381,18 @@ export const authFetch = async (endpoint, options = {}) => {
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (externalSignal?.aborted) {
-      const abortErr = (externalSignal.reason instanceof Error)
-        ? externalSignal.reason
-        : new ApiError(externalSignal.reason ? String(externalSignal.reason) : 'The operation was aborted', {
-            type: 'abort',
-            endpoint: url,
-          });
+      const abortErr =
+        externalSignal.reason instanceof Error
+          ? externalSignal.reason
+          : new ApiError(
+              externalSignal.reason
+                ? String(externalSignal.reason)
+                : 'The operation was aborted',
+              {
+                type: 'abort',
+                endpoint: url,
+              },
+            );
       abortErr.name = 'AbortError';
       throw abortErr;
     }
@@ -333,7 +404,9 @@ export const authFetch = async (endpoint, options = {}) => {
     if (timeoutMs > 0) {
       timeoutId = setTimeout(() => {
         isTimedOut = true;
-        attemptController.abort(new Error(`Request timed out after ${timeoutMs}ms`));
+        attemptController.abort(
+          new Error(`Request timed out after ${timeoutMs}ms`),
+        );
       }, timeoutMs);
     }
 
@@ -368,13 +441,19 @@ export const authFetch = async (endpoint, options = {}) => {
     }
 
     if (externalSignal?.aborted) {
-      const abortErr = (externalSignal.reason instanceof Error)
-        ? externalSignal.reason
-        : new ApiError(externalSignal.reason ? String(externalSignal.reason) : 'The operation was aborted', {
-            type: 'abort',
-            cause: fetchError,
-            endpoint: url,
-          });
+      const abortErr =
+        externalSignal.reason instanceof Error
+          ? externalSignal.reason
+          : new ApiError(
+              externalSignal.reason
+                ? String(externalSignal.reason)
+                : 'The operation was aborted',
+              {
+                type: 'abort',
+                cause: fetchError,
+                endpoint: url,
+              },
+            );
       abortErr.name = 'AbortError';
       throw abortErr;
     }
@@ -388,11 +467,14 @@ export const authFetch = async (endpoint, options = {}) => {
         });
         lastError.name = 'TimeoutError';
       } else if (isNetworkError(fetchError)) {
-        lastError = new ApiError(fetchError?.message || 'Network request failed', {
-          type: 'network',
-          cause: fetchError,
-          endpoint: url,
-        });
+        lastError = new ApiError(
+          fetchError?.message || 'Network request failed',
+          {
+            type: 'network',
+            cause: fetchError,
+            endpoint: url,
+          },
+        );
         lastError.name = 'NetworkError';
       } else {
         // Arbitrary / runtime error (not network or timeout): DO NOT RETRY!
@@ -420,7 +502,10 @@ export const authFetch = async (endpoint, options = {}) => {
       try {
         await handleUnauthorized(url);
       } catch (authErr) {
-        console.error('[Auth] Error during unauthorized handling/logout:', authErr);
+        console.error(
+          '[Auth] Error during unauthorized handling/logout:',
+          authErr,
+        );
       }
       return response;
     }
@@ -436,7 +521,10 @@ export const authFetch = async (endpoint, options = {}) => {
   }
 };
 
-export const parseApiErrorMessage = (errData, fallback = 'An error occurred') => {
+export const parseApiErrorMessage = (
+  errData,
+  fallback = 'An error occurred',
+) => {
   if (!errData) return fallback;
   if (typeof errData === 'string') return errData;
   if (typeof errData.detail === 'string') return errData.detail;
@@ -445,14 +533,19 @@ export const parseApiErrorMessage = (errData, fallback = 'An error occurred') =>
       .map((d) => {
         if (!d) return '';
         if (typeof d === 'string') return d;
-        if (typeof d === 'object') return d.msg || d.message || JSON.stringify(d);
+        if (typeof d === 'object')
+          return d.msg || d.message || JSON.stringify(d);
         return String(d);
       })
       .filter(Boolean);
     if (msgs.length > 0) return msgs.join('\n');
   }
   if (errData.detail && typeof errData.detail === 'object') {
-    return errData.detail.msg || errData.detail.message || JSON.stringify(errData.detail);
+    return (
+      errData.detail.msg ||
+      errData.detail.message ||
+      JSON.stringify(errData.detail)
+    );
   }
   if (typeof errData.message === 'string') return errData.message;
   return fallback;
@@ -494,33 +587,115 @@ export const loginWithCode = async (code) => {
   return data.user;
 };
 
-export const checkAuth = async () => {
+export const restoreLocalSession = async () => {
+  const token = await getAuthToken();
+  if (!token) {
+    cachedUser = null;
+    return { token: null, user: null, hasToken: false, hasUser: false };
+  }
+  const user = await getSavedUser();
+  if (!user) {
+    return { token, user: null, hasToken: true, hasUser: false };
+  }
+  return { token, user, hasToken: true, hasUser: true };
+};
+
+export const verifySession = async (options = {}) => {
+  const currentGen = authSessionGeneration;
+  const token = cachedToken || (await getAuthToken());
+  if (!token) {
+    return {
+      success: false,
+      status: null,
+      isAuth: false,
+      error: new Error('No auth token'),
+    };
+  }
+
   try {
-    const token = await getAuthToken();
-    if (!token) {
-      return null;
+    const res = await authFetch('/api/auth/me', {
+      signal: options.signal,
+      timeout: options.timeout || 10000,
+      retry: 0,
+    });
+
+    if (authSessionGeneration !== currentGen || cachedToken !== token) {
+      return { success: false, aborted: true };
     }
 
-    const savedUser = await getSavedUser();
-    if (savedUser) {
-      notifyAuthChange(savedUser);
-    }
-
-    const res = await authFetch('/api/auth/me');
     if (res.ok) {
       const freshUser = await res.json();
+      if (authSessionGeneration !== currentGen || cachedToken !== token) {
+        return { success: false, aborted: true };
+      }
       await setSavedUser(freshUser);
-      return freshUser;
+      notifyAuthChange(freshUser);
+      return { success: true, user: freshUser, status: res.status };
     }
 
     if (res.status === 401) {
-      console.warn('[checkAuth] Сессия отклонена сервером (401), сбрасываем авторизацию.');
+      console.warn(
+        '[verifySession] Сессия отклонена сервером (401), сбрасываем авторизацию.',
+      );
       await logout();
+      notifyAuthChange(null);
+      return {
+        success: false,
+        status: 401,
+        isAuth: true,
+        error: new Error('Unauthorized'),
+      };
+    }
+
+    const isServer = res.status >= 500 && res.status <= 599;
+    return {
+      success: false,
+      status: res.status,
+      isServer,
+      isNetwork: false,
+      error: new Error(`HTTP ${res.status}`),
+    };
+  } catch (err) {
+    if (authSessionGeneration !== currentGen || cachedToken !== token) {
+      return { success: false, aborted: true };
+    }
+    if (err?.name === 'AbortError') {
+      return { success: false, aborted: true, error: err };
+    }
+    const isNet = isNetworkError(err);
+    const isTime = err?.name === 'TimeoutError' || err?.isTimeout;
+    return {
+      success: false,
+      status: err?.status || null,
+      isNetwork: isNet || isTime,
+      isTimeout: isTime,
+      isServer: Boolean(err?.status >= 500 && err?.status <= 599),
+      error: err,
+    };
+  }
+};
+
+export const checkAuth = async () => {
+  try {
+    const local = await restoreLocalSession();
+    if (!local.hasToken) {
       return null;
     }
 
-    console.warn(`[checkAuth] Сервер ответил статусом ${res.status}, сохраняем существующую сессию.`);
-    return savedUser || null;
+    if (local.hasUser) {
+      notifyAuthChange(local.user);
+    }
+
+    const verified = await verifySession();
+    if (verified.success) {
+      return verified.user;
+    }
+
+    if (verified.status === 401) {
+      return null;
+    }
+
+    return local.user || null;
   } catch (e) {
     console.warn('[checkAuth network error, preserving session]', e);
     const savedUser = await getSavedUser();

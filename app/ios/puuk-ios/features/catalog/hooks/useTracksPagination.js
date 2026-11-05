@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { SERVER_URL } from '../../../shared/api/api';
+import { SERVER_URL, isNetworkError } from '../../../shared/api/api';
 import {
   fetchTracksPage,
   mergeTracks,
   TRACKS_PAGE_SIZE,
 } from '../../../shared/api/apiCache';
+import { syncStateManager } from '../../../shared/sync/syncState';
 
 /**
  * Хук для пагинированной загрузки каталога треков со Stale-While-Revalidate кэшированием страниц.
@@ -81,25 +82,76 @@ export default function useTracksPagination({
           userId: currentUser.id,
           serverUrl,
           signal: controller.signal,
+          onNetworkStart: () => {
+            syncStateManager.startOperation('catalog', {
+              retryFn: () => refreshTracks(),
+            });
+          },
+          onNetworkSuccess: () => {
+            syncStateManager.finishOperation('catalog', { success: true });
+          },
+          onNetworkError: (err) => {
+            if (err?.name === 'AbortError') {
+              syncStateManager.cancelOperation('catalog');
+            } else {
+              syncStateManager.finishOperation('catalog', {
+                success: false,
+                status: err?.status,
+                isServer: err?.status >= 500,
+                isNetwork: isNetworkError(err),
+                message:
+                  err?.status >= 500
+                    ? 'Сервер временно недоступен'
+                    : 'Ошибка загрузки каталога',
+              });
+            }
+          },
           onData: (pageData) => {
-            if (controller.signal.aborted || userGenerationRef.current !== currentGeneration) {
+            if (
+              controller.signal.aborted ||
+              userGenerationRef.current !== currentGeneration
+            ) {
               return;
             }
-            const items = pageData?.items || (Array.isArray(pageData) ? pageData : []);
+            const items =
+              pageData?.items || (Array.isArray(pageData) ? pageData : []);
             setTracks(items);
             tracksOffsetRef.current = items.length;
-            const hasMore = pageData?.hasMore ?? (items.length === TRACKS_PAGE_SIZE);
+            const hasMore =
+              pageData?.hasMore ?? items.length === TRACKS_PAGE_SIZE;
             setHasMoreTracks(hasMore);
 
             // Не выбираем первый трек повторно, если currentTrack уже восстановлен из хранилища
-            if (items.length > 0 && !currentTrackRef.current && typeof setCurrentTrack === 'function') {
+            if (
+              items.length > 0 &&
+              !currentTrackRef.current &&
+              typeof setCurrentTrack === 'function'
+            ) {
               setCurrentTrack(items[0]);
             }
           },
         });
       } catch (err) {
-        if (err?.name !== 'AbortError' && !err?.message?.includes('AbortError')) {
-          console.warn('[useTracksPagination] Fetch initial page error:', err?.message || err);
+        if (
+          err?.name === 'AbortError' ||
+          err?.message?.includes('AbortError')
+        ) {
+          syncStateManager.cancelOperation('catalog');
+        } else {
+          syncStateManager.finishOperation('catalog', {
+            success: false,
+            status: err?.status,
+            isServer: err?.status >= 500,
+            isNetwork: isNetworkError(err),
+            message:
+              err?.status >= 500
+                ? 'Сервер временно недоступен'
+                : 'Ошибка загрузки каталога',
+          });
+          console.warn(
+            '[useTracksPagination] Fetch initial page error:',
+            err?.message || err,
+          );
         }
       }
     };
@@ -139,35 +191,53 @@ export default function useTracksPagination({
     loadMoreAbortRef.current = loadMoreController;
 
     try {
-      const pageResult = await fetchTracksPage(currentOffset, TRACKS_PAGE_SIZE, {
-        userId: currentUser.id,
-        serverUrl,
-        signal: loadMoreController.signal,
-        onData: (pageData) => {
-          if (loadMoreController.signal.aborted || userGenerationRef.current !== currentGeneration) return;
+      const pageResult = await fetchTracksPage(
+        currentOffset,
+        TRACKS_PAGE_SIZE,
+        {
+          userId: currentUser.id,
+          serverUrl,
+          signal: loadMoreController.signal,
+          onData: (pageData) => {
+            if (
+              loadMoreController.signal.aborted ||
+              userGenerationRef.current !== currentGeneration
+            )
+              return;
 
-          const incomingItems = pageData?.items || (Array.isArray(pageData) ? pageData : []);
-          if (incomingItems.length === 0) {
-            setHasMoreTracks(false);
-            return;
-          }
+            const incomingItems =
+              pageData?.items || (Array.isArray(pageData) ? pageData : []);
+            if (incomingItems.length === 0) {
+              setHasMoreTracks(false);
+              return;
+            }
 
-          setTracks((prevTracks) => mergeTracks(prevTracks, incomingItems));
-          tracksOffsetRef.current = currentOffset + incomingItems.length;
-          const hasMore = pageData?.hasMore ?? (incomingItems.length === TRACKS_PAGE_SIZE);
-          setHasMoreTracks(hasMore);
+            setTracks((prevTracks) => mergeTracks(prevTracks, incomingItems));
+            tracksOffsetRef.current = currentOffset + incomingItems.length;
+            const hasMore =
+              pageData?.hasMore ?? incomingItems.length === TRACKS_PAGE_SIZE;
+            setHasMoreTracks(hasMore);
+          },
         },
-      });
+      );
 
-      if (userGenerationRef.current === currentGeneration && !loadMoreController.signal.aborted) {
+      if (
+        userGenerationRef.current === currentGeneration &&
+        !loadMoreController.signal.aborted
+      ) {
         const finalData = pageResult?.data;
-        const incomingItems = finalData?.items || (Array.isArray(finalData) ? finalData : []);
-        const hasMore = finalData?.hasMore ?? (incomingItems.length === TRACKS_PAGE_SIZE);
+        const incomingItems =
+          finalData?.items || (Array.isArray(finalData) ? finalData : []);
+        const hasMore =
+          finalData?.hasMore ?? incomingItems.length === TRACKS_PAGE_SIZE;
         setHasMoreTracks(hasMore);
       }
     } catch (err) {
       if (err?.name !== 'AbortError' && !err?.message?.includes('AbortError')) {
-        console.warn('[useTracksPagination] Load more error:', err?.message || err);
+        console.warn(
+          '[useTracksPagination] Load more error:',
+          err?.message || err,
+        );
       }
     } finally {
       if (loadMoreAbortRef.current === loadMoreController) {
@@ -208,20 +278,64 @@ export default function useTracksPagination({
         serverUrl,
         forceRefresh: true,
         signal: controller.signal,
+        onNetworkStart: () => {
+          syncStateManager.startOperation('catalog', {
+            retryFn: () => refreshTracks(),
+          });
+        },
+        onNetworkSuccess: () => {
+          syncStateManager.finishOperation('catalog', { success: true });
+        },
+        onNetworkError: (err) => {
+          if (err?.name === 'AbortError') {
+            syncStateManager.cancelOperation('catalog');
+          } else {
+            syncStateManager.finishOperation('catalog', {
+              success: false,
+              status: err?.status,
+              isServer: err?.status >= 500,
+              isNetwork: isNetworkError(err),
+              message:
+                err?.status >= 500
+                  ? 'Сервер временно недоступен'
+                  : 'Ошибка загрузки каталога',
+            });
+          }
+        },
         onData: (pageData) => {
-          if (controller.signal.aborted || userGenerationRef.current !== currentGeneration) {
+          if (
+            controller.signal.aborted ||
+            userGenerationRef.current !== currentGeneration
+          ) {
             return;
           }
-          const items = pageData?.items || (Array.isArray(pageData) ? pageData : []);
+          const items =
+            pageData?.items || (Array.isArray(pageData) ? pageData : []);
           setTracks(items);
           tracksOffsetRef.current = items.length;
-          const hasMore = pageData?.hasMore ?? (items.length === TRACKS_PAGE_SIZE);
+          const hasMore =
+            pageData?.hasMore ?? items.length === TRACKS_PAGE_SIZE;
           setHasMoreTracks(hasMore);
         },
       });
     } catch (err) {
-      if (err?.name !== 'AbortError' && !err?.message?.includes('AbortError')) {
-        console.warn('[useTracksPagination] Refresh tracks error:', err?.message || err);
+      if (err?.name === 'AbortError' || err?.message?.includes('AbortError')) {
+        syncStateManager.cancelOperation('catalog');
+      } else {
+        syncStateManager.finishOperation('catalog', {
+          success: false,
+          status: err?.status,
+          isServer: err?.status >= 500,
+          isNetwork: isNetworkError(err),
+          message:
+            err?.status >= 500
+              ? 'Сервер временно недоступен'
+              : 'Ошибка загрузки каталога',
+        });
+        console.warn(
+          '[useTracksPagination] Refresh tracks error:',
+          err?.message || err,
+        );
       }
     }
   }, [currentUser, serverUrl]);

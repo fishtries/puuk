@@ -48,6 +48,8 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   hasMoreTracks,
   isLoadingMoreTracks,
   onRefreshTracks,
+  syncStatus,
+  onRetry,
 }) {
   const [activeTab, setActiveTab] = useState('Home');
   const [accentColor, setAccentColor] = useState(
@@ -254,6 +256,8 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
           currentUser={currentUser}
           onOpenAuthModal={onOpenAuthModal}
           onAddPlaylist={() => DeviceEventEmitter.emit('PUUK_CREATE_PLAYLIST')}
+          syncStatus={syncStatus}
+          onRetry={onRetry}
         />
       </SafeAreaView>
       <Tab.Navigator

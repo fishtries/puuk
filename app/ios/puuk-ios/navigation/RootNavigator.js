@@ -32,6 +32,8 @@ const RootNavigator = React.memo(function RootNavigator({
   hasMoreTracks,
   isLoadingMoreTracks,
   onRefreshTracks,
+  syncStatus,
+  onRetry,
 }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -58,6 +60,8 @@ const RootNavigator = React.memo(function RootNavigator({
             hasMoreTracks={hasMoreTracks}
             isLoadingMoreTracks={isLoadingMoreTracks}
             onRefreshTracks={onRefreshTracks}
+            syncStatus={syncStatus}
+            onRetry={onRetry}
           />
         )}
       </Stack.Screen>
@@ -81,19 +85,20 @@ const RootNavigator = React.memo(function RootNavigator({
         )}
       </Stack.Screen>
       <Stack.Screen name="ArtistCreditBulk">
-        {(props) => <ArtistCreditBulkScreen {...props} currentUser={currentUser} />}
+        {(props) => (
+          <ArtistCreditBulkScreen {...props} currentUser={currentUser} />
+        )}
       </Stack.Screen>
       <Stack.Screen name="ArtistEdit">
         {(props) => (
-          <ArtistArtworkEditScreen
-            {...props}
-            currentUser={currentUser}
-          />
+          <ArtistArtworkEditScreen {...props} currentUser={currentUser} />
         )}
       </Stack.Screen>
       <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
-        {(props) => <PlaylistScreen {...props} onPlayTrackList={playTrackList} />}
+        {(props) => (
+          <PlaylistScreen {...props} onPlayTrackList={playTrackList} />
+        )}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>

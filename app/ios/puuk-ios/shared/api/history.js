@@ -50,6 +50,9 @@ export async function fetchRecentlyListened(options = {}) {
     signal: options.signal,
     forceRefresh: Boolean(options.forceRefresh),
     validate: (data) => Array.isArray(data),
+    onNetworkStart: options.onNetworkStart,
+    onNetworkSuccess: options.onNetworkSuccess,
+    onNetworkError: options.onNetworkError,
     onData: (data, meta) => {
       if (typeof options.onData === 'function') {
         options.onData(mapNormalized(data), meta);

@@ -19,6 +19,7 @@
 | Загрузка обложки | `components/CoverImage.js` |
 | Карточка «your mix» на главном экране (объёмные лучи света god rays, солнце сверху, плавающие частицы/искры, анимация) | `features/catalog/YourMixCard.js` |
 | Управление аудио | `hooks/usePlayerController.js` |
+| Фоновая синхронизация и индикатор в шапке | `shared/sync/syncState.js`, `shared/components/SyncHeaderIndicator.js`, `shared/components/SyncStatusModal.js`, `shared/components/AppHeader.js` |
 
 ## Компоненты и стили
 
