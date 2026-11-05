@@ -90,7 +90,7 @@ describe('TrackLoadingBadge', () => {
     expect(texts[0].props.children).toBe('kinda slow');
   });
 
-  it('renders "kinda slow" text when networkStatus is slow even if isLoading is false', async () => {
+  it('does not show a loading spinner for network quality alone', async () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
@@ -101,13 +101,10 @@ describe('TrackLoadingBadge', () => {
         />
       );
     });
-    const root = renderer.root;
-    const texts = root.findAllByType('Text');
-    expect(texts.length).toBe(1);
-    expect(texts[0].props.children).toBe('kinda slow');
+    expect(renderer.toJSON()).toBeNull();
   });
 
-  it('renders spinner without text when nextTrackStatus is downloading', async () => {
+  it('does not show a loading spinner for background preloading', async () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
@@ -119,11 +116,40 @@ describe('TrackLoadingBadge', () => {
         />
       );
     });
-    const root = renderer.root;
-    const spinner = root.findByType(ActivityIndicator);
-    expect(spinner).toBeTruthy();
-    const texts = root.findAllByType('Text');
-    expect(texts.length).toBe(0);
+    expect(renderer.toJSON()).toBeNull();
+  });
+
+  it('hides when current loading finishes even while the next track downloads', async () => {
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <TrackLoadingBadge isLoading={true} nextTrackStatus="downloading" />,
+      );
+    });
+    expect(renderer.root.findByType(ActivityIndicator)).toBeTruthy();
+
+    await act(async () => {
+      renderer.update(
+        <TrackLoadingBadge isLoading={false} nextTrackStatus="downloading" />,
+      );
+    });
+    expect(renderer.toJSON()).toBeNull();
+  });
+
+  it('shows ongoing slow buffering after initial loading finishes', async () => {
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <TrackLoadingBadge isLoading={false} isBufferingSlow={true} />,
+      );
+    });
+    expect(renderer.root.findByType(ActivityIndicator)).toBeTruthy();
+    expect(renderer.root.findByType('Text').props.children).toBe('kinda slow');
+
+    await act(async () => {
+      renderer.update(<TrackLoadingBadge isBufferingSlow={false} />);
+    });
+    expect(renderer.toJSON()).toBeNull();
   });
 
   it('uses entering and exiting fade animations for appearance in place', async () => {

@@ -1,7 +1,24 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { Modal } from 'react-native';
+import Constants from 'expo-constants';
+import { MenuView } from '@react-native-menu/menu';
 import ArtistSelector from '../ArtistSelector';
+
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { appOwnership: 'expo' },
+}));
+jest.mock('@react-native-menu/menu', () => ({
+  MenuView: (props) => {
+    const { View } = require('react-native');
+    return <View {...props} />;
+  },
+}));
+
+beforeEach(() => {
+  Constants.appOwnership = 'expo';
+});
 
 const credits = [
   { id: 'a', name: 'Artist A' },
@@ -88,3 +105,69 @@ test.each(['identity', 'revision'])(
     expect(select).not.toHaveBeenCalled();
   },
 );
+
+test('native long press offers album and artist with subtitles; tap opens the artist', () => {
+  Constants.appOwnership = 'standalone';
+  const select = jest.fn();
+  const selectAlbum = jest.fn();
+  let tree;
+  act(() => {
+    tree = TestRenderer.create(
+      <ArtistSelector
+        entity={{
+          artists: [credits[0]],
+          album_id: 'album-1',
+          album: 'Album A',
+        }}
+        display="Artist A"
+        onSelect={select}
+        onAlbumSelect={selectAlbum}
+        triggerTestID="artist-button"
+      />,
+    );
+  });
+  const menu = tree.root.findByType(MenuView);
+  expect(menu.props.shouldOpenOnLongPress).toBe(true);
+  expect(menu.props.actions).toEqual([
+    expect.objectContaining({
+      id: 'album',
+      subtitle: 'Album A',
+      image: 'square.stack',
+    }),
+    expect.objectContaining({
+      id: 'artist:a',
+      subtitle: 'Artist A',
+      image: 'mic',
+    }),
+  ]);
+  act(() => tree.root.findByProps({ testID: 'artist-button' }).props.onPress());
+  expect(select).toHaveBeenCalledWith('a');
+  act(() => menu.props.onPressAction({ nativeEvent: { event: 'album' } }));
+  expect(selectAlbum).toHaveBeenCalledWith('album-1');
+});
+
+test('native artist folder selects participants and rejects selections from a previous track', () => {
+  Constants.appOwnership = 'standalone';
+  const select = jest.fn();
+  let tree;
+  act(() => {
+    tree = TestRenderer.create(render({ artists: credits }, select));
+  });
+  const menu = tree.root.findByType(MenuView);
+  expect(menu.props.shouldOpenOnLongPress).toBe(false);
+  expect(menu.props.actions[0].subactions).toEqual(
+    credits.map((artist) => ({
+      id: `artist:${artist.id}`,
+      title: artist.name,
+      image: 'mic',
+    })),
+  );
+  expect(tree.root.findAllByType(Modal)).toHaveLength(0);
+  act(() => menu.props.onPressAction({ nativeEvent: { event: 'artist:b' } }));
+  expect(select).toHaveBeenCalledWith('b');
+  const stale = menu.props.onPressAction;
+  select.mockClear();
+  act(() => tree.update(render({ artists: credits }, select, 'track-2')));
+  act(() => stale({ nativeEvent: { event: 'artist:a' } }));
+  expect(select).not.toHaveBeenCalled();
+});

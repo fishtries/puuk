@@ -42,7 +42,6 @@ export default function PlayerHeader({
   isLoading,
   isBufferingSlow,
   networkStatus,
-  nextTrackStatus,
   displayTitle,
   handleMenuAction,
   menuActions,
@@ -108,7 +107,6 @@ export default function PlayerHeader({
             isLoading={isLoading}
             isBufferingSlow={isBufferingSlow}
             networkStatus={networkStatus}
-            nextTrackStatus={nextTrackStatus}
           />
 
           {hasNativeMenu ? (

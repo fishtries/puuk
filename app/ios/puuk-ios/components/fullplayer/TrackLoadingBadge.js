@@ -6,17 +6,15 @@ import Animated, {
   FadeOut,
   Easing,
 } from 'react-native-reanimated';
-import { TRACK_STATUS } from '../../utils/preloadScheduler';
 
 export default function TrackLoadingBadge({
   isLoading = false,
   isBufferingSlow = false,
   networkStatus = 'good',
-  nextTrackStatus = TRACK_STATUS.IDLE,
 }) {
   const isSlow = Boolean(isBufferingSlow || networkStatus === 'slow');
-  const isDownloading = nextTrackStatus === TRACK_STATUS.DOWNLOADING || nextTrackStatus === 'downloading';
-  const isVisible = Boolean(isLoading || isSlow || isDownloading);
+  // Background preloading and network quality do not mean the current track is loading.
+  const isVisible = Boolean(isLoading || isBufferingSlow);
 
   if (!isVisible) {
     return null;

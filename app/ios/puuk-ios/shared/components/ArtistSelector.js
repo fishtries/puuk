@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,6 +9,8 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import Constants from 'expo-constants';
+import { MenuView } from '@react-native-menu/menu';
 import {
   getSelectableArtists,
   normalizeCredits,
@@ -23,6 +26,7 @@ export default function ArtistSelector({
   triggerTestID,
   numberOfLines,
   disabled,
+  onAlbumSelect,
 }) {
   const artists = getSelectableArtists({
     artists: normalizeCredits(
@@ -31,7 +35,13 @@ export default function ArtistSelector({
       entity?.album_artist || entity?.artist,
     ),
   });
-  const target = JSON.stringify([identity, entity?.artists_revision, artists]);
+  const target = JSON.stringify([
+    identity,
+    entity?.artists_revision,
+    artists,
+    entity?.album_id,
+    entity?.album,
+  ]);
   const currentTarget = useRef(target);
   currentTarget.current = target;
   const [openedTarget, setOpenedTarget] = useState(null);
@@ -53,6 +63,95 @@ export default function ArtistSelector({
         {display}
       </Text>
     );
+  const hasNativeMenu =
+    Platform.OS === 'ios' &&
+    Constants.appOwnership !== 'expo' &&
+    Constants.executionEnvironment !== 'storeClient';
+  if (hasNativeMenu) {
+    const artistActions = artists.map((artist) => ({
+      id: `artist:${artist.id}`,
+      title: artist.name,
+      image: 'mic',
+    }));
+    const actions = [
+      ...(entity?.album_id && onAlbumSelect
+        ? [
+            {
+              id: 'album',
+              title: 'Перейти к альбому',
+              subtitle: entity.album || undefined,
+              image: 'square.stack',
+            },
+          ]
+        : []),
+      artists.length === 1
+        ? {
+            ...artistActions[0],
+            title: 'Перейти к исполнителю',
+            subtitle: artists[0].name,
+          }
+        : {
+            id: 'artists',
+            title: 'Перейти к исполнителю',
+            subtitle: display,
+            image: 'mic',
+            subactions: artistActions,
+          },
+    ];
+    const content = (
+      <Text
+        style={textStyle}
+        numberOfLines={numberOfLines}
+        ellipsizeMode="tail"
+      >
+        {display}
+      </Text>
+    );
+    return (
+      <MenuView
+        key={target}
+        actions={actions}
+        themeVariant="dark"
+        shouldOpenOnLongPress={artists.length === 1}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        onPressAction={({ nativeEvent }) => {
+          if (currentTarget.current !== target) return;
+          if (nativeEvent.event === 'album') {
+            onAlbumSelect?.(entity.album_id);
+            return;
+          }
+          const selected = artists.find(
+            (artist) => `artist:${artist.id}` === nativeEvent.event,
+          );
+          if (selected) onSelect(selected.id);
+        }}
+      >
+        {artists.length === 1 ? (
+          <TouchableOpacity
+            testID={triggerTestID}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityHint="Удерживайте, чтобы открыть меню"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={controlStyle}
+            onLongPress={() => {}}
+            onPress={() => onSelect(artists[0].id)}
+          >
+            {content}
+          </TouchableOpacity>
+        ) : (
+          <View
+            testID={triggerTestID}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            style={controlStyle}
+          >
+            {content}
+          </View>
+        )}
+      </MenuView>
+    );
+  }
   return (
     <>
       <TouchableOpacity

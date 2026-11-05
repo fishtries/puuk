@@ -108,6 +108,7 @@ function AppContent() {
     setCurrentTrack,
     isPlaying,
     isLoading,
+    isStartingPlayback,
     isPlayerVisible,
     setIsPlayerVisible,
     playerExpandToken,
@@ -589,6 +590,15 @@ function AppContent() {
     handleToggleLike(activeTrack);
   }, [handleToggleLike, activeTrack]);
 
+  const handleAlbumPress = useCallback(
+    (albumId) => {
+      if (!albumId) return;
+      setIsPlayerVisible(false);
+      navigationRef.navigate('Album', { albumId });
+    },
+    [setIsPlayerVisible, navigationRef],
+  );
+
   const runBackgroundSessionCheck = useCallback(async () => {
     syncStateManager.startOperation('auth', {
       retryFn: () => runBackgroundSessionCheck(),
@@ -786,7 +796,7 @@ function AppContent() {
         togglePlayPause={togglePlayPause}
         fetchNextTrack={fetchNextTrack}
         playPreviousTrack={playPreviousTrack}
-        isLoading={isLoading}
+        isLoading={isLoading || isStartingPlayback}
         seekTo={handleSeekTo}
         upNextQueue={upNextQueue}
         history={history}
@@ -812,6 +822,7 @@ function AppContent() {
         onRetryCurrent={retryCurrent}
         accentColor={accentColor}
         onArtistPress={handleArtistPress}
+        onAlbumPress={handleAlbumPress}
       />
 
       {/* СЛОЙ 1 (ПЕРЕДНИЙ ПЛАН): Карточка приложения, поднимающаяся вверх при открытии плеера */}

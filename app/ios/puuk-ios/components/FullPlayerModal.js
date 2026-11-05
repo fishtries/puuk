@@ -91,6 +91,7 @@ const FullPlayerModal = ({
   onRetry,
   accentColor: propAccentColor,
   onArtistPress,
+  onAlbumPress,
 }) => {
   const [coverAccentColor, setCoverAccentColor] = useState(
     () => currentTrack?.cover_color || null,
@@ -1302,10 +1303,9 @@ const FullPlayerModal = ({
                       <PlayerHeader
                         styles={styles}
                         handleClose={handleClose}
-                        isLoading={isLoading || currentPlayback?.status === 'starting'}
+                        isLoading={isLoading}
                         isBufferingSlow={isBufferingSlow}
                         networkStatus={networkStatus}
-                        nextTrackStatus={nextTrackStatus}
                         displayTitle={displayTitle}
                         handleMenuAction={handleMenuAction}
                         menuActions={menuActions}
@@ -1365,7 +1365,7 @@ const FullPlayerModal = ({
                           <Text style={styles.titleText} numberOfLines={1}>
                             {displayTitle}
                           </Text>
-                          <ArtistSelector entity={activeTrack} identity={getTrackId(currentTrack)} display={displayArtist} onSelect={onArtistPress} disabled={isEffectivelyCompact} triggerTestID="player-artist-button" controlStyle={styles.artistButton} textStyle={styles.artistText} numberOfLines={1} />
+                          <ArtistSelector entity={activeTrack} identity={getTrackId(currentTrack)} display={displayArtist} onSelect={onArtistPress} onAlbumSelect={onAlbumPress} disabled={isEffectivelyCompact} triggerTestID="player-artist-button" controlStyle={styles.artistButton} textStyle={styles.artistText} numberOfLines={1} />
                         </Animated.View>
                         <Animated.View style={trackInfoHeartAnimatedStyle}>
                           <TouchableOpacity

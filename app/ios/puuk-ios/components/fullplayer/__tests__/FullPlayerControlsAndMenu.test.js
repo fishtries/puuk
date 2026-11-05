@@ -5,7 +5,7 @@ import TrackLoadingBadge from '../TrackLoadingBadge';
 import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
 import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
-import { ActionSheetIOS, TouchableOpacity, Text } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
 import Constants from 'expo-constants';
 
 jest.mock('@expo/vector-icons', () => ({
@@ -149,6 +149,32 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     expect(children[0].type).toBe(TrackLoadingBadge);
     // Child 1: MenuView (нативный компонент поп ап кнопки справа)
     expect(children[1].type).toBe(MenuView);
+  });
+
+  it('hides the header spinner after startup while playback and background downloading continue', async () => {
+    const props = {
+      isPlayerVisible: true,
+      currentTrack: mockTrack,
+      isPlaying: true,
+      isLoading: false,
+      nextTrackStatus: 'downloading',
+      networkStatus: 'good',
+    };
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <FullPlayerModal {...props} isLoading={true} currentPlayback={{ status: 'starting' }} />,
+      );
+    });
+    expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(1);
+
+    await act(async () => {
+      renderer.update(
+        <FullPlayerModal {...props} currentPlayback={{ status: 'starting' }} />,
+      );
+    });
+    expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+    await act(async () => renderer.unmount());
   });
 
   it('configures native MenuView as a pop-up button and handles action callbacks', async () => {
