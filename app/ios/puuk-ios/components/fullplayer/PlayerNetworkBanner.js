@@ -12,7 +12,6 @@ export default function PlayerNetworkBanner({
   next,
   networkStatus = 'good',
   nextTrackStatus = TRACK_STATUS.IDLE,
-  isBufferingSlow = false,
   onRetry,
   onRetryCurrent,
   onRetryNext,
@@ -208,30 +207,6 @@ export default function PlayerNetworkBanner({
               </Text>
             </TouchableOpacity>
           )}
-        </View>
-      </View>
-    );
-  }
-
-  // 5. Медленное сетевое соединение / буферизация
-  if (isBufferingSlow) {
-    return (
-      <View
-        style={[styles.bannerContainer, styles.warningBanner]}
-        accessible={true}
-        accessibilityRole="alert"
-        accessibilityLabel="Медленное соединение"
-      >
-        <View style={styles.contentRow}>
-          <Ionicons
-            name="cellular-outline"
-            size={16}
-            color="#ffd60a"
-            style={styles.icon}
-          />
-          <Text style={styles.warningText} numberOfLines={1}>
-            Медленное соединение...
-          </Text>
         </View>
       </View>
     );

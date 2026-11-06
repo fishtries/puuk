@@ -1423,7 +1423,6 @@ const FullPlayerModal = ({
                 networkStatus={networkStatus}
                 nextTrackStatus={nextTrackStatus}
                 networkError={networkError}
-                isBufferingSlow={isBufferingSlow}
                 onRetry={onRetry || onRetryPreload}
                 onRetryCurrent={onRetryCurrent}
                 onRetryNext={onRetryPreload}
