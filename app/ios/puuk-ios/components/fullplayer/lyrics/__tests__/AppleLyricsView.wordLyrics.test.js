@@ -208,7 +208,8 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     // Line 0 words: word 0 ("Hello,") is active at 1200ms
     const activeLine = lines[0];
-    expect(activeLine.props.currentMs).toBe(1200);
+    expect(activeLine.props.currentMs).toBe(1000);
+    expect(activeLine.props.playbackMs.value).toBe(1200);
   });
 
   it('identifies word states inside active line: active, gap, and next word', async () => {
@@ -232,7 +233,19 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     let lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[0].props.isActive).toBe(true);
-    expect(lines[0].props.currentMs).toBe(1200);
+    expect(lines[0].props.currentMs).toBe(1000);
+    const firstWordProps = lines[0].props;
+    await act(async () => {
+      jest.advanceTimersByTime(300);
+      renderer.update(<AppleLyricsView {...defaultProps} currentTime={1.4} />);
+    });
+    const stableProps = renderer.root.findAllByType(AnimatedLyricLine)[0].props;
+    await act(async () => {
+      renderer.update(<AppleLyricsView {...defaultProps} currentTime={1.5} />);
+    });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props).toBe(stableProps);
+    expect(stableProps.playbackMs).toBe(firstWordProps.playbackMs);
+    expect(stableProps.playbackMs.value).toBe(1500);
 
     // 2. In gap between words (1.85s -> 1850ms, gap between 1800ms and 1900ms)
     await act(async () => {
@@ -240,14 +253,20 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     });
     lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[0].props.isActive).toBe(true);
-    expect(lines[0].props.currentMs).toBe(1850);
+    expect(lines[0].props.currentMs).toBe(1000);
+    expect(lines[0].props.playbackMs.value).toBe(1850);
 
     // 3. Inside second word (2.0s -> 2000ms, word-0002: 1900..2500ms)
     await act(async () => {
       renderer.update(<AppleLyricsView {...defaultProps} currentTime={2.0} />);
     });
     lines = renderer.root.findAllByType(AnimatedLyricLine);
-    expect(lines[0].props.currentMs).toBe(2000);
+    expect(lines[0].props.currentMs).toBe(1900);
+    expect(lines[0].props.playbackMs.value).toBe(2000);
+    await act(async () => {
+      renderer.update(<AppleLyricsView {...defaultProps} currentTime={1.4} />);
+    });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props.currentMs).toBe(1000);
   });
 
   it('renders line with repeating words and preserves distinct word occurrences', async () => {
@@ -298,7 +317,8 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     const lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[2].props.isActive).toBe(true);
-    expect(lines[2].props.currentMs).toBe(5900);
+    expect(lines[2].props.currentMs).toBe(5800);
+    expect(lines[2].props.playbackMs.value).toBe(5900);
   });
 
   it('renders fallback line with words: [] without crashing', async () => {

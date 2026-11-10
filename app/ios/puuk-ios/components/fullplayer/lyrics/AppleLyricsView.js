@@ -180,6 +180,7 @@ const AppleLyricsView = ({
   onExitCompactMode,
   onLyricsCompactChange,
   onRegisterResetTimer,
+  isControlsInteractionActive = false,
 }) => {
   const [lyrics, setLyrics] = useState([]);
   const [plainLyricsText, setPlainLyricsText] = useState('');
@@ -218,6 +219,8 @@ const AppleLyricsView = ({
   isLyricsCompactRef.current = isLyricsCompact;
   const isEffectivelyCompact = isLyricsView && isLyricsCompact;
   const inactivityTimerRef = useRef(null);
+  const controlsInteractionRef = useRef(isControlsInteractionActive);
+  controlsInteractionRef.current = isControlsInteractionActive;
 
   useEffect(() => {
     if (onLyricsCompactChange) {
@@ -283,13 +286,17 @@ const AppleLyricsView = ({
 
   const resetInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-    if (isLyricsView && !isLyricsCompactRef.current) {
+    if (isLyricsView && !isLyricsCompactRef.current && !controlsInteractionRef.current) {
       inactivityTimerRef.current = setTimeout(() => {
         isLyricsCompactRef.current = true;
         setIsLyricsCompact(true);
       }, 3000);
     }
   }, [isLyricsView]);
+
+  useEffect(() => {
+    resetInactivityTimer();
+  }, [isControlsInteractionActive, resetInactivityTimer]);
 
   useEffect(() => {
     if (isLyricsView) {
@@ -686,6 +693,19 @@ const AppleLyricsView = ({
   );
 
   const currentMs = Math.round((currentTime || 0) * 1000);
+  // React only needs word phase transitions. The shared audio clock below
+  // supplies intermediate sweep positions without rebuilding every lyric row.
+  const wordBoundaries = useMemo(() => [...new Set(lyrics.flatMap(line =>
+    (line.words || []).flatMap(word => [word.startMs, word.endMs + 60])
+  ))].sort((a, b) => a - b), [lyrics]);
+  let boundaryLow = 0;
+  let boundaryHigh = wordBoundaries.length;
+  while (boundaryLow < boundaryHigh) {
+    const middle = (boundaryLow + boundaryHigh) >>> 1;
+    if (wordBoundaries[middle] <= currentMs) boundaryLow = middle + 1;
+    else boundaryHigh = middle;
+  }
+  const wordRenderMs = boundaryLow > 0 ? wordBoundaries[boundaryLow - 1] : -1;
   const playbackMs = useSharedValue(currentMs);
   const lastPlaybackMs = useRef(currentMs);
   const reducedMotion = useReducedMotion();
@@ -725,8 +745,8 @@ const AppleLyricsView = ({
           segments={line.segments}
           hasWordTimings={Boolean(line.hasWordTimings)}
           currentMs={line.hasWordTimings
-            ? currentMs < line.startMs ? -1 : Math.min(currentMs, line.endMs + 60)
-            : currentMs}
+            ? wordRenderMs < line.startMs ? -1 : Math.min(wordRenderMs, line.endMs + 60)
+            : 0}
           playbackMs={playbackMs}
         />
       );
@@ -743,7 +763,7 @@ const AppleLyricsView = ({
     styles.lyricLine,
     handleLineLayout,
     linePressHandlers,
-    currentMs,
+    wordRenderMs,
     playbackMs,
   ]);
 

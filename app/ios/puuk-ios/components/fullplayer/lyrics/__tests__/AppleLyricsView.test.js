@@ -408,6 +408,26 @@ describe('AppleLyricsView', () => {
     expect(mockOnClose).not.toHaveBeenCalled();
   });
 
+  it('keeps controls expanded during speed adjustment and resumes the timer after closing', async () => {
+    const onLyricsCompactChange = jest.fn();
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: '[00:01.00]First', isSynced: true }),
+    });
+    const props = { ...defaultProps, onLyricsCompactChange };
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<AppleLyricsView {...props} />); });
+    act(() => { jest.advanceTimersByTime(2000); });
+    act(() => { renderer.update(<AppleLyricsView {...props} isControlsInteractionActive />); });
+    act(() => { jest.advanceTimersByTime(10000); });
+    expect(onLyricsCompactChange).not.toHaveBeenCalledWith(true);
+    act(() => { renderer.update(<AppleLyricsView {...props} />); });
+    act(() => { jest.advanceTimersByTime(2999); });
+    expect(onLyricsCompactChange).not.toHaveBeenCalledWith(true);
+    act(() => { jest.advanceTimersByTime(1); });
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
+    act(() => { renderer.unmount(); });
+  });
+
   it('automatically collapses controls after 3000ms inactivity', async () => {
     const onLyricsCompactChange = jest.fn();
     const lrcContent = '[00:05.00]Line 1\n[00:10.00]Line 2';
