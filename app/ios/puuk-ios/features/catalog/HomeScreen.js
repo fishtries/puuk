@@ -83,6 +83,7 @@ export default function HomeScreen({
   navigation,
   accentColor,
   genreMixes,
+  isVisible = true,
 }) {
   const flatListRef = useRef(null);
   const insets = React.useContext(SafeAreaInsetsContext);
@@ -140,7 +141,7 @@ export default function HomeScreen({
   const ListHeader = useMemo(
     () => (
       <>
-        <YourMixCard onPress={handleStartWave} />
+        <YourMixCard onPress={handleStartWave} isVisible={isVisible} />
         <GenreMixesSection
           currentUser={currentUser}
           navigation={navigation}
@@ -161,6 +162,7 @@ export default function HomeScreen({
     ),
     [
       handleStartWave,
+      isVisible,
       currentUser,
       navigation,
       onPlayTrackList,

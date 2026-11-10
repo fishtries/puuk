@@ -2,6 +2,7 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text } from 'react-native';
 import YourMixCard from '../YourMixCard';
+import { cancelAnimation, withRepeat } from 'react-native-reanimated';
 
 jest.mock('react-native-reanimated', () => {
   const { View, Text } = require('react-native');
@@ -12,12 +13,13 @@ jest.mock('react-native-reanimated', () => {
       View,
       Text,
     },
-    useSharedValue: (init) => ({ value: init }),
+    useSharedValue: (init) => require('react').useRef({ value: init }).current,
     useAnimatedStyle: (fn) => fn(),
     withSpring: (to) => to,
     withTiming: (to) => to,
     withSequence: (...args) => args[0],
-    withRepeat: (anim) => anim,
+    withRepeat: jest.fn((anim) => anim),
+    cancelAnimation: jest.fn(),
     Easing: {
       inOut: () => () => {},
       sin: () => {},
@@ -62,6 +64,20 @@ jest.mock('expo-linear-gradient', () => {
 describe('YourMixCard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  test('runs animation loops only while visible and cancels them on hide and unmount', () => {
+    let renderer;
+    act(() => { renderer = TestRenderer.create(<YourMixCard isVisible={false} />); });
+    expect(withRepeat).not.toHaveBeenCalled();
+    act(() => { renderer.update(<YourMixCard isVisible />); });
+    expect(withRepeat).toHaveBeenCalledTimes(11);
+    act(() => { renderer.update(<YourMixCard isVisible={false} />); });
+    expect(cancelAnimation).toHaveBeenCalledTimes(11);
+    act(() => { renderer.update(<YourMixCard isVisible />); });
+    expect(withRepeat).toHaveBeenCalledTimes(22);
+    act(() => { renderer.unmount(); });
+    expect(cancelAnimation).toHaveBeenCalledTimes(22);
   });
 
   test('renders "your mix" title text matching web design and sketch', () => {

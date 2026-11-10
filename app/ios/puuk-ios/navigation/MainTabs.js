@@ -85,6 +85,7 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
     (tabProps) => (
       <HomeScreen
         {...tabProps}
+        isVisible={!isPlayerVisible && activeTab === 'Home'}
         tracks={tracks}
         isPlaying={isPlaying}
         currentTrack={currentTrack}
@@ -102,6 +103,8 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
       />
     ),
     [
+      isPlayerVisible,
+      activeTab,
       tracks,
       isPlaying,
       currentTrack,

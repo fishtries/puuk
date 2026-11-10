@@ -33,7 +33,7 @@ const ACCENT_COLORS = [
   { id: 'blue', hex: '#007AFF', name: 'Blue' },
 ];
 
-export default function LoginModal({ visible, onClose, currentUser, onLoginSuccess, mandatory = false }) {
+export default React.memo(function LoginModal({ visible, onClose, currentUser, onLoginSuccess, mandatory = false }) {
   const insets = useSafeAreaInsets();
   const [settings, setSettings] = useState(getSettings());
   const [showLoginForm, setShowLoginForm] = useState(false);
@@ -464,4 +464,4 @@ export default function LoginModal({ visible, onClose, currentUser, onLoginSucce
           </View>
     </Modal>
   );
-}
+});

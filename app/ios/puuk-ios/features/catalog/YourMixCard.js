@@ -27,6 +27,7 @@ import Animated, {
   withSequence,
   withTiming,
   withSpring,
+  cancelAnimation,
   Easing,
   FadeInDown,
 } from 'react-native-reanimated';
@@ -269,7 +270,7 @@ const PARTICLES = [
   },
 ];
 
-export default function YourMixCard({ onPress }) {
+export default function YourMixCard({ onPress, isVisible = true }) {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const W = windowWidth || 390;
@@ -296,6 +297,7 @@ export default function YourMixCard({ onPress }) {
   const pulseAnim3 = useSharedValue(0);
 
   useEffect(() => {
+    if (!isVisible) return;
     flowProgress.value = withRepeat(
       withSequence(
         withTiming(1, { duration: 6000, easing: Easing.inOut(Easing.sin) }),
@@ -391,7 +393,15 @@ export default function YourMixCard({ onPress }) {
       -1,
       true,
     );
+    return () => {
+      for (const value of [flowProgress, rayPulse, floatAnim1, swayAnim1,
+        pulseAnim1, floatAnim2, swayAnim2, pulseAnim2, floatAnim3,
+        swayAnim3, pulseAnim3]) {
+        cancelAnimation(value);
+      }
+    };
   }, [
+    isVisible,
     flowProgress,
     rayPulse,
     floatAnim1,
