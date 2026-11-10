@@ -30,7 +30,7 @@ jest.mock('../QueuePanel', () => 'QueuePanel');
 jest.mock('../PlayerControls', () => 'PlayerControls');
 jest.mock('../PlayerNetworkBanner', () => 'PlayerNetworkBanner');
 jest.mock('../ChasingArrowsIcon', () => 'ChasingArrowsIcon');
-jest.mock('../ProgressBar', () => 'ProgressBar');
+jest.mock('../ProgressBar', () => ({ __esModule: true, default: 'ProgressBar', PlaybackProgressClock: 'PlaybackProgressClock' }));
 jest.mock('../TrackLoadingBadge', () => 'TrackLoadingBadge');
 jest.mock('../AmbientBackground', () => 'AmbientBackground');
 

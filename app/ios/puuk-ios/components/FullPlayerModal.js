@@ -42,6 +42,7 @@ import {
 } from 'react-native-gesture-handler';
 
 import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
+import { PlaybackProgressClock } from './fullplayer/ProgressBar';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
 import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
@@ -52,6 +53,7 @@ import styles, { QUEUE_COVER_SIZE, PLAYER_HEADER_CONTENT_GAP } from './fullplaye
 const { width, height } = Dimensions.get('window');
 
 const FullPlayerModal = ({
+  player,
   playbackRate = 1,
   onPlaybackRateChange,
   isPlayerVisible,
@@ -292,16 +294,6 @@ const FullPlayerModal = ({
       lyricsRotation.value = 0;
     }
   }, [playerExpandToken, externalExpandProgress]);
-
-  // Синхронизация полосы прогресса с аудио (только когда плеер раскрыт и пользователь не тянет ползунок)
-  useEffect(() => {
-    if (isPlayerVisible && !isSlidingShared.value && duration > 0) {
-      slideProgressShared.value = withTiming(
-        Math.max(0, Math.min(1, currentTime / duration)),
-        { duration: 250, easing: Easing.linear },
-      );
-    }
-  }, [currentTime, duration, isPlayerVisible]);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1231,6 +1223,9 @@ const FullPlayerModal = ({
         pointerEvents="box-none"
       >
         <View style={styles.container} pointerEvents="auto">
+          <PlaybackProgressClock player={player} currentTime={currentTime}
+            duration={duration} isPlayerVisible={isPlayerVisible}
+            isSlidingShared={isSlidingShared} slideProgressShared={slideProgressShared} />
           <AmbientBackground
             currentTrack={activeTrack}
             isPlaying={isPlaying}
@@ -1239,6 +1234,7 @@ const FullPlayerModal = ({
           />
 
           <AppleLyricsView
+            player={player}
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
             currentTrack={activeTrack}

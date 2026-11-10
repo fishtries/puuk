@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
+import { usePlaybackPosition } from '../../hooks/playbackStatus';
 import Svg, {
   Path,
   Rect,
@@ -22,12 +23,17 @@ import {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
-  currentTime = 0,
-  duration = 0,
+  player,
+  isVisible = true,
+  currentTime: fallbackTime = 0,
+  duration: fallbackDuration = 0,
   isPlaying: _isPlaying = false,
   accentColor = '#FFDAB9',
   width = SCREEN_WIDTH,
 }) {
+  const position = usePlaybackPosition(player, isVisible);
+  const currentTime = player ? position.currentTime : fallbackTime;
+  const duration = player ? position.duration : fallbackDuration;
   // Прогресс границы трека (0..1)
   const displayProgress = useMemo(() => {
     if (!duration || duration <= 0) return 0;

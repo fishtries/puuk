@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   useAudioPlayer,
-  useAudioPlayerStatus,
   setAudioModeAsync,
 } from 'expo-audio';
+import { usePlaybackState, getPlaybackSnapshot } from './playbackStatus';
 import {
   authFetch,
   SERVER_URL,
@@ -402,12 +402,11 @@ export default function usePlayerController({ setTracks }) {
   const recordTrackHistoryRef = useRef(null);
 
   const player = useAudioPlayer(null, {
-    // Position events rerender the app. Lyrics and progress interpolate on the
-    // UI thread, so 10 observations/s are enough without 20 full React commits/s.
+    // Exact positions are observed locally by lyrics/progress, not by App.
     updateInterval: 100,
     keepAudioSessionActive: true,
   });
-  const status = useAudioPlayerStatus(player);
+  const status = usePlaybackState(player);
   const [playbackRate, setPlaybackRate] = useState(1);
 
   // Native currentRate survives pause/resume and source replacement.
@@ -484,6 +483,11 @@ export default function usePlayerController({ setTracks }) {
 
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
+  const readCurrentTime = useCallback(() =>
+    defaultPlaybackCoordinator.getState().identityAvailable === true
+      ? currentTimeRef.current
+      : getPlaybackSnapshot(player).currentTime ?? currentTimeRef.current,
+  [player]);
 
   useEffect(() => {
     currentTimeRef.current = currentTime;
@@ -1218,7 +1222,7 @@ export default function usePlayerController({ setTracks }) {
       const history = historyRef.current;
       const upNextQueue = queueRef.current;
       const force = typeof options === 'boolean' ? options : !!options?.force;
-      if (!force && (currentTimeRef.current || 0) > 3) {
+      if (!force && (readCurrentTime() || 0) > 3) {
         seekTo(0);
         return;
       }
@@ -1251,6 +1255,7 @@ export default function usePlayerController({ setTracks }) {
       loadAndPlay,
       recordTrackHistory,
       seekTo,
+      readCurrentTime,
     ],
   );
 
@@ -1266,7 +1271,7 @@ export default function usePlayerController({ setTracks }) {
       const epoch = queueEpochRef.current;
       const transition = transitionEpochRef.current;
       const currentDur = durationRef.current || currentTrack.duration || 0;
-      const currentPos = currentTimeRef.current || 0;
+      const currentPos = readCurrentTime() || 0;
 
       try {
         setIsLoading(true);
@@ -1378,6 +1383,7 @@ export default function usePlayerController({ setTracks }) {
       history,
       sendBackgroundEvent,
       recordTrackHistory,
+      readCurrentTime,
     ],
   );
 

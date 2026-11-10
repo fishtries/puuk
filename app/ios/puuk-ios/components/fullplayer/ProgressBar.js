@@ -1,7 +1,24 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { View, Text } from 'react-native';
-import Animated, { useAnimatedStyle, runOnJS } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, runOnJS, withTiming, Easing } from 'react-native-reanimated';
+import { usePlaybackPosition } from '../../hooks/playbackStatus';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+
+export const PlaybackProgressClock = React.memo(function PlaybackProgressClock({
+  player, currentTime = 0, duration = 0, isPlayerVisible,
+  isSlidingShared, slideProgressShared,
+}) {
+  const position = usePlaybackPosition(player, isPlayerVisible);
+  const time = player ? position.currentTime : currentTime;
+  const total = player ? position.duration : duration;
+  useEffect(() => {
+    if (isPlayerVisible && !isSlidingShared.value && total > 0) {
+      slideProgressShared.value = withTiming(Math.max(0, Math.min(1, time / total)),
+        { duration: 100, easing: Easing.linear });
+    }
+  }, [time, total, isPlayerVisible, isSlidingShared, slideProgressShared]);
+  return null;
+});
 
 const ProgressBar = ({
   styles,

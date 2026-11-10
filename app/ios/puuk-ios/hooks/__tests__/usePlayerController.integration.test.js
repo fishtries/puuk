@@ -12,6 +12,10 @@ import { recordPlayStart } from '../../shared/api/artists';
 let mockCoordinator;
 let mockPlayer;
 let mockStatus;
+jest.mock('../playbackStatus', () => ({
+  usePlaybackState: () => mockStatus,
+  getPlaybackSnapshot: () => mockStatus,
+}));
 const mockAuthListeners = new Set();
 jest.mock('../../utils/playbackCoordinator', () => {
   const actual = jest.requireActual('../../utils/playbackCoordinator');
@@ -33,7 +37,6 @@ jest.mock('../../utils/playbackCoordinator', () => {
 });
 jest.mock('expo-audio', () => ({
   useAudioPlayer: () => mockPlayer,
-  useAudioPlayerStatus: () => mockStatus,
   setAudioModeAsync: jest.fn().mockResolvedValue(),
 }));
 jest.mock('../../shared/api/api', () => ({

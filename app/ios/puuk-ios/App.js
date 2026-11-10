@@ -805,6 +805,7 @@ function AppContent() {
 
       {/* СЛОЙ 0 (ПОДЛОЖКА): Плеер на весь экран под карточкой */}
       <FullPlayerModal
+        player={player}
         playbackRate={playbackRate}
         onPlaybackRateChange={changePlaybackRate}
         isPlayerVisible={isPlayerVisible}
@@ -889,6 +890,8 @@ function AppContent() {
         {/* Светящаяся полоса-индикатор прогресса трека вдоль нижней скругленной границы */}
         <Animated.View style={glowBoundaryAnimatedStyle} pointerEvents="none">
           <GlowTrackBoundary
+            player={player}
+            isVisible={!isPlayerVisible}
             currentTime={isPlayerVisible ? 0 : status.currentTime}
             duration={status.duration}
             isPlaying={isPlaying && !isPlayerVisible}

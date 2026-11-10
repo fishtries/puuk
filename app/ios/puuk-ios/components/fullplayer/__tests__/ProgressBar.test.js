@@ -1,7 +1,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { GestureDetector } from 'react-native-gesture-handler';
-import ProgressBar from '../ProgressBar';
+import ProgressBar, { PlaybackProgressClock } from '../ProgressBar';
 import styles from '../playerStyles';
 
 jest.mock('react-native-gesture-handler', () => ({
@@ -21,7 +21,43 @@ jest.mock('react-native-reanimated', () => ({
   default: { View: require('react-native').View },
   useAnimatedStyle: (fn) => fn(),
   runOnJS: (fn) => fn,
+  withTiming: (to) => to,
+  Easing: { linear: value => value },
 }));
+
+it('updates exact progress without parent renders and leaves scrubbing in control', () => {
+  let listener;
+  const player = {
+    currentStatus: { currentTime: 0, duration: 100 },
+    addListener: (_name, callback) => {
+      listener = callback;
+      return { remove: jest.fn() };
+    },
+  };
+  const isSlidingShared = { value: false };
+  const slideProgressShared = { value: 0 };
+  let renderer;
+  act(() => {
+    renderer = TestRenderer.create(<PlaybackProgressClock player={player}
+      isPlayerVisible isSlidingShared={isSlidingShared} slideProgressShared={slideProgressShared} />);
+  });
+  const emit = (currentTime) => {
+    player.currentStatus = { currentTime, duration: 100 };
+    act(() => { listener(player.currentStatus); });
+  };
+  emit(0.15);
+  expect(slideProgressShared.value).toBeCloseTo(0.0015);
+  isSlidingShared.value = true;
+  slideProgressShared.value = 0.8;
+  emit(0.25);
+  expect(slideProgressShared.value).toBe(0.8);
+  isSlidingShared.value = false;
+  emit(80.1);
+  expect(slideProgressShared.value).toBeCloseTo(0.801);
+  emit(20.2);
+  expect(slideProgressShared.value).toBeCloseTo(0.202);
+  act(() => { renderer.unmount(); });
+});
 
 it('keeps a scrub gesture attached through state updates and cancels without seeking', () => {
   const seekTo = jest.fn();

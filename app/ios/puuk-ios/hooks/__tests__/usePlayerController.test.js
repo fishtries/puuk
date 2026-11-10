@@ -12,6 +12,11 @@ const mockCoordinatorListeners = new Set();
 const mockAuthListeners = new Set();
 let mockAudioStatus;
 
+jest.mock('../playbackStatus', () => ({
+  usePlaybackState: () => mockAudioStatus,
+  getPlaybackSnapshot: () => mockAudioStatus,
+}));
+
 // Mock dependencies
 jest.mock('../../utils/playbackCoordinator', () => {
   return {
@@ -64,7 +69,6 @@ const mockPlayerInstance = {
 
 jest.mock('expo-audio', () => ({
   useAudioPlayer: jest.fn(() => mockPlayerInstance),
-  useAudioPlayerStatus: jest.fn(() => mockAudioStatus),
   setAudioModeAsync: jest.fn().mockResolvedValue(undefined),
   preload: jest.fn().mockResolvedValue(undefined),
 }));
