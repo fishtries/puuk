@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   useAudioPlayer,
   useAudioPlayerStatus,
@@ -1819,6 +1819,23 @@ export default function usePlayerController({ setTracks }) {
     }
   }, [player]);
 
+  const queueControls = useMemo(() => ({
+    repeatMode,
+    shuffleEnabled,
+    autoplayEnabled,
+    undoMessage: queueUndo?.message,
+    remove: removeQueueTrack,
+    move: moveQueueTrack,
+    clear: clearQueue,
+    undo: undoQueueEdit,
+    enqueue: enqueueTrack,
+    toggleShuffle,
+    cycleRepeatMode,
+    toggleAutoplay,
+  }), [repeatMode, shuffleEnabled, autoplayEnabled, queueUndo?.message,
+    removeQueueTrack, moveQueueTrack, clearQueue, undoQueueEdit, enqueueTrack,
+    toggleShuffle, cycleRepeatMode, toggleAutoplay]);
+
   return {
     player,
     status,
@@ -1845,20 +1862,7 @@ export default function usePlayerController({ setTracks }) {
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
-    queueControls: {
-      repeatMode,
-      shuffleEnabled,
-      autoplayEnabled,
-      undoMessage: queueUndo?.message,
-      remove: removeQueueTrack,
-      move: moveQueueTrack,
-      clear: clearQueue,
-      undo: undoQueueEdit,
-      enqueue: enqueueTrack,
-      toggleShuffle,
-      cycleRepeatMode,
-      toggleAutoplay,
-    },
+    queueControls,
     history,
     previousTrack: history.length > 0 ? history[history.length - 1] : null,
     nextTrack: upNextQueue.length > 0 ? upNextQueue[0] : null,

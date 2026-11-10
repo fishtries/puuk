@@ -156,6 +156,17 @@ describe('usePlayerController', () => {
     });
   });
 
+  test('audio position updates preserve queue controls until a queue setting changes', async () => {
+    const controls = controller.queueControls;
+    mockAudioStatus = { ...mockAudioStatus, currentTime: 0.1 };
+    await act(async () => { renderer.update(<HookHarness />); });
+    expect(controller.currentTime).toBe(0.1);
+    expect(controller.queueControls).toBe(controls);
+    await act(async () => { controller.queueControls.cycleRepeatMode(); });
+    expect(controller.queueControls).not.toBe(controls);
+    expect(controller.queueControls.repeatMode).not.toBe(controls.repeatMode);
+  });
+
   test('speed changes live without restarting and survives track changes and pause', async () => {
     expect(controller.playbackRate).toBe(1);
     expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);

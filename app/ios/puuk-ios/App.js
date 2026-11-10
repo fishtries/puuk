@@ -263,6 +263,8 @@ function AppContent() {
     setIsPlayerVisible(false);
   }, [setIsPlayerVisible]);
 
+  const handleRetrySync = useCallback(() => syncStateManager.retryFailed(), []);
+
   const handleExpand = useCallback(() => {
     setIsPlayerVisible(true);
   }, [setIsPlayerVisible]);
@@ -880,14 +882,14 @@ function AppContent() {
             hasMoreTracks={hasMoreTracks}
             isLoadingMoreTracks={isLoadingMoreTracks}
             onRefreshTracks={refreshTracks}
-            onRetry={() => syncStateManager.retryFailed()}
+            onRetry={handleRetrySync}
           />
         </NavigationContainer>
 
         {/* Светящаяся полоса-индикатор прогресса трека вдоль нижней скругленной границы */}
         <Animated.View style={glowBoundaryAnimatedStyle} pointerEvents="none">
           <GlowTrackBoundary
-            currentTime={status.currentTime}
+            currentTime={isPlayerVisible ? 0 : status.currentTime}
             duration={status.duration}
             isPlaying={isPlaying && !isPlayerVisible}
             accentColor={accentColor}
