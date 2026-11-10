@@ -105,3 +105,9 @@ curl http://192.168.1.117:8000/api/health
 - [ ] Настроить journald для централизованных логов
 - [ ] Перейти на управление через `systemctl --user start/stop/restart`
 - [ ] Убрать fallback `pkill -9` из `deploy.sh` после настройки systemd
+
+## Пословные тексты
+
+Отдельная доставка `scripts/lyrics/` и локальных снимков, проверка аудио, импорт
+с dry-run, отключение и восстановление: [WORD_LYRICS.md](WORD_LYRICS.md).
+Обычный `./deploy.sh` эти каталоги не доставляет.

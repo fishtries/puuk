@@ -21,6 +21,7 @@ app/web/*.tsbuildinfo
 brain/lyrics_worker.log
 
 # Temp / working files
+data/
 brain/temp_audio/
 brain/scratch/
 brain/artist_artwork/
