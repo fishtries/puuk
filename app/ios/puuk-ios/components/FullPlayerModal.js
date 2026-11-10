@@ -203,6 +203,7 @@ const FullPlayerModal = ({
   }, [trackId]);
 
   const [isLyricsCompact, setIsLyricsCompact] = useState(false);
+  const [isSpeedControlOpen, setIsSpeedControlOpen] = useState(false);
   const isEffectivelyCompact = isLyricsView && isLyricsCompact;
   const exitCompactModeRef = useRef(null);
   const handleExitCompactMode = useCallback((fn) => {
@@ -1241,7 +1242,7 @@ const FullPlayerModal = ({
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
             currentTrack={activeTrack}
-            currentTime={currentTime}
+            currentTime={isLyricsView || isLyricsMounted ? currentTime : 0}
             isPlayerVisible={isPlayerVisible}
             isQueueVisible={isQueueVisible}
             seekTo={seekTo}
@@ -1267,6 +1268,7 @@ const FullPlayerModal = ({
             onExitCompactMode={handleExitCompactMode}
             onLyricsCompactChange={setIsLyricsCompact}
             onRegisterResetTimer={handleRegisterResetTimer}
+            isControlsInteractionActive={isSpeedControlOpen}
           />
 
           <Animated.View
@@ -1467,13 +1469,14 @@ const FullPlayerModal = ({
                 onSkip={fetchNextTrack}
               />
               <PlayerControls
+                onSpeedControlVisibilityChange={setIsSpeedControlOpen}
                 playbackRate={playbackRate}
                 onPlaybackRateChange={onPlaybackRateChange}
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}
                 isPlaying={isPlaying}
                 isLoading={isLoading}
-                currentTime={currentTime}
+                currentTime={Math.floor(currentTime || 0)}
                 duration={duration}
                 togglePlayPause={togglePlayPause}
                 fetchNextTrack={fetchNextTrack}

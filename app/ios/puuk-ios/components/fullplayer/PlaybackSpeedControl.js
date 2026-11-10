@@ -10,10 +10,14 @@ import {
 
 const formatRate = (rate) => `${Number(rate.toFixed(3))}×`;
 
-export default function PlaybackSpeedControl({ rate, onChange, onOpen }) {
+const PlaybackSpeedControl = React.memo(function PlaybackSpeedControl({ rate, onChange, onOpen, onVisibilityChange }) {
   const [visible, setVisible] = useState(false);
   const [displayRate, setDisplayRate] = useState(rate);
   const latestRate = useRef(rate);
+  useEffect(() => {
+    onVisibilityChange?.(visible);
+    if (visible) return () => onVisibilityChange?.(false);
+  }, [visible, onVisibilityChange]);
   useEffect(() => {
     latestRate.current = rate;
     setDisplayRate(rate);
@@ -48,7 +52,7 @@ export default function PlaybackSpeedControl({ rate, onChange, onOpen }) {
       >
         <Text style={styles.buttonText}>{formatRate(displayRate)}</Text>
       </Pressable>
-      <Modal
+      {visible && <Modal
         visible={visible}
         transparent
         animationType="fade"
@@ -150,10 +154,12 @@ export default function PlaybackSpeedControl({ rate, onChange, onOpen }) {
             </View>
           </View>
         </View>
-      </Modal>
+      </Modal>}
     </>
   );
-}
+});
+
+export default PlaybackSpeedControl;
 
 const styles = StyleSheet.create({
   button: {

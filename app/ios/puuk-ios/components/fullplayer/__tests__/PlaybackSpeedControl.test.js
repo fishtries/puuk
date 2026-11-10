@@ -7,10 +7,11 @@ jest.mock('@react-native-community/slider', () => 'SpeedSlider');
 
 test('opens speed control, changes speed while dragging, resets and closes', async () => {
   const onChange = jest.fn();
+  const onVisibilityChange = jest.fn();
   let renderer;
   await act(async () => {
     renderer = TestRenderer.create(
-      <PlaybackSpeedControl rate={0.85} onChange={onChange} />,
+      <PlaybackSpeedControl rate={0.85} onChange={onChange} onVisibilityChange={onVisibilityChange} />,
     );
   });
   const button = (label) =>
@@ -19,6 +20,7 @@ test('opens speed control, changes speed while dragging, resets and closes', asy
     button('Скорость воспроизведения 0.85×').props.onPress(),
   );
   expect(renderer.root.findByType(Modal).props.visible).toBe(true);
+  expect(onVisibilityChange).toHaveBeenLastCalledWith(true);
   await act(async () =>
     renderer.root.findByType('SpeedSlider').props.onValueChange(1.125),
   );
@@ -41,6 +43,7 @@ test('opens speed control, changes speed while dragging, resets and closes', asy
   );
   await act(async () => button('Готово').props.onPress());
   expect(onChange).toHaveBeenLastCalledWith(0.755);
-  expect(renderer.root.findByType(Modal).props.visible).toBe(false);
+  expect(renderer.root.findAllByType(Modal)).toHaveLength(0);
+  expect(onVisibilityChange).toHaveBeenLastCalledWith(false);
   await act(async () => renderer.unmount());
 });

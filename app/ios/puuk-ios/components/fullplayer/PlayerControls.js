@@ -27,6 +27,7 @@ const AnimatedTouchableOpacity =
 const PlayerControls = ({
   playbackRate = 1,
   onPlaybackRateChange,
+  onSpeedControlVisibilityChange,
   styles,
   isEffectivelyCompact,
   isPlaying,
@@ -68,11 +69,11 @@ const PlayerControls = ({
     });
   }, [isEffectivelyCompact]);
 
-  const notifyUserInteraction = () => {
+  const notifyUserInteraction = useCallback(() => {
     if (!isEffectivelyCompact && onUserInteraction) {
       onUserInteraction();
     }
-  };
+  }, [isEffectivelyCompact, onUserInteraction]);
 
   // 1. Кнопка НАЗАД (Back)
   const backPressScale = useSharedValue(1);
@@ -559,6 +560,7 @@ const PlayerControls = ({
                   rate={playbackRate}
                   onChange={onPlaybackRateChange}
                   onOpen={notifyUserInteraction}
+                  onVisibilityChange={onSpeedControlVisibilityChange}
                 />
               )}
 

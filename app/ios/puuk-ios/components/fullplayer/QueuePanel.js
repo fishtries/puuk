@@ -62,7 +62,7 @@ function ModeButton({ label, icon, active, onPress, badge, disabled }) {
   );
 }
 
-export default function QueuePanel({
+function QueuePanel({
   queueAnimatedStyle,
   isQueueVisible,
   isLyricsView,
@@ -420,6 +420,8 @@ export default function QueuePanel({
     </Animated.View>
   );
 }
+
+export default React.memo(QueuePanel);
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingBottom: 4 },
