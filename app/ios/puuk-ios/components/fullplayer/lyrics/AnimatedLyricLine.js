@@ -15,6 +15,12 @@ import { getProgressiveValues, getWaveSpring } from './lyricDepth';
 
 const useLyricsReducedMotion = useReducedMotion || (() => false);
 
+// Motion/color are updated by the parent shared values. The glyph subtree
+// itself does not need a React commit when the active line or target changes.
+const LineText = memo(function LineText({ text, baseStyle, animatedStyle }) {
+  return <Animated.Text style={[baseStyle, animatedStyle]}>{text}</Animated.Text>;
+});
+
 export const wordSweepProgress = (segment, currentMs) => {
   'worklet';
   return Math.max(0, Math.min(1, (currentMs - segment.startMs) / (segment.endMs - segment.startMs)));
@@ -267,7 +273,7 @@ const AnimatedLyricLine = ({
               {renderLineContent()}
             </View>
           ) : (
-            <Animated.Text style={[baseStyle, animatedTextStyle]}>{text}</Animated.Text>
+            <LineText text={text} baseStyle={baseStyle} animatedStyle={animatedTextStyle} />
           )}
         </Animated.View>
       </Pressable>

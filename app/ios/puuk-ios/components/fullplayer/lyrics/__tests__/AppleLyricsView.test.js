@@ -1,4 +1,5 @@
 import React from 'react';
+import { View, Text, AccessibilityInfo, Dimensions } from 'react-native';
 import TestRenderer, { act } from 'react-test-renderer';
 import AppleLyricsView from '../AppleLyricsView';
 import AnimatedLyricLine from '../AnimatedLyricLine';
@@ -17,6 +18,7 @@ jest.mock('../../../../shared/api/api', () => ({
 }));
 
 let lastPanGesture = {};
+let mockScrollReaction;
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
   return {
@@ -65,7 +67,12 @@ jest.mock('react-native-reanimated', () => {
     },
     useReducedMotion: () => false,
     useSharedValue: (init) => require('react').useRef({ value: init }).current,
-    useAnimatedStyle: (fn) => fn(),
+    useAnimatedStyle: (fn) => {
+      const style = require('react').useRef({}).current;
+      Object.assign(style, fn());
+      return style;
+    },
+    useAnimatedReaction: (prepare, react) => { mockScrollReaction = { prepare, react }; },
     withSpring: (to) => to,
     withTiming: (to) => to,
     withDelay: (_delay, anim) => anim,
@@ -83,6 +90,7 @@ jest.mock('react-native-reanimated', () => {
 });
 
 describe('AppleLyricsView', () => {
+  const estimatedLineHeight = 48 + 33 * (Dimensions.get('window').fontScale || 1);
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
@@ -122,6 +130,128 @@ describe('AppleLyricsView', () => {
     onExitCompactMode: jest.fn(),
     onLyricsCompactChange: jest.fn(),
   };
+
+  it('bounds animated rows, preserves measured heights, and follows manual scrolling and backward seeks', async () => {
+    const lrc = Array.from({ length: 80 }, (_, i) =>
+      `[${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.00]Line ${i}`
+    ).join('\n');
+    authFetch.mockResolvedValueOnce({ json: async () => ({ lyrics: lrc, isSynced: true }) });
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={40.1} />); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine).length).toBeLessThan(35);
+    const heights = Array(80).fill(estimatedLineHeight);
+    act(() => {
+      for (const row of renderer.root.findAllByType(AnimatedLyricLine)) {
+        const height = 80 + (row.props.index % 3) * 33;
+        heights[row.props.index] = height;
+        row.props.onLayout(row.props.index, 0, height);
+      }
+    });
+    let y = 162;
+    const layouts = heights.map(height => {
+      const layout = { y, height };
+      y += height;
+      return layout;
+    });
+    act(() => { jest.advanceTimersByTime(50); });
+    const rows = () => renderer.root.findAllByType(AnimatedLyricLine);
+    const spacers = () => renderer.root.findAllByType(View).filter(node =>
+      node.props.testID?.startsWith('lyric-spacer-'));
+    expect(rows().length).toBeLessThan(30);
+    expect(rows().some(row => row.props.index === 40)).toBe(true);
+    expect(rows().length + spacers().length).toBe(80);
+    const preservedHeight = rows().reduce((sum, row) => sum + layouts[row.props.index].height, 0) +
+      spacers().reduce((sum, node) => sum + node.props.style.height, 0);
+    expect(preservedHeight).toBe(y - 162);
+    expect(rows().some(row => row.props.index === 4)).toBe(false);
+
+    const target = rows().find(row => row.props.isActive).props.targetY;
+    act(() => { lastPanGesture._onStart(); });
+    act(() => {
+      lastPanGesture._onUpdate({ translationY: 844 * 0.4 - layouts[4].y - target });
+      mockScrollReaction.react(mockScrollReaction.prepare(), 0);
+    });
+    expect(rows().some(row => row.props.index === 4)).toBe(true);
+    expect(rows().some(row => row.props.index === 39)).toBe(true);
+    expect(rows().length).toBeLessThan(45);
+    act(() => { lastPanGesture._onFinalize(); });
+    act(() => { jest.advanceTimersByTime(3000); });
+    act(() => { mockScrollReaction.react(mockScrollReaction.prepare(), null); });
+    expect(rows().some(row => row.props.index === 4)).toBe(false);
+    expect(rows().find(row => row.props.isActive).props.isManualScrolling).toBe(false);
+    expect(rows().find(row => row.props.isActive).props.isInitial).toBe(true);
+
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={4.1} />); });
+    expect(rows().find(row => row.props.isActive).props.index).toBe(4);
+    expect(rows().length).toBeLessThan(35);
+    const oldLayoutHandler = rows()[0].props.onLayout;
+    // A width change invalidates heights but still mounts only the window.
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={4.1} width={430} />); });
+    expect(rows().length).toBeLessThan(35);
+    const newTarget = rows().find(row => row.props.isActive).props.targetY;
+    act(() => { oldLayoutHandler(4, 9999, 400); });
+    expect(rows().find(row => row.props.isActive).props.targetY).toBe(newTarget);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('retains offscreen lyrics for VoiceOver', async () => {
+    const reader = jest.spyOn(AccessibilityInfo, 'isScreenReaderEnabled').mockResolvedValue(true);
+    authFetch.mockResolvedValueOnce({ json: async () => ({
+      lyrics: Array.from({ length: 40 }, (_, i) => `[00:${String(i).padStart(2, '0')}.00]Line ${i}`).join('\n'),
+      isSynced: true,
+    }) });
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} />); });
+    act(() => {
+      for (const row of renderer.root.findAllByType(AnimatedLyricLine)) {
+        row.props.onLayout(row.props.index, row.props.index * 100, 100);
+      }
+    });
+    act(() => { jest.advanceTimersByTime(50); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)).toHaveLength(40);
+    act(() => { renderer.unmount(); });
+    reader.mockRestore();
+  });
+
+  it('preserves glyph props during line motion and still accepts changed text', () => {
+    const props = { text: 'static glyphs', index: 0, activeIndex: 0,
+      isActive: true, targetY: 0, baseStyle: { fontSize: 23 } };
+    let renderer;
+    act(() => { renderer = TestRenderer.create(<AnimatedLyricLine {...props} />); });
+    const glyphProps = renderer.root.findAllByType(Text).find(node => node.props.children === props.text).props;
+    act(() => { renderer.update(<AnimatedLyricLine {...props} activeIndex={1} isActive={false} targetY={-200} />); });
+    expect(renderer.root.findAllByType(Text).find(node => node.props.children === props.text).props).toBe(glyphProps);
+    act(() => { renderer.update(<AnimatedLyricLine {...props} text="updated glyphs" />); });
+    expect(renderer.root.findAllByType(Text).some(node => node.props.children === 'updated glyphs')).toBe(true);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('keeps the header stable across audio updates and updates changed track details', async () => {
+    authFetch.mockResolvedValueOnce({ json: async () => ({ lyrics: '[00:01.00]First', isSynced: true }) });
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={2} />); });
+    const title = renderer.root.findAllByType(Text).find(node => node.props.children === defaultProps.displayTitle).props;
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={2.1} />); });
+    expect(renderer.root.findAllByType(Text).find(node => node.props.children === defaultProps.displayTitle).props).toBe(title);
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={2.2} displayTitle="New title" />); });
+    expect(renderer.root.findAllByType(Text).some(node => node.props.children === 'New title')).toBe(true);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('prepares lyric rows behind the player and reuses them when lyrics open', async () => {
+    authFetch.mockResolvedValueOnce({ json: async () => ({ lyrics: '[00:01.00]First\n[00:04.00]Next', isSynced: true }) });
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<AppleLyricsView {...defaultProps}
+      isLyricsView={false} isLyricsMounted={false} currentTime={2} />); });
+    const first = renderer.root.findAllByType(AnimatedLyricLine)[0];
+    expect(first.props.isActive).toBe(true);
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={2} />); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0]).toBe(first);
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps}
+      isPlayerVisible={false} isLyricsView={false} isLyricsMounted={false} />); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)).toHaveLength(0);
+    act(() => { renderer.unmount(); });
+  });
 
   it('renders synced lyrics with AnimatedLyricLine and identifies active line', async () => {
     const lrcContent = [
@@ -498,7 +628,7 @@ describe('AppleLyricsView', () => {
     const nextCommits = commits.filter(commit => commit.index === 1);
     expect(nextCommits.length).toBeGreaterThan(0);
     for (const commit of nextCommits) {
-      expect(commit.target).toBeCloseTo(-(80 - 844 * 0.4 + 22));
+      expect(commit.target).toBeCloseTo(844 * 0.4 - 162 - estimatedLineHeight * 1.5);
     }
     act(() => { renderer.unmount(); });
   });
@@ -546,7 +676,7 @@ describe('AppleLyricsView', () => {
     const line = renderer.root.findAllByType(AnimatedLyricLine)[1];
     expect(line.props.isActive).toBe(true);
     expect(line.props.isManualScrolling).toBe(false);
-    expect(line.props.targetY).toBeCloseTo(-(80 - 844 * 0.4 + 22));
+    expect(line.props.targetY).toBeCloseTo(844 * 0.4 - 162 - estimatedLineHeight * 1.5);
     expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
     act(() => { renderer.unmount(); });
   });

@@ -757,9 +757,14 @@ const FullPlayerModal = ({
       cancelAnimation(queueTransition);
       queueTransition.value = withTiming(0, { duration: 250 });
       setIsLyricsMounted(true);
+      cancelAnimation(lyricsTransition);
+      lyricsTransition.value = withTiming(1, {
+        duration: 750,
+        easing: Easing.bezier(0.16, 1, 0.3, 1),
+      });
     }
     setIsLyricsView(!isLyricsView);
-  }, [hasLyrics, isLyricsView, queueTransition]);
+  }, [hasLyrics, isLyricsView, queueTransition, lyricsTransition]);
 
   const playerAnimatedStyle = useAnimatedStyle(() => {
     return {
