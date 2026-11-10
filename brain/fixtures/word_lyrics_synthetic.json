@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "trackId": "test-track-001",
+  "audioSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "durationMs": 30000,
+  "lines": [
+    {
+      "id": "line-0001",
+      "text": "Hello, world! 🎶",
+      "startMs": 1000,
+      "endMs": 2800,
+      "words": [
+        {
+          "id": "word-0001",
+          "from": 0,
+          "to": 6,
+          "startMs": 1000,
+          "endMs": 1800
+        },
+        {
+          "id": "word-0002",
+          "from": 7,
+          "to": 13,
+          "startMs": 1900,
+          "endMs": 2500
+        },
+        {
+          "id": "word-0003",
+          "from": 14,
+          "to": 15,
+          "startMs": 2500,
+          "endMs": 2800
+        }
+      ]
+    },
+    {
+      "id": "line-0002",
+      "text": "Part of me, part of me",
+      "startMs": 3000,
+      "endMs": 5000,
+      "words": [
+        {
+          "id": "word-0004",
+          "from": 0,
+          "to": 4,
+          "startMs": 3000,
+          "endMs": 3400
+        },
+        {
+          "id": "word-0005",
+          "from": 5,
+          "to": 7,
+          "startMs": 3400,
+          "endMs": 3600
+        },
+        {
+          "id": "word-0006",
+          "from": 8,
+          "to": 11,
+          "startMs": 3600,
+          "endMs": 4000
+        },
+        {
+          "id": "word-0007",
+          "from": 12,
+          "to": 16,
+          "startMs": 4100,
+          "endMs": 4400
+        },
+        {
+          "id": "word-0008",
+          "from": 17,
+          "to": 19,
+          "startMs": 4400,
+          "endMs": 4600
+        },
+        {
+          "id": "word-0009",
+          "from": 20,
+          "to": 22,
+          "startMs": 4600,
+          "endMs": 5000
+        }
+      ]
+    },
+    {
+      "id": "line-0003",
+      "text": "Overlapping vocal bridge",
+      "startMs": 5200,
+      "endMs": 7200,
+      "words": [
+        {
+          "id": "word-0010",
+          "from": 0,
+          "to": 11,
+          "startMs": 5200,
+          "endMs": 6000
+        },
+        {
+          "id": "word-0011",
+          "from": 12,
+          "to": 17,
+          "startMs": 5800,
+          "endMs": 6500
+        },
+        {
+          "id": "word-0012",
+          "from": 18,
+          "to": 24,
+          "startMs": 6400,
+          "endMs": 7200
+        }
+      ]
+    },
+    {
+      "id": "line-0004",
+      "text": "Строка без слов с акцентом",
+      "startMs": 8000,
+      "endMs": 12000,
+      "words": []
+    }
+  ],
+  "revision": "f3658b9b91fe59e7ea9c6921bed1bff1228182da1f6b0297605a362d5c403c15"
+}

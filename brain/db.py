@@ -83,6 +83,11 @@ from repositories.tracks import (
     set_track_loudness_status,
     reset_track_loudness_pending,
     reset_failed_loudness,
+    get_track_word_lyrics,
+    get_track_word_lyrics_record,
+    upsert_track_word_lyrics,
+    delete_track_word_lyrics,
+    set_track_word_lyrics_active,
 )
 from repositories.playlists import (
     get_all_playlists,

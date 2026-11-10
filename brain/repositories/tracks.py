@@ -1,4 +1,5 @@
 """Track records: CRUD, search, lyrics columns, audio-derived metadata, mutation journal."""
+import os
 import json
 from typing import Optional, List, Dict, Any
 
@@ -731,3 +732,185 @@ def reset_failed_loudness() -> int:
     conn.commit()
     conn.close()
     return count
+
+
+# =========================================================================
+# Word Lyrics Storage & Verification (Migration 014 / Contract v1)
+# =========================================================================
+
+def get_track_word_lyrics(track_id: str, verify_file_stat: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves verified wordLyrics payload for a track.
+
+    If verify_file_stat is True, checks audio file signature (size + mtime_ns).
+    If audio file was altered or missing, returns None to avoid showing misaligned timings.
+    """
+    import json
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT payload_json, audio_sha256, file_path, file_size, file_mtime_ns, is_active
+        FROM track_word_lyrics
+        WHERE track_id = ?
+    """, (str(track_id),))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row or not row["is_active"]:
+        return None
+
+    if verify_file_stat:
+        file_path = row["file_path"]
+        current = get_track(track_id)
+        if not current:
+            return None
+        current_path = current.get("file_path") or ""
+        if not os.path.isabs(current_path) or not os.path.isfile(current_path):
+            from services.media_locations import resolve_existing_file_path
+            current_path = resolve_existing_file_path(current_path)
+        if not current_path or os.path.realpath(current_path) != os.path.realpath(file_path):
+            return None
+        target_path = current_path
+        if not os.path.isabs(target_path) or not os.path.exists(target_path):
+            from services.media_locations import resolve_existing_file_path
+            resolved = resolve_existing_file_path(file_path)
+            if resolved:
+                target_path = resolved
+
+        if not os.path.exists(target_path):
+            return None
+
+        try:
+            st = os.stat(target_path)
+            if st.st_size != row["file_size"] or st.st_mtime_ns != row["file_mtime_ns"]:
+                # File signature changed; stat check fails
+                return None
+        except OSError:
+            return None
+
+    try:
+        from services.word_lyrics_validator import validate_word_lyrics_payload
+        payload = json.loads(row["payload_json"])
+        valid, error = validate_word_lyrics_payload(
+            payload, expected_track_id=str(track_id), expected_audio_sha256=row["audio_sha256"])
+        if not valid:
+            import logging
+            logging.getLogger(__name__).warning("Invalid word lyrics for %s: %s", track_id, error)
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def get_track_word_lyrics_record(track_id: str, conn=None) -> Optional[Dict[str, Any]]:
+    """Retrieves full database row for track_word_lyrics including provenance."""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT track_id, schema_version, revision, payload_json, provenance_json,
+                   audio_sha256, file_path, file_size, file_mtime_ns, imported_at, is_active
+            FROM track_word_lyrics
+            WHERE track_id = ?
+        """, (str(track_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def upsert_track_word_lyrics(
+    track_id: str,
+    payload_json: str,
+    revision: str,
+    audio_sha256: str,
+    file_path: str,
+    file_size: int,
+    file_mtime_ns: int,
+    provenance_json: Optional[str] = None,
+    schema_version: int = 1,
+    is_active: int = 1,
+    conn=None,
+) -> None:
+    """Inserts or atomically replaces word lyrics snapshot for track_id."""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO track_word_lyrics (
+                track_id, schema_version, revision, payload_json, provenance_json,
+                audio_sha256, file_path, file_size, file_mtime_ns, imported_at, is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(track_id) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                revision = excluded.revision,
+                payload_json = excluded.payload_json,
+                provenance_json = excluded.provenance_json,
+                audio_sha256 = excluded.audio_sha256,
+                file_path = excluded.file_path,
+                file_size = excluded.file_size,
+                file_mtime_ns = excluded.file_mtime_ns,
+                imported_at = CURRENT_TIMESTAMP,
+                is_active = excluded.is_active
+        """, (
+            str(track_id),
+            schema_version,
+            revision,
+            payload_json,
+            provenance_json,
+            audio_sha256,
+            file_path,
+            file_size,
+            file_mtime_ns,
+            is_active,
+        ))
+        conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def delete_track_word_lyrics(track_id: str, conn=None) -> bool:
+    """Deletes word lyrics snapshot for track_id."""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM track_word_lyrics WHERE track_id = ?", (str(track_id),))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def set_track_word_lyrics_active(track_id: str, is_active: bool, conn=None) -> bool:
+    """Enables or disables word lyrics snapshot for track_id."""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE track_word_lyrics
+            SET is_active = ?
+            WHERE track_id = ?
+        """, (1 if is_active else 0, str(track_id)))
+        updated = cursor.rowcount > 0
+        conn.commit()
+        return updated
+    finally:
+        if close_conn:
+            conn.close()

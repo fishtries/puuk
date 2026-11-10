@@ -16,7 +16,7 @@ _LIRC_TIME_PATTERN = re.compile(r'\[\d{2}:\d{2}\.\d{2,3}\]')
 _LEGACY_WORD_TIME_PATTERN = re.compile(r'<\d{2,}:\d{2}(?:[.:]\d{2,3})?>')
 
 
-def _empty_lyrics_response(lyrics_source, lyrics_status, lyrics_language):
+def _empty_lyrics_response(lyrics_source, lyrics_status, lyrics_language, word_lyrics=None):
     return {
         "lyrics": None,
         "syncedLyrics": None,
@@ -35,6 +35,7 @@ def _empty_lyrics_response(lyrics_source, lyrics_status, lyrics_language):
         "total_lines_count": 0,
         "anchorCoverage": 0.0,
         "anchor_coverage": 0.0,
+        "wordLyrics": word_lyrics,
     }
 
 
@@ -47,6 +48,14 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
     if not db_track:
         return None
 
+    # Load verified word-level lyrics snapshot if present
+    word_lyrics = None
+    try:
+        word_lyrics = db.get_track_word_lyrics(track_id, verify_file_stat=True)
+    except Exception as e:
+        print(f"[WordLyrics] Diagnostic error reading word lyrics for {track_id}: {e}")
+        word_lyrics = None
+
     title = db_track.get('title') or ''
     artist = db_track.get('artist') or ''
     lyrics_content = None if force else db_track.get('lyrics')
@@ -58,10 +67,12 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
     has_synced_in_db = bool(lyrics_content and is_synced_lrc(lyrics_content))
 
     # Search LRCLIB only if forced OR if no synced LRC and search was never executed before
+    # (and not superseded by an existing verified wordLyrics snapshot)
     should_search_external = bool(
         force
         or (
             not has_synced_in_db
+            and not word_lyrics
             and reference_search_status is None
             and (lyrics_status != 'failed' or force)
         )
@@ -160,7 +171,7 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
         lyrics_source = "embedded_synced_lrc" if is_synced_lrc(lyrics_content) else "embedded_plain"
 
     if not lyrics_content:
-        return _empty_lyrics_response(lyrics_source, lyrics_status, lyrics_language)
+        return _empty_lyrics_response(lyrics_source, lyrics_status, lyrics_language, word_lyrics=word_lyrics)
 
     is_synced = is_synced_lrc(lyrics_content)
     ref_lines = parse_reference_lrc(lyrics_content)
@@ -199,6 +210,7 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
             "total_lines_count": anchors_info["total_lines"],
             "anchorCoverage": anchors_info["coverage"],
             "anchor_coverage": anchors_info["coverage"],
+            "wordLyrics": word_lyrics,
         }
     else:
         # Strictly plain lyrics. hasLineAnchors: False
@@ -222,4 +234,5 @@ def get_track_lyrics_payload(track_id: str, force: bool = False):
             "total_lines_count": total_plain_lines,
             "anchorCoverage": 0.0,
             "anchor_coverage": 0.0,
+            "wordLyrics": word_lyrics,
         }
