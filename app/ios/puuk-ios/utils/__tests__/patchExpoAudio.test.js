@@ -890,7 +890,7 @@ describe('R2 module ownership (static source/fixture checks, not native interlea
       '  private func pauseAllPlayers()',
     );
 
-  test('migrates exact R1 output, repeats byte-identically and preserves the entire AudioPlayer', () => {
+  test('migrates exact R1 output, repeats byte-identically and preserves AudioPlayer apart from pitch inheritance', () => {
     const { ios } = r1();
     const before = contents(ios);
     expect(hash(before['AudioModule.swift'])).toBe(
@@ -898,7 +898,7 @@ describe('R2 module ownership (static source/fixture checks, not native interlea
     );
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
-    expect(expected['AudioPlayer.swift']).toBe(before['AudioPlayer.swift']);
+    expect(withoutPitchInheritance(expected['AudioPlayer.swift'])).toBe(before['AudioPlayer.swift']);
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
   });
@@ -1091,7 +1091,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
     for (const name of names.filter((name) => !['MediaController.swift', 'AudioModule.swift'].includes(name)))
-      expect(expected[name]).toBe(before[name]);
+      expect(name === 'AudioPlayer.swift' ? withoutPitchInheritance(expected[name]) : expected[name]).toBe(before[name]);
     expect(hash(expected['MediaController.swift'])).toBe(
       'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
     );
@@ -1174,7 +1174,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
   test('changed output pin rejects the staged correction before writing', () => {
     const { root, ios } = r2();
     const source = fs.readFileSync(script, 'utf8');
-    const changed = source.replace(
+    const changed = source.replaceAll(
       'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
       '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
     );
@@ -1240,4 +1240,27 @@ describe('system favorite command boundary (source only)', () => {
     expect(media).toContain('UIApplication.shared.endBackgroundTask(task)');
     expect(method(media, '  private func disableRemoteCommands()', '\n}')).toContain('endFavoriteBackgroundTask()');
   });
+});
+
+test('every installed source inherits the selected pitch mode before enqueue', () => {
+  const body = method(expected['AudioPlayer.swift'],
+    '  private func replacePlayerItem(with item: AVPlayerItem?) {',
+    '  private func enqueueNextLoopItem()');
+  const pitch = body.indexOf('item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed');
+  expect(pitch).toBeGreaterThan(0);
+  expect(pitch).toBeLessThan(body.indexOf('queuePlayer.insert(item, after: nil)'));
+  expect(pitch).toBeLessThan(body.indexOf('ref.replaceCurrentItem(with: item)'));
+});
+
+function withoutPitchInheritance(source) {
+  return source.replace('    // Preserve the selected pitch mode for every track, retry and restored source.\n    item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed\n', '');
+}
+
+test('upgrades the previous favorite-command generation without replaying older patches', () => {
+  const { ios } = pristine();
+  for (const name of names) fs.writeFileSync(path.join(ios, name), name === 'AudioPlayer.swift' ? withoutPitchInheritance(expected[name]) : expected[name]);
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
 });

@@ -22,7 +22,7 @@ import {
 } from '../../shared/domain/trackAdapter';
 import CoverImage from '../../shared/media/CoverImage';
 
-export default function PlaylistScreen({ route, navigation, onPlayTrackList }) {
+export default function PlaylistScreen({ route, navigation, onPlayTrackList, onPressEllipsis }) {
   const {
     playlistId,
     playlistName,
@@ -132,6 +132,7 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList }) {
       style={styles.trackRow}
       activeOpacity={0.6}
       onPress={() => onPlayTrackList(tracks, index)}
+      onLongPress={() => onPressEllipsis?.(item)}
     >
       <Text style={styles.trackNumber}>{index + 1}</Text>
       {item.coverArt && (
@@ -145,6 +146,11 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList }) {
           {item.artist}
         </Text>
       </View>
+      {onPressEllipsis && (
+        <TouchableOpacity onPress={() => onPressEllipsis(item)} accessibilityRole="button" accessibilityLabel={`Действия с ${item.title}`} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="ellipsis-horizontal" size={20} color="#aaa" />
+        </TouchableOpacity>
+      )}
       {!isCustomOrReadOnly && (
         <TouchableOpacity
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}

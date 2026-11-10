@@ -2111,6 +2111,21 @@ function patchFavoriteCommand() {
   fs.writeFileSync(mediaFile, s);
 }
 
+function patchPlaybackPitchMode() {
+  const file = path.join(iosDir, 'AudioPlayer.swift');
+  const source = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(
+    file,
+    replaceOnce(
+      source,
+      '  private func replacePlayerItem(with item: AVPlayerItem?) {',
+      `  private func replacePlayerItem(with item: AVPlayerItem?) {
+    // Preserve the selected pitch mode for every track, retry and restored source.
+    item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed`,
+    ),
+  );
+}
+
 const acceptedInputs = {
   'AudioPlayer.swift': [
     '05f1431a451513e62cb14400e60d9d3e2b56271584169f7f1603226236be78cd',
@@ -2121,6 +2136,7 @@ const acceptedInputs = {
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
+    '4c18573feeea3d01b5bf39fc064753c8f1244ea181ae0b2d3958780704faeec4',
   ],
   'AudioModule.swift': [
     '404d68b7be202ba8145667af50fd5ef0df3df4e802e660e30c6aad0e7acbbd59',
@@ -2130,6 +2146,7 @@ const acceptedInputs = {
     '07c2e437e9d99c44cc7b5c0500fb51d91d1e95283bbb93359890241037370b33',
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
+    '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
     '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
   ],
   'MediaController.swift': [
@@ -2141,6 +2158,7 @@ const acceptedInputs = {
     '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
     'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
     'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
+    'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
   ],
   'AudioComponentRegistry.swift': [
     '45af89001f159d392b991cfd2111050e31ea3c9a23f94600e142f9974732621f',
@@ -2151,9 +2169,11 @@ const acceptedInputs = {
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
+    '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
   ],
   'AudioUtils.swift': [
     'b78865fa35bcc5b3d91279a1d1399f832b283fd5b0c326128f0ce66933b8c537',
+    '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
@@ -2189,12 +2209,12 @@ function run() {
       .includes('private struct SourceContext')
   ) {
     console.log(
-      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2 and remote pause type corrections already patched (verified hashes).',
+      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2, remote pause corrections and pitch inheritance already patched (verified hashes).',
     );
     return;
   }
   const supportedGeneration = Array.from(
-    { length: 8 },
+    { length: 9 },
     (_, index) => index,
   ).some((index) =>
     [...before].every(
@@ -2204,47 +2224,54 @@ function run() {
   );
   if (!supportedGeneration)
     throw new Error('Unsupported mixed SDK source generations');
-  const isRemotePauseCorrected = [...before].every(
+  const hasFavoriteCommand = [...before].every(
     ([file, content]) =>
-      digest(content) === acceptedInputs[path.basename(file)][6],
+      digest(content) === acceptedInputs[path.basename(file)][7],
   );
-  if (!isRemotePauseCorrected) {
-    const isR2 = [...before].every(
+  if (!hasFavoriteCommand) {
+    const isRemotePauseCorrected = [...before].every(
       ([file, content]) =>
-        digest(content) === acceptedInputs[path.basename(file)][5],
+        digest(content) === acceptedInputs[path.basename(file)][6],
     );
-    if (!isR2) {
-      const isR1 = [...before].every(
+    if (!isRemotePauseCorrected) {
+      const isR2 = [...before].every(
         ([file, content]) =>
-          digest(content) === acceptedInputs[path.basename(file)][4],
+          digest(content) === acceptedInputs[path.basename(file)][5],
       );
-      if (!isR1) {
-        const isFirstCorrection = [...before].every(
+      if (!isR2) {
+        const isR1 = [...before].every(
           ([file, content]) =>
-            digest(content) === acceptedInputs[path.basename(file)][3],
+            digest(content) === acceptedInputs[path.basename(file)][4],
         );
-        if (!isFirstCorrection) {
-          const isPreCorrectionS1 = [...before].every(
+        if (!isR1) {
+          const isFirstCorrection = [...before].every(
             ([file, content]) =>
-              digest(content) === acceptedInputs[path.basename(file)][2],
+              digest(content) === acceptedInputs[path.basename(file)][3],
           );
-          if (!isPreCorrectionS1) {
-            patchMediaController();
-            patchAudioPlayer();
-            patchAudioModule();
-            patchAudioComponentRegistry();
-            patchAudioUtils();
-            patchSourceIdentity();
+          if (!isFirstCorrection) {
+            const isPreCorrectionS1 = [...before].every(
+              ([file, content]) =>
+                digest(content) === acceptedInputs[path.basename(file)][2],
+            );
+            if (!isPreCorrectionS1) {
+              patchMediaController();
+              patchAudioPlayer();
+              patchAudioModule();
+              patchAudioComponentRegistry();
+              patchAudioUtils();
+              patchSourceIdentity();
+            }
+            patchNativeCorrections();
           }
-          patchNativeCorrections();
+          patchResumeCauses();
         }
-        patchResumeCauses();
+        patchModuleInterruptionOwnership();
       }
-      patchModuleInterruptionOwnership();
+      patchRemotePauseTypes();
     }
-    patchRemotePauseTypes();
+    patchFavoriteCommand();
   }
-  patchFavoriteCommand();
+  patchPlaybackPitchMode();
   // Verify complete outputs too: a missing legacy transform must not produce partial success.
   for (const name of Object.keys(acceptedInputs)) {
     const file = path.join(iosDir, name);
@@ -2260,7 +2287,7 @@ function run() {
   for (const [file, content] of staged)
     nodeFs.writeFileSync(file, content, 'utf8');
   console.log(
-    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2 and remote pause type corrections; rebuild the iOS binary.',
+    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2, remote pause corrections and pitch inheritance; rebuild the iOS binary.',
   );
 }
 

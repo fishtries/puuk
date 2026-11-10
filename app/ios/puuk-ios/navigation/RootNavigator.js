@@ -97,7 +97,7 @@ const RootNavigator = React.memo(function RootNavigator({
       <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
         {(props) => (
-          <PlaylistScreen {...props} onPlayTrackList={playTrackList} />
+          <PlaylistScreen {...props} onPlayTrackList={playTrackList} onPressEllipsis={setTrackToManage} />
         )}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />

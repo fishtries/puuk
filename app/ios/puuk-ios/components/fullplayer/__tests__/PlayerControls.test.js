@@ -2,6 +2,8 @@ import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import PlayerControls from '../PlayerControls';
 import styles from '../playerStyles';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { View } from 'react-native';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -38,7 +40,7 @@ jest.mock('react-native-reanimated', () => {
       View,
       Text,
     },
-    useSharedValue: (init) => ({ value: init }),
+    useSharedValue: (init) => require('react').useRef({ value: init }).current,
     useAnimatedStyle: (fn) => fn(),
     withSpring: (to) => to,
     withTiming: (to) => to,
@@ -65,6 +67,30 @@ jest.mock('react-native-reanimated', () => {
 });
 
 describe('PlayerControls - bottom plus icon removed', () => {
+  it('keeps the gesture attached during position updates and releases cancelled press feedback', () => {
+    const props = { styles, isEffectivelyCompact: false, isPlaying: true,
+      isLyricsView: true, bottomSwipeGesture: {}, onUserInteraction: jest.fn(),
+      togglePlayPause: jest.fn() };
+    let renderer;
+    act(() => { renderer = TestRenderer.create(<PlayerControls {...props} currentTime={1} />); });
+    const gesture = renderer.root.findByType(GestureDetector).props.gesture;
+    act(() => { renderer.root.findByProps({ accessibilityLabel: 'Пауза' }).props.onPressIn(); });
+    act(() => { renderer.update(<PlayerControls {...props} currentTime={1.1} />); });
+    expect(renderer.root.findByType(GestureDetector).props.gesture).toBe(gesture);
+    const feedback = () => renderer.root.findByProps({ accessibilityLabel: 'Пауза' })
+      .findAllByType(View).map(node => node.props.style?.transform?.[0]?.scale)
+      .filter(value => value !== undefined);
+    expect(feedback()).toContain(0.88);
+    const surface = renderer.root.findAllByType(View).find(node => node.props.onTouchCancel);
+    act(() => { surface.props.onTouchCancel(); });
+    act(() => { renderer.update(<PlayerControls {...props} currentTime={1.2} />); });
+    expect(feedback()).toContain(1);
+    expect(feedback()).not.toContain(0.88);
+    expect(props.togglePlayPause).not.toHaveBeenCalled();
+    expect(props.onUserInteraction).toHaveBeenCalledTimes(1);
+    act(() => { renderer.unmount(); });
+  });
+
   it('does NOT render the add-circle-outline plus icon', async () => {
     let renderer;
     await act(async () => {

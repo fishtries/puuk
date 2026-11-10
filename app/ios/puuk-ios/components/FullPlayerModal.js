@@ -47,11 +47,13 @@ import PlayerControls from './fullplayer/PlayerControls';
 import PlayerNetworkBanner from './fullplayer/PlayerNetworkBanner';
 import PlayerHeader from './fullplayer/PlayerHeader';
 import AmbientBackground from './fullplayer/AmbientBackground';
-import styles from './fullplayer/playerStyles';
+import styles, { QUEUE_COVER_SIZE, PLAYER_HEADER_CONTENT_GAP } from './fullplayer/playerStyles';
 
 const { width, height } = Dimensions.get('window');
 
 const FullPlayerModal = ({
+  playbackRate = 1,
+  onPlaybackRateChange,
   isPlayerVisible,
   playerExpandToken,
   onExpand,
@@ -66,6 +68,7 @@ const FullPlayerModal = ({
   isLoading,
   seekTo,
   upNextQueue,
+  queueControls,
   history,
   previousTrack,
   nextTrack,
@@ -133,7 +136,11 @@ const FullPlayerModal = ({
   const effectiveTopInset = insets?.top || 47;
   const [isQueueVisible, setIsQueueVisible] = useState(false);
   const queueTransition = useSharedValue(0);
-  const queueAnimationRef = useRef(false);
+  const fullCoverLayout = useSharedValue({ x: 0, y: 57 + PLAYER_HEADER_CONTENT_GAP, width: width - 60, height: width - 60 });
+  const queueCoverLayout = useSharedValue({ x: 0, y: 11 + PLAYER_HEADER_CONTENT_GAP, width: QUEUE_COVER_SIZE, height: QUEUE_COVER_SIZE });
+  const handleQueueCoverLayout = useCallback((layout) => {
+    queueCoverLayout.value = layout;
+  }, [queueCoverLayout]);
 
   const [isLyricsView, setIsLyricsView] = useState(false);
   const [isLyricsMounted, setIsLyricsMounted] = useState(false);
@@ -684,6 +691,7 @@ const FullPlayerModal = ({
 
   const mainSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const bottomSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
+  const footerSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const lyricsHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
   const queueHeaderSwipeGesture = useMemo(() => createSwipeDownGesture(), []);
 
@@ -733,57 +741,52 @@ const FullPlayerModal = ({
   });
 
   const toggleQueue = useCallback(() => {
-    setIsQueueVisible((prev) => {
-      const nextState = !prev;
-      if (nextState) {
-        queueAnimationRef.current = true;
-        setTimeout(() => {
-          queueAnimationRef.current = false;
-        }, 1000);
-        if (isLyricsView) {
-          setIsLyricsView(false);
-          cancelAnimation(lyricsTransition);
-          cancelAnimation(lyricsRotation);
-          lyricsTransition.value = withTiming(0, { duration: 300 });
-          lyricsRotation.value = withTiming(0, { duration: 300 });
-        }
-      }
-      cancelAnimation(queueTransition);
-      queueTransition.value = withTiming(nextState ? 1 : 0, { duration: 350 });
-      return nextState;
+    const nextState = !isQueueVisible;
+    if (nextState && isLyricsView) {
+      setIsLyricsView(false);
+      cancelAnimation(lyricsTransition);
+      cancelAnimation(lyricsRotation);
+      lyricsTransition.value = withTiming(0, { duration: 300 });
+      lyricsRotation.value = withTiming(0, { duration: 300 });
+    }
+    cancelAnimation(queueTransition);
+    queueTransition.value = withSpring(nextState ? 1 : 0, {
+      damping: 28, stiffness: 220, mass: 0.8, reduceMotion: ReduceMotion.System,
     });
-  }, [isLyricsView, lyricsTransition, lyricsRotation, queueTransition]);
+    setIsQueueVisible(nextState);
+  }, [isQueueVisible, isLyricsView, lyricsTransition, lyricsRotation, queueTransition]);
 
   const handleToggleLyrics = useCallback(() => {
     if (!hasLyrics) return;
-    setIsLyricsView((prev) => {
-      setIsLyricsCompact(false);
-      if (prev) {
-        return false;
-      } else {
-        setIsQueueVisible(false);
-        cancelAnimation(queueTransition);
-        queueTransition.value = withTiming(0, { duration: 250 });
-        setIsLyricsMounted(true);
-        return true;
-      }
-    });
-  }, [hasLyrics, queueTransition]);
+    setIsLyricsCompact(false);
+    if (!isLyricsView) {
+      setIsQueueVisible(false);
+      cancelAnimation(queueTransition);
+      queueTransition.value = withTiming(0, { duration: 250 });
+      setIsLyricsMounted(true);
+    }
+    setIsLyricsView(!isLyricsView);
+  }, [hasLyrics, isLyricsView, queueTransition]);
 
   const playerAnimatedStyle = useAnimatedStyle(() => {
     return {
-      opacity: 1 - queueTransition.value,
-      transform: [{ scale: 1 - queueTransition.value * 0.1 }],
+      // Keep the original cover visible above the queue throughout the morph.
+      // Only the header and track details fade, never their common parent.
+      zIndex: queueTransition.value > 0.001 ? 11 : 0,
     };
   });
+
+  const playerHeaderQueueStyle = useAnimatedStyle(() => ({
+    opacity: 1 - Math.max(0, Math.min(1, queueTransition.value)),
+  }));
 
   const queueAnimatedStyle = useAnimatedStyle(() => {
     const isHidden = queueTransition.value <= 0.001 || isLyricsView;
     return {
-      opacity: isLyricsView ? 0 : queueTransition.value,
-      transform: [{ translateY: (1 - queueTransition.value) * 50 }],
       zIndex: queueTransition.value > 0.01 && !isLyricsView ? 10 : -1,
-      display: isHidden ? 'none' : 'flex',
+      // Retain layout while hidden so the cover has a measured destination
+      // before the user opens the queue (including with larger system text).
+      opacity: isHidden ? 0 : Math.max(0, Math.min(1, queueTransition.value)),
     };
   });
 
@@ -798,7 +801,7 @@ const FullPlayerModal = ({
   const fullCenterX = width / 2;
   const expandDeltaX = miniCenterX - fullCenterX;
 
-  const fullArtTopY = effectiveTopInset + 71; // safeArea paddingTop (effectiveTopInset + 6) + grabber 19 + header 40 + marginTop 6
+  const fullArtTopY = effectiveTopInset + 63 + PLAYER_HEADER_CONTENT_GAP; // safeArea 6 + grabber 11 + gap + header 40 + art margin 6
   const fullArtCenterY = fullArtTopY + BIG_ART_SIZE / 2;
   const TARGET_DELTA_Y = effectiveTopInset + 37 - fullArtCenterY;
 
@@ -814,6 +817,11 @@ const FullPlayerModal = ({
 
   const albumArtFlipStyle = useAnimatedStyle(() => {
     const rotateY = lyricsRotation.value;
+    const queueProgress = Math.max(0, Math.min(1, queueTransition.value));
+    const source = fullCoverLayout.value;
+    const target = queueCoverLayout.value;
+    const queueDeltaX = target.x + target.width / 2 - source.x - source.width / 2;
+    const queueDeltaY = target.y + target.height / 2 - source.y - source.height / 2;
 
     const expandScale = interpolate(
       expandProgress.value,
@@ -926,15 +934,15 @@ const FullPlayerModal = ({
         expandOpacity *
         dismissOpacity *
         (expandProgress.value > 0.9 ? swipeOpacity : 1),
-      shadowOpacity,
+      shadowOpacity: shadowOpacity * (1 - queueProgress),
       shadowRadius,
       elevation,
       transform: [
-        { translateX },
-        { translateY: translateY + dismissY },
+        { translateX: translateX + queueDeltaX * queueProgress * expandProgress.value },
+        { translateY: translateY + dismissY + queueDeltaY * queueProgress * expandProgress.value },
         { perspective: 1200 },
         { rotateY: `${rotateY}deg` },
-        { scale },
+        { scale: scale * (1 - queueProgress * (1 - target.width / source.width)) },
       ],
     };
   });
@@ -953,7 +961,8 @@ const FullPlayerModal = ({
       Extrapolation.CLAMP,
     );
     return {
-      borderRadius: radius,
+      // Radius is applied before scaling; retain an 8pt corner in the queue.
+      borderRadius: radius + (8 * BIG_ART_SIZE / QUEUE_COVER_SIZE - radius) * Math.max(0, Math.min(1, queueTransition.value)),
     };
   });
 
@@ -1032,7 +1041,7 @@ const FullPlayerModal = ({
     );
 
     return {
-      opacity: lyricsOpacity * expandOpacity * dismissOpacity,
+      opacity: lyricsOpacity * expandOpacity * dismissOpacity * (1 - Math.max(0, Math.min(1, queueTransition.value))),
       transform: [
         { translateX: expandTranslateX },
         { translateY: expandTranslateY + lyricsTranslateY + dismissY },
@@ -1164,7 +1173,10 @@ const FullPlayerModal = ({
     if (!track) return { displayTitle: '', displayArtist: '' };
     return {
       displayTitle: track.title || 'Puuk Music',
-      displayArtist: Array.isArray(track.artists) && track.artists.length ? track.artists.map((artist) => artist.name).join(', ') : (track.artist || 'Select a track to start'),
+      displayArtist:
+        Array.isArray(track.artists) && track.artists.length
+          ? track.artists.map((artist) => artist.name).join(', ')
+          : track.artist || 'Select a track to start',
     };
   };
 
@@ -1286,6 +1298,8 @@ const FullPlayerModal = ({
                   { width: '100%', alignItems: 'center', flex: 1 },
                 ]}
                 pointerEvents={isLyricsView || isQueueVisible ? 'none' : 'auto'}
+                accessibilityElementsHidden={isLyricsView || isQueueVisible}
+                importantForAccessibility={isLyricsView || isQueueVisible ? 'no-hide-descendants' : 'auto'}
               >
                 <GestureDetector gesture={mainSwipeGesture}>
                   <Animated.View
@@ -1298,7 +1312,7 @@ const FullPlayerModal = ({
                   >
                     {/* Top Grabber / Pull Trigger & Sub-header */}
                     <Animated.View
-                      style={[{ width: '100%' }, topGrabberAnimatedStyle]}
+                      style={[{ width: '100%' }, topGrabberAnimatedStyle, playerHeaderQueueStyle]}
                     >
                       <PlayerHeader
                         styles={styles}
@@ -1314,7 +1328,11 @@ const FullPlayerModal = ({
 
                     <GestureDetector gesture={albumHorizontalGesture}>
                       <Animated.View
-                        style={[styles.artContainer, albumArtFlipStyle]}
+                        onLayout={(event) => { fullCoverLayout.value = event.nativeEvent.layout; }}
+                        style={[
+                          styles.artContainer,
+                          albumArtFlipStyle,
+                        ]}
                         accessibilityRole="image"
                         accessibilityLabel={
                           displayTitle
@@ -1365,7 +1383,18 @@ const FullPlayerModal = ({
                           <Text style={styles.titleText} numberOfLines={1}>
                             {displayTitle}
                           </Text>
-                          <ArtistSelector entity={activeTrack} identity={getTrackId(currentTrack)} display={displayArtist} onSelect={onArtistPress} onAlbumSelect={onAlbumPress} disabled={isEffectivelyCompact} triggerTestID="player-artist-button" controlStyle={styles.artistButton} textStyle={styles.artistText} numberOfLines={1} />
+                          <ArtistSelector
+                            entity={activeTrack}
+                            identity={getTrackId(currentTrack)}
+                            display={displayArtist}
+                            onSelect={onArtistPress}
+                            onAlbumSelect={onAlbumPress}
+                            disabled={isEffectivelyCompact}
+                            triggerTestID="player-artist-button"
+                            controlStyle={styles.artistButton}
+                            textStyle={styles.artistText}
+                            numberOfLines={1}
+                          />
                         </Animated.View>
                         <Animated.View style={trackInfoHeartAnimatedStyle}>
                           <TouchableOpacity
@@ -1401,14 +1430,23 @@ const FullPlayerModal = ({
               </Animated.View>
 
               <QueuePanel
-                styles={styles}
+                onCoverLayout={handleQueueCoverLayout}
                 queueAnimatedStyle={queueAnimatedStyle}
                 isQueueVisible={isQueueVisible}
                 isLyricsView={isLyricsView}
                 queueHeaderSwipeGesture={queueHeaderSwipeGesture}
                 upNextQueue={upNextQueue}
-                queueAnimationRef={queueAnimationRef}
                 playTrack={playTrack}
+                currentTrack={activeTrack}
+                isLiked={trackIsLiked}
+                onToggleLike={onToggleLike}
+                onArtistPress={onArtistPress}
+                onAlbumPress={onAlbumPress}
+                onCloseQueue={toggleQueue}
+                onClose={handleClose}
+                menuActions={menuActions}
+                handleMenuAction={handleMenuAction}
+                controls={queueControls}
               />
             </View>
 
@@ -1429,6 +1467,8 @@ const FullPlayerModal = ({
                 onSkip={fetchNextTrack}
               />
               <PlayerControls
+                playbackRate={playbackRate}
+                onPlaybackRateChange={onPlaybackRateChange}
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}
                 isPlaying={isPlaying}
@@ -1454,7 +1494,7 @@ const FullPlayerModal = ({
                 onUserInteraction={handleUserInteraction}
                 accentColor={coverAccentColor || propAccentColor || '#FFDAB9'}
               />
-              <GestureDetector gesture={bottomSwipeGesture}>
+              <GestureDetector gesture={footerSwipeGesture}>
                 <View
                   style={{
                     width: '100%',

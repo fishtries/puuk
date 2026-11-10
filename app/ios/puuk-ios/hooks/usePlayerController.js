@@ -17,8 +17,14 @@ import {
   ApiError,
 } from '../shared/api/api';
 import { recordPlayStart } from '../shared/api/artists';
+import {
+  queueKey,
+  carryQueueIdentity,
+  shuffledTracks,
+} from '../utils/queueIdentity';
 import { subscribeArtistCreditsUpdated } from '../shared/domain/artistCreditEvents';
 import defaultPlaybackCoordinator from '../utils/playbackCoordinator';
+import { normalizePlaybackRate } from '../utils/playbackSpeed';
 import {
   clearSavedLastTrack,
   getSettings,
@@ -101,15 +107,22 @@ function mergeUniqueQueue(existing, incoming, maxBuffer = MAX_QUEUE_BUFFER) {
     seen.add(key);
     merged.push(track);
   }
-  return merged.length > maxBuffer ? merged.slice(0, maxBuffer) : merged;
+  return merged.slice(0, Math.max(maxBuffer, (existing || []).length));
 }
 
 export default function usePlayerController({ setTracks }) {
   const [currentTrack, commitCurrentTrack] = useState(null);
   const currentTrackRef = useRef(null);
   const setCurrentTrack = useCallback((update) => {
+    const previous = currentTrackRef.current;
     const next =
       typeof update === 'function' ? update(currentTrackRef.current) : update;
+    if (previous && next && areTrackIdsEqual(previous, next)) {
+      carryQueueIdentity(previous, next);
+      cycleTracksRef.current = cycleTracksRef.current.map((track) =>
+        track === previous ? next : track,
+      );
+    }
     currentTrackRef.current = next;
     commitCurrentTrack(next);
   }, []);
@@ -118,9 +131,43 @@ export default function usePlayerController({ setTracks }) {
   const [playerExpandToken, setPlayerExpandToken] = useState(0);
   const [upNextQueue, commitQueue] = useState([]);
   const queueRef = useRef([]);
+  const cycleTracksRef = useRef([]);
+  const unshuffledRef = useRef(null);
+  const [repeatMode, setRepeatMode] = useState('off');
+  const repeatModeRef = useRef('off');
+  const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [autoplayEnabled, setAutoplayEnabled] = useState(false);
+  const [queueUndo, setQueueUndo] = useState(null);
+  const undoRef = useRef(null);
   const setUpNextQueue = useCallback((update) => {
     const next =
       typeof update === 'function' ? update(queueRef.current) : update;
+    // Preserve occurrence identity when metadata refresh replaces DTO objects.
+    const replacements = new Map();
+    const upcoming = new Set(next);
+    const previousEntries = new Set(queueRef.current);
+    const unmatched = new Map();
+    for (const track of queueRef.current) {
+      if (upcoming.has(track)) continue;
+      const id = String(getTrackId(track));
+      const occurrences = unmatched.get(id) || [];
+      occurrences.push(track);
+      unmatched.set(id, occurrences);
+    }
+    for (const track of next) {
+      if (previousEntries.has(track)) continue;
+      const previous = unmatched.get(String(getTrackId(track)))?.shift();
+      if (!previous) continue;
+      carryQueueIdentity(previous, track);
+      replacements.set(previous, track);
+    }
+    if (replacements.size) {
+      const replace = (track) => replacements.get(track) || track;
+      cycleTracksRef.current = cycleTracksRef.current.map(replace);
+      if (unshuffledRef.current)
+        unshuffledRef.current = unshuffledRef.current.map(replace);
+    }
+    next.forEach(queueKey);
     queueRef.current = next;
     commitQueue(next);
   }, []);
@@ -142,11 +189,181 @@ export default function usePlayerController({ setTracks }) {
   const isWaveSessionRef = useRef(false);
   const autoplayAfterQueueRef = useRef(false);
   const collectionTrackIdsRef = useRef([]);
+  const removedQueueIdsRef = useRef(new Set());
   const queueRequestRef = useRef(null);
   // Эпоха очереди: инвалидирует in-flight ответы fetchQueue
   const queueEpochRef = useRef(0);
   // Защита от двойного перехода
   const isAdvancingRef = useRef(false);
+
+  // All user edits invalidate outstanding recommendation requests. The current
+  // audio selection is untouched; the existing queue effect updates preloading.
+  const invalidateQueueRequest = useCallback(() => {
+    queueEpochRef.current += 1;
+    isAdvancingRef.current = false;
+    setIsLoading(false);
+    undoRef.current = null;
+    setQueueUndo(null);
+  }, []);
+
+  const editQueue = useCallback(
+    (next, message) => {
+      const before = queueRef.current;
+      const cycle = cycleTracksRef.current;
+      invalidateQueueRequest();
+      setUpNextQueue(next);
+      cycleTracksRef.current = cycle.filter(
+        (track) =>
+          track === currentTrackRef.current ||
+          next.includes(track) ||
+          !before.includes(track),
+      );
+      if (message) {
+        const undo = {
+          before,
+          after: next,
+          cycle,
+          removedIds: new Set(removedQueueIdsRef.current),
+          current: currentTrackRef.current,
+          message,
+        };
+        undoRef.current = undo;
+        setQueueUndo(undo);
+      }
+    },
+    [invalidateQueueRequest, setUpNextQueue],
+  );
+
+  useEffect(() => {
+    if (!queueUndo) return;
+    if (
+      queueRef.current !== queueUndo.after ||
+      currentTrack !== queueUndo.current
+    ) {
+      undoRef.current = null;
+      setQueueUndo(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      undoRef.current = null;
+      setQueueUndo(null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [queueUndo, currentTrack, upNextQueue]);
+
+  const undoQueueEdit = useCallback(() => {
+    const undo = undoRef.current;
+    if (
+      !undo ||
+      queueRef.current !== undo.after ||
+      currentTrackRef.current !== undo.current
+    )
+      return;
+    invalidateQueueRequest();
+    cycleTracksRef.current = undo.cycle;
+    removedQueueIdsRef.current = undo.removedIds;
+    setUpNextQueue(undo.before);
+  }, [invalidateQueueRequest, setUpNextQueue]);
+
+  const removeQueueTrack = useCallback(
+    (key) => {
+      const removed = queueRef.current.find((track) => queueKey(track) === key);
+      const next = queueRef.current.filter((track) => queueKey(track) !== key);
+      if (next.length !== queueRef.current.length)
+        editQueue(next, 'Трек убран');
+      if (removed) removedQueueIdsRef.current.add(String(getTrackId(removed)));
+    },
+    [editQueue],
+  );
+
+  const clearQueue = useCallback(() => {
+    if (queueRef.current.length) {
+      const removed = queueRef.current;
+      editQueue([], 'Очередь очищена');
+      for (const track of removed)
+        removedQueueIdsRef.current.add(String(getTrackId(track)));
+      cycleTracksRef.current = currentTrackRef.current
+        ? [currentTrackRef.current]
+        : [];
+    }
+  }, [editQueue]);
+
+  const moveQueueTrack = useCallback(
+    (key, targetKey) => {
+      const next = [...queueRef.current];
+      const from = next.findIndex((track) => queueKey(track) === key);
+      const to = next.findIndex((track) => queueKey(track) === targetKey);
+      if (from < 0 || to < 0 || from === to) return;
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      editQueue(next);
+      const cycle = cycleTracksRef.current;
+      const currentIndex = cycle.indexOf(currentTrackRef.current);
+      cycleTracksRef.current = [
+        ...cycle.slice(0, Math.max(0, currentIndex)),
+        currentTrackRef.current,
+        ...next,
+      ].filter(Boolean);
+      unshuffledRef.current = null;
+      setShuffleEnabled(false);
+    },
+    [editQueue],
+  );
+
+  const enqueueTrack = useCallback(
+    (track, placement = 'last') => {
+      const entry = normalizeTrackDto(track);
+      if (!entry || !currentTrackRef.current) return false;
+      entry.queueOrigin = 'manual';
+      const next =
+        placement === 'next'
+          ? [entry, ...queueRef.current]
+          : [...queueRef.current, entry];
+      editQueue(next);
+      const cycle = cycleTracksRef.current;
+      const currentIndex = cycle.indexOf(currentTrackRef.current);
+      cycleTracksRef.current = [
+        ...cycle.slice(0, Math.max(0, currentIndex)),
+        currentTrackRef.current,
+        ...next,
+      ];
+      return true;
+    },
+    [editQueue],
+  );
+
+  const toggleShuffle = useCallback(() => {
+    const original = unshuffledRef.current;
+    const before = [...queueRef.current];
+    const next = original
+      ? [
+          ...original.filter((track) => queueRef.current.includes(track)),
+          ...queueRef.current.filter((track) => !original.includes(track)),
+        ]
+      : shuffledTracks(queueRef.current);
+    editQueue(next);
+    unshuffledRef.current = original ? null : before;
+    setShuffleEnabled(!original);
+  }, [editQueue]);
+
+  const cycleRepeatMode = useCallback(() => {
+    const next = { off: 'all', all: 'one', one: 'off' }[repeatModeRef.current];
+    repeatModeRef.current = next;
+    setRepeatMode(next);
+    if (next === 'all') {
+      const cycle = cycleTracksRef.current;
+      cycleTracksRef.current = [
+        ...cycle,
+        ...queueRef.current.filter((track) => !cycle.includes(track)),
+      ];
+    }
+    invalidateQueueRequest();
+  }, [invalidateQueueRequest]);
+
+  const toggleAutoplay = useCallback(() => {
+    autoplayAfterQueueRef.current = !autoplayAfterQueueRef.current;
+    setAutoplayEnabled(autoplayAfterQueueRef.current);
+    invalidateQueueRequest();
+  }, [invalidateQueueRequest]);
 
   // Дедупликация истории (30с кулдаун) и буфер повторов фоновых событий
   // Дедупликация истории (user_id + session + track_id + event) и буфер повторов фоновых событий
@@ -185,9 +402,31 @@ export default function usePlayerController({ setTracks }) {
   const recordTrackHistoryRef = useRef(null);
 
   const player = useAudioPlayer(null, {
+    // Position events rerender the app. Lyrics and progress interpolate on the
+    // UI thread, so 10 observations/s are enough without 20 full React commits/s.
+    updateInterval: 100,
     keepAudioSessionActive: true,
   });
   const status = useAudioPlayerStatus(player);
+  const [playbackRate, setPlaybackRate] = useState(1);
+
+  // Native currentRate survives pause/resume and source replacement.
+  useEffect(() => {
+    player.shouldCorrectPitch = false;
+  }, [player]);
+
+  const appliedPlaybackRateRef = useRef(null);
+  const changePlaybackRate = useCallback((value, { commit = true } = {}) => {
+    const rate = normalizePlaybackRate(value);
+    if (rate === null) return;
+    const applied = appliedPlaybackRateRef.current;
+    if (applied?.player !== player || applied.rate !== rate) {
+      player.setPlaybackRate(rate);
+      appliedPlaybackRateRef.current = { player, rate };
+    }
+    // Slider previews reach audio immediately without rerendering App/navigation.
+    if (commit) setPlaybackRate(rate);
+  }, [player]);
 
   const [soundCheck, setSoundCheck] = useState(() => {
     try {
@@ -287,6 +526,15 @@ export default function usePlayerController({ setTracks }) {
         isWaveSessionRef.current = false;
         autoplayAfterQueueRef.current = false;
         collectionTrackIdsRef.current = [];
+        removedQueueIdsRef.current.clear();
+        cycleTracksRef.current = [];
+        unshuffledRef.current = null;
+        setShuffleEnabled(false);
+        repeatModeRef.current = 'off';
+        setRepeatMode('off');
+        setAutoplayEnabled(false);
+        undoRef.current = null;
+        setQueueUndo(null);
       }
       currentUserIdRef.current = newUserId;
       authReadyRef.current = true;
@@ -628,9 +876,21 @@ export default function usePlayerController({ setTracks }) {
   const creditSetTracksRef = useRef(setTracks);
   creditSetTracksRef.current = setTracks;
   const creditContextRef = useRef(null);
-  const creditContextKey = JSON.stringify([getTrackId(currentTrack), upNextQueue.map(getTrackId), history.map(getTrackId)]);
-  const creditContextEpoch = (creditContextRef.current?.epoch || 0) + (creditContextRef.current?.key === creditContextKey ? 0 : 1);
-  creditContextRef.current = { key: creditContextKey, epoch: creditContextEpoch, currentTrack, upNextQueue, history };
+  const creditContextKey = JSON.stringify([
+    getTrackId(currentTrack),
+    upNextQueue.map(getTrackId),
+    history.map(getTrackId),
+  ]);
+  const creditContextEpoch =
+    (creditContextRef.current?.epoch || 0) +
+    (creditContextRef.current?.key === creditContextKey ? 0 : 1);
+  creditContextRef.current = {
+    key: creditContextKey,
+    epoch: creditContextEpoch,
+    currentTrack,
+    upNextQueue,
+    history,
+  };
 
   // Credit edits patch metadata only; playback and position remain owned by the audio engine.
   useEffect(() => {
@@ -640,13 +900,26 @@ export default function usePlayerController({ setTracks }) {
     let running = 0;
     const patchTracks = (updates) => {
       if (!active || !updates.length) return;
-      const byId = new Map(updates.filter((track) => getTrackId(track) !== null).map((track) => [String(getTrackId(track)), track]));
+      const byId = new Map(
+        updates
+          .filter((track) => getTrackId(track) !== null)
+          .map((track) => [String(getTrackId(track)), track]),
+      );
       const merge = (track) => {
         const incoming = track && byId.get(String(getTrackId(track)));
         if (!incoming) return track;
         const patch = {};
-        for (const key of ['artist', 'artist_id', 'artists', 'artists_revision', 'album_artist', 'album_artists', 'album_artists_revision']) {
-          if (Object.prototype.hasOwnProperty.call(incoming, key)) patch[key] = incoming[key];
+        for (const key of [
+          'artist',
+          'artist_id',
+          'artists',
+          'artists_revision',
+          'album_artist',
+          'album_artists',
+          'album_artists_revision',
+        ]) {
+          if (Object.prototype.hasOwnProperty.call(incoming, key))
+            patch[key] = incoming[key];
         }
         return { ...track, ...patch };
       };
@@ -663,36 +936,89 @@ export default function usePlayerController({ setTracks }) {
       while (active && running < 4 && pending.size) {
         const [id, task] = pending.entries().next().value;
         pending.delete(id);
-        if (versions.get(id) !== task.version || authEpochRef.current !== task.authEpoch || SERVER_URL !== task.server || creditContextRef.current.epoch !== task.context) continue;
+        if (
+          versions.get(id) !== task.version ||
+          authEpochRef.current !== task.authEpoch ||
+          SERVER_URL !== task.server ||
+          creditContextRef.current.epoch !== task.context
+        )
+          continue;
         running += 1;
         (async () => {
           try {
-            const response = await authFetch(`/api/tracks/${encodeURIComponent(id)}?credits_only=true`);
+            const response = await authFetch(
+              `/api/tracks/${encodeURIComponent(id)}?credits_only=true`,
+            );
             const track = response.ok ? await response.json() : null;
-            if (active && versions.get(id) === task.version && authEpochRef.current === task.authEpoch &&
-                SERVER_URL === task.server && creditContextRef.current.epoch === task.context &&
-                track && String(getTrackId(track)) === id) patchTracks([track]);
-          } catch { /* Preserve existing metadata for a later refresh. */ }
-        })().finally(() => { running -= 1; pump(); });
+            if (
+              active &&
+              versions.get(id) === task.version &&
+              authEpochRef.current === task.authEpoch &&
+              SERVER_URL === task.server &&
+              creditContextRef.current.epoch === task.context &&
+              track &&
+              String(getTrackId(track)) === id
+            )
+              patchTracks([track]);
+          } catch {
+            /* Preserve existing metadata for a later refresh. */
+          }
+        })().finally(() => {
+          running -= 1;
+          pump();
+        });
       }
     };
     const unsubscribe = subscribeArtistCreditsUpdated((event) => {
-      const updates = event.scope === 'track' ? [event.track] : event.scope === 'album' ? (event.tracks || []) : [];
-      const ids = event.scope === 'bulk' ? (event.affected?.track_ids || []) : updates.map(getTrackId);
-      const uniqueIds = [...new Set(ids.map(getTrackId).filter((id) => id !== null).map(String))];
+      const updates =
+        event.scope === 'track'
+          ? [event.track]
+          : event.scope === 'album'
+            ? event.tracks || []
+            : [];
+      const ids =
+        event.scope === 'bulk'
+          ? event.affected?.track_ids || []
+          : updates.map(getTrackId);
+      const uniqueIds = [
+        ...new Set(
+          ids
+            .map(getTrackId)
+            .filter((id) => id !== null)
+            .map(String),
+        ),
+      ];
       for (const id of uniqueIds) {
         versions.set(id, (versions.get(id) || 0) + 1);
         pending.delete(id);
       }
-      if (event.scope !== 'bulk') { patchTracks(updates); return; }
+      if (event.scope !== 'bulk') {
+        patchTracks(updates);
+        return;
+      }
       const context = creditContextRef.current;
-      const relevant = new Set([context.currentTrack, ...context.upNextQueue, ...context.history].map(getTrackId).filter((id) => id !== null).map(String));
+      const relevant = new Set(
+        [context.currentTrack, ...context.upNextQueue, ...context.history]
+          .map(getTrackId)
+          .filter((id) => id !== null)
+          .map(String),
+      );
       for (const id of uniqueIds) {
-        if (relevant.has(id)) pending.set(id, { version: versions.get(id), authEpoch: authEpochRef.current, server: SERVER_URL, context: context.epoch });
+        if (relevant.has(id))
+          pending.set(id, {
+            version: versions.get(id),
+            authEpoch: authEpochRef.current,
+            server: SERVER_URL,
+            context: context.epoch,
+          });
       }
       pump();
     });
-    return () => { active = false; pending.clear(); unsubscribe(); };
+    return () => {
+      active = false;
+      pending.clear();
+      unsubscribe();
+    };
   }, []);
 
   const requestExpandPlayer = useCallback(() => {
@@ -826,6 +1152,7 @@ export default function usePlayerController({ setTracks }) {
     const excludeIds = [
       ...(exclusions.excludeIds || []),
       ...collectionTrackIdsRef.current,
+      ...removedQueueIdsRef.current,
     ];
     const excluded = new Set(
       [trackId, ...excludeIds, ...(exclusions.queuedIds || [])]
@@ -927,107 +1254,132 @@ export default function usePlayerController({ setTracks }) {
     ],
   );
 
-  const fetchNextTrack = useCallback(async () => {
-    const currentTrack = currentTrackRef.current;
-    const upNextQueue = queueRef.current;
-    const history = historyRef.current;
-    if (!mountedRef.current || !currentTrack || !currentRequestIdRef.current)
-      return;
-    if (isAdvancingRef.current) return;
-    isAdvancingRef.current = true;
-    const epoch = queueEpochRef.current;
-    const transition = transitionEpochRef.current;
-    const currentDur = durationRef.current || currentTrack.duration || 0;
-    const currentPos = currentTimeRef.current || 0;
+  const fetchNextTrack = useCallback(
+    async ({ finished = false } = {}) => {
+      const currentTrack = currentTrackRef.current;
+      const upNextQueue = queueRef.current;
+      const history = historyRef.current;
+      if (!mountedRef.current || !currentTrack || !currentRequestIdRef.current)
+        return;
+      if (isAdvancingRef.current) return;
+      isAdvancingRef.current = true;
+      const epoch = queueEpochRef.current;
+      const transition = transitionEpochRef.current;
+      const currentDur = durationRef.current || currentTrack.duration || 0;
+      const currentPos = currentTimeRef.current || 0;
 
-    try {
-      setIsLoading(true);
-      let nextTrack;
-      let newQueue = [...upNextQueue];
-
-      // A collection remains ordered until its final track has finished.
-      if (newQueue.length === 0 && autoplayAfterQueueRef.current) {
-        newQueue = await fetchQueue(getTrackId(currentTrack), undefined, {
-          excludeIds: history.map(getTrackId).filter((id) => id !== null),
-          queuedIds: [],
-        });
-        if (
-          epoch !== queueEpochRef.current ||
-          transition !== transitionEpochRef.current
-        )
+      try {
+        setIsLoading(true);
+        if (finished && repeatModeRef.current === 'one') {
+          await loadAndPlay(currentTrack);
           return;
-        isWaveSessionRef.current = true;
-      }
+        }
+        let nextTrack;
+        let newQueue = [...upNextQueue];
 
-      if (newQueue.length > 0) {
-        nextTrack = newQueue.shift();
-        setUpNextQueue(newQueue);
-      }
+        if (newQueue.length === 0 && repeatModeRef.current === 'all') {
+          const cycle = cycleTracksRef.current.length
+            ? cycleTracksRef.current
+            : [currentTrack];
+          newQueue = unshuffledRef.current ? shuffledTracks(cycle) : [...cycle];
+        }
 
-      if (nextTrack) {
-        setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
-        const nextTrackId = getTrackId(nextTrack);
-        const currentTrackId = getTrackId(currentTrack);
+        // A collection remains ordered until its final track has finished.
+        if (
+          newQueue.length === 0 &&
+          autoplayAfterQueueRef.current &&
+          repeatModeRef.current === 'off'
+        ) {
+          newQueue = await fetchQueue(getTrackId(currentTrack), undefined, {
+            excludeIds: history.map(getTrackId).filter((id) => id !== null),
+            queuedIds: [],
+          });
+          if (
+            epoch !== queueEpochRef.current ||
+            transition !== transitionEpochRef.current
+          )
+            return;
+          isWaveSessionRef.current = true;
+        }
 
-        currentTrackRef.current = nextTrack;
-        setCurrentTrack(nextTrack);
-        const playPromise = loadAndPlay(nextTrack);
+        if (newQueue.length > 0) {
+          nextTrack = newQueue.shift();
+          setUpNextQueue(newQueue);
+        }
 
-        if (isWaveSessionRef.current && newQueue.length < 3) {
-          fetchQueue(nextTrackId, undefined, {
-            excludeIds: [
-              ...history.map(getTrackId).filter((id) => id !== null),
-              currentTrackId,
-            ],
-            queuedIds: newQueue.map(getTrackId).filter((id) => id !== null),
+        if (nextTrack) {
+          setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
+          const nextTrackId = getTrackId(nextTrack);
+          const currentTrackId = getTrackId(currentTrack);
+
+          currentTrackRef.current = nextTrack;
+          setCurrentTrack(nextTrack);
+          const playPromise = loadAndPlay(nextTrack);
+
+          if (
+            isWaveSessionRef.current &&
+            autoplayAfterQueueRef.current &&
+            repeatModeRef.current === 'off' &&
+            newQueue.length < 3
+          ) {
+            fetchQueue(nextTrackId, undefined, {
+              excludeIds: [
+                ...history.map(getTrackId).filter((id) => id !== null),
+                currentTrackId,
+              ],
+              queuedIds: newQueue.map(getTrackId).filter((id) => id !== null),
+            });
+          }
+
+          // Телеметрия волны: finish при дослушивании, иначе skip
+          const trackMs = Math.round(
+            (currentTrack.duration || currentDur || 0) * 1000,
+          );
+          const listenedMs = Math.round((currentPos || 0) * 1000);
+          const eventType =
+            currentDur > 0 && currentPos >= currentDur * 0.9
+              ? 'finish'
+              : 'skip';
+          if (currentTrackId !== null) {
+            sendBackgroundEvent('/api/wave/feedback', {
+              track_id: currentTrackId,
+              event_type: eventType,
+              listen_duration_ms: listenedMs,
+              track_duration_ms: trackMs,
+            });
+          }
+
+          // Записываем прослушивание в историю
+          if (nextTrackId !== null) {
+            recordTrackHistory(nextTrackId);
+          }
+
+          await playPromise;
+        } else {
+          intentRef.current = 'pause';
+          defaultPlaybackCoordinator.setIntent(player, {
+            type: 'pause',
+            requestId: currentRequestIdRef.current,
           });
         }
-
-        // Телеметрия волны: finish при дослушивании, иначе skip
-        const trackMs = Math.round(
-          (currentTrack.duration || currentDur || 0) * 1000,
-        );
-        const listenedMs = Math.round((currentPos || 0) * 1000);
-        const eventType =
-          currentDur > 0 && currentPos >= currentDur * 0.9 ? 'finish' : 'skip';
-        if (currentTrackId !== null) {
-          sendBackgroundEvent('/api/wave/feedback', {
-            track_id: currentTrackId,
-            event_type: eventType,
-            listen_duration_ms: listenedMs,
-            track_duration_ms: trackMs,
-          });
+      } finally {
+        if (epoch === queueEpochRef.current) {
+          setIsLoading(false);
+          isAdvancingRef.current = false;
         }
-
-        // Записываем прослушивание в историю
-        if (nextTrackId !== null) {
-          recordTrackHistory(nextTrackId);
-        }
-
-        await playPromise;
-      } else {
-        intentRef.current = 'pause';
-        defaultPlaybackCoordinator.setIntent(player, {
-          type: 'pause',
-          requestId: currentRequestIdRef.current,
-        });
       }
-    } finally {
-      if (epoch === queueEpochRef.current) {
-        setIsLoading(false);
-        isAdvancingRef.current = false;
-      }
-    }
-  }, [
-    currentTrack,
-    upNextQueue,
-    player,
-    loadAndPlay,
-    fetchQueue,
-    history,
-    sendBackgroundEvent,
-    recordTrackHistory,
-  ]);
+    },
+    [
+      currentTrack,
+      upNextQueue,
+      player,
+      loadAndPlay,
+      fetchQueue,
+      history,
+      sendBackgroundEvent,
+      recordTrackHistory,
+    ],
+  );
 
   const fetchNextTrackRef = useRef(fetchNextTrack);
   const playPreviousTrackRef = useRef(playPreviousTrack);
@@ -1072,7 +1424,7 @@ export default function usePlayerController({ setTracks }) {
         if (trackId !== null)
           recordPlayStart(trackId, { retry: 1 }).catch(() => {});
       }
-      if (result.didFinish) fetchNextTrackRef.current?.();
+      if (result.didFinish) fetchNextTrackRef.current?.({ finished: true });
     };
     const onSkip = (callback, event) => {
       if (!validSelection()) return;
@@ -1110,7 +1462,7 @@ export default function usePlayerController({ setTracks }) {
       status?.didJustFinish &&
       currentRequestIdRef.current
     ) {
-      fetchNextTrackRef.current?.();
+      fetchNextTrackRef.current?.({ finished: true });
     }
   }, [player, status?.didJustFinish]);
 
@@ -1191,6 +1543,13 @@ export default function usePlayerController({ setTracks }) {
         isWaveSessionRef.current = source === 'search';
         autoplayAfterQueueRef.current = source === 'search';
         collectionTrackIdsRef.current = [];
+        removedQueueIdsRef.current.clear();
+        cycleTracksRef.current = [track];
+        unshuffledRef.current = null;
+        setShuffleEnabled(false);
+        setAutoplayEnabled(autoplayAfterQueueRef.current);
+        undoRef.current = null;
+        setQueueUndo(null);
       }
       setCurrentTrack(track);
       loadAndPlay(track);
@@ -1201,7 +1560,7 @@ export default function usePlayerController({ setTracks }) {
       isAdvancingRef.current = false;
       setIsLoading(false);
       setUpNextQueue(
-        source === 'queue' ? upNextQueue.slice(queueIndex + 1) : [],
+        source === 'queue' ? queueRef.current.slice(queueIndex + 1) : [],
       );
       if (source === 'search')
         fetchQueue(trackId, undefined, {
@@ -1226,7 +1585,10 @@ export default function usePlayerController({ setTracks }) {
   const playTrackList = useCallback(
     (trackList, startIndex = 0) => {
       if (!mountedRef.current || !trackList || trackList.length === 0) return;
+      // Give repeated occurrences independent identities without modifying DTOs.
+      trackList = trackList.map((track) => ({ ...track }));
       const track = trackList[startIndex];
+      if (!track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
       const queue = trackList.slice(startIndex + 1);
@@ -1242,6 +1604,13 @@ export default function usePlayerController({ setTracks }) {
       currentTrackRef.current = track;
       isWaveSessionRef.current = false;
       autoplayAfterQueueRef.current = true;
+      setAutoplayEnabled(true);
+      cycleTracksRef.current = trackList;
+      removedQueueIdsRef.current.clear();
+      unshuffledRef.current = null;
+      setShuffleEnabled(false);
+      undoRef.current = null;
+      setQueueUndo(null);
       collectionTrackIdsRef.current = trackList
         .map(getTrackId)
         .filter((id) => id !== null);
@@ -1374,6 +1743,13 @@ export default function usePlayerController({ setTracks }) {
       currentTrackRef.current = waveTrack;
       isWaveSessionRef.current = true;
       autoplayAfterQueueRef.current = true;
+      setAutoplayEnabled(true);
+      cycleTracksRef.current = [waveTrack];
+      removedQueueIdsRef.current.clear();
+      unshuffledRef.current = null;
+      setShuffleEnabled(false);
+      undoRef.current = null;
+      setQueueUndo(null);
       collectionTrackIdsRef.current = [];
       setCurrentTrack(waveTrack);
       loadAndPlay(waveTrack);
@@ -1416,6 +1792,15 @@ export default function usePlayerController({ setTracks }) {
     isWaveSessionRef.current = false;
     autoplayAfterQueueRef.current = false;
     collectionTrackIdsRef.current = [];
+    cycleTracksRef.current = [];
+    removedQueueIdsRef.current.clear();
+    unshuffledRef.current = null;
+    setShuffleEnabled(false);
+    repeatModeRef.current = 'off';
+    setRepeatMode('off');
+    setAutoplayEnabled(false);
+    undoRef.current = null;
+    setQueueUndo(null);
     queueEpochRef.current += 1;
     isAdvancingRef.current = false;
     setIsLoading(false);
@@ -1437,6 +1822,8 @@ export default function usePlayerController({ setTracks }) {
   return {
     player,
     status,
+    playbackRate,
+    changePlaybackRate,
     currentTrack,
     setCurrentTrack,
     isPlaying,
@@ -1445,19 +1832,33 @@ export default function usePlayerController({ setTracks }) {
     isLoading,
     // Legacy binaries cannot confirm coordinator startup through source-tagged events.
     // Once this selection is installed, use Expo's loaded status for presentation.
-    isStartingPlayback: networkUX.current?.status === 'starting' && (
-      networkUX.identityAvailable === true ||
-      !(
-        loadedPlayback?.request === playbackRequestRef.current &&
-        loadedPlayback?.authEpoch === authEpochRef.current &&
-        status.isLoaded === true
-      )
-    ),
+    isStartingPlayback:
+      networkUX.current?.status === 'starting' &&
+      (networkUX.identityAvailable === true ||
+        !(
+          loadedPlayback?.request === playbackRequestRef.current &&
+          loadedPlayback?.authEpoch === authEpochRef.current &&
+          status.isLoaded === true
+        )),
     isPlayerVisible,
     setIsPlayerVisible,
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
+    queueControls: {
+      repeatMode,
+      shuffleEnabled,
+      autoplayEnabled,
+      undoMessage: queueUndo?.message,
+      remove: removeQueueTrack,
+      move: moveQueueTrack,
+      clear: clearQueue,
+      undo: undoQueueEdit,
+      enqueue: enqueueTrack,
+      toggleShuffle,
+      cycleRepeatMode,
+      toggleAutoplay,
+    },
     history,
     previousTrack: history.length > 0 ? history[history.length - 1] : null,
     nextTrack: upNextQueue.length > 0 ? upNextQueue[0] : null,

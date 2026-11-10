@@ -76,6 +76,21 @@ describe('MiniPlayerBar', () => {
     expect(renderedTexts).toContain('Next Artist');
   });
 
+  it('opens the full player when pressing the current track', () => {
+    const handleExpand = jest.fn();
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<MiniPlayerBar currentTrack={mockCurrent}
+        isPlayerVisible={false} expandProgress={{ value: 0 }} handleExpand={handleExpand} />);
+    });
+    const { TouchableOpacity } = require('react-native');
+    const track = renderer.root.findAllByType(TouchableOpacity).find(node =>
+      node.props.onPress === handleExpand);
+    act(() => { track.props.onPress(); });
+    expect(handleExpand).toHaveBeenCalledTimes(1);
+    act(() => { renderer.unmount(); });
+  });
+
   it('renders like button to the left of play/pause and handles like toggle', async () => {
     const onToggleLike = jest.fn();
     const togglePlayPause = jest.fn();

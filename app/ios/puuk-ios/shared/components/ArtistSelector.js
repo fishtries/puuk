@@ -74,6 +74,12 @@ export default function ArtistSelector({
       image: 'mic',
     }));
     const actions = [
+      {
+        id: 'artists',
+        title: 'Перейти к исполнителю',
+        image: 'mic',
+        subactions: artistActions,
+      },
       ...(entity?.album_id && onAlbumSelect
         ? [
             {
@@ -84,19 +90,6 @@ export default function ArtistSelector({
             },
           ]
         : []),
-      artists.length === 1
-        ? {
-            ...artistActions[0],
-            title: 'Перейти к исполнителю',
-            subtitle: artists[0].name,
-          }
-        : {
-            id: 'artists',
-            title: 'Перейти к исполнителю',
-            subtitle: display,
-            image: 'mic',
-            subactions: artistActions,
-          },
     ];
     const content = (
       <Text
@@ -112,7 +105,7 @@ export default function ArtistSelector({
         key={target}
         actions={actions}
         themeVariant="dark"
-        shouldOpenOnLongPress={artists.length === 1}
+        shouldOpenOnLongPress={false}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         onPressAction={({ nativeEvent }) => {
           if (currentTarget.current !== target) return;
@@ -126,29 +119,16 @@ export default function ArtistSelector({
           if (selected) onSelect(selected.id);
         }}
       >
-        {artists.length === 1 ? (
-          <TouchableOpacity
-            testID={triggerTestID}
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            accessibilityHint="Удерживайте, чтобы открыть меню"
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            style={controlStyle}
-            onLongPress={() => {}}
-            onPress={() => onSelect(artists[0].id)}
-          >
-            {content}
-          </TouchableOpacity>
-        ) : (
-          <View
-            testID={triggerTestID}
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            style={controlStyle}
-          >
-            {content}
-          </View>
-        )}
+        <View
+          testID={triggerTestID}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          accessibilityHint="Открывает меню исполнителей и альбома"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={controlStyle}
+        >
+          {content}
+        </View>
       </MenuView>
     );
   }

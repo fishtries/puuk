@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text } from 'react-native';
 import Animated, { useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -40,7 +40,7 @@ const ProgressBar = ({
     [seekTo],
   );
 
-  const scrubGesture = Gesture.Pan()
+  const scrubGesture = useMemo(() => Gesture.Pan()
     .onBegin((event) => {
       'worklet';
       isSlidingShared.value = true;
@@ -70,7 +70,8 @@ const ProgressBar = ({
         isSlidingShared.value = false;
         runOnJS(handleSeekEnd)(null);
       }
-    });
+    }), [isSlidingShared, sliderWidthShared, slideProgressShared, durationShared,
+      updateScrubSec, handleSeekEnd]);
 
   // Hardware-accelerated GPU transforms — NO LAYOUT RECALCULATIONS
   const progressFillStyle = useAnimatedStyle(() => {

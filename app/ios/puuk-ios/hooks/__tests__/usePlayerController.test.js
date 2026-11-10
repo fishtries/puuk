@@ -6,6 +6,7 @@ import defaultPlaybackCoordinator from '../../utils/playbackCoordinator';
 import { authFetch } from '../../shared/api/api';
 import { updateSetting } from '../../shared/storage/settings';
 import { recordPlayStart } from '../../shared/api/artists';
+import { queueKey } from '../../utils/queueIdentity';
 
 const mockCoordinatorListeners = new Set();
 const mockAuthListeners = new Set();
@@ -51,6 +52,7 @@ jest.mock('../../utils/playbackCoordinator', () => {
 });
 
 const mockPlayerInstance = {
+  setPlaybackRate: jest.fn(),
   replace: jest.fn(),
   play: jest.fn(),
   pause: jest.fn(),
@@ -154,12 +156,184 @@ describe('usePlayerController', () => {
     });
   });
 
+  test('speed changes live without restarting and survives track changes and pause', async () => {
+    expect(controller.playbackRate).toBe(1);
+    expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);
+    await act(async () => controller.changePlaybackRate(0.85));
+    expect(controller.playbackRate).toBe(0.85);
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(0.85);
+    expect(mockPlayerInstance.play).not.toHaveBeenCalled();
+    expect(mockPlayerInstance.replace).not.toHaveBeenCalled();
+    await act(async () => controller.playTrack({ id: 101, title: 'First' }));
+    await act(async () => controller.togglePlayPause());
+    await act(async () => controller.playTrack({ id: 102, title: 'Next' }));
+    expect(controller.playbackRate).toBe(0.85);
+    expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);
+    await act(async () => controller.changePlaybackRate(1));
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(1);
+  });
+
+  test('preview applies 0.005 steps immediately and commits without another native update', async () => {
+    const beforePreview = controller;
+    await act(async () => controller.changePlaybackRate(0.855, { commit: false }));
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(0.855);
+    expect(controller).toBe(beforePreview);
+    expect(controller.playbackRate).toBe(1);
+    await act(async () => controller.changePlaybackRate(0.85500001, { commit: false }));
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenCalledTimes(1);
+    await act(async () => controller.changePlaybackRate(0.855));
+    expect(controller.playbackRate).toBe(0.855);
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenCalledTimes(1);
+  });
+
+  test('speed rejects invalid values and clamps to the supported UI range', async () => {
+    await act(async () => controller.changePlaybackRate(NaN));
+    expect(mockPlayerInstance.setPlaybackRate).not.toHaveBeenCalled();
+    await act(async () => controller.changePlaybackRate(5));
+    expect(controller.playbackRate).toBe(1.5);
+    await act(async () => controller.changePlaybackRate(0));
+    expect(controller.playbackRate).toBe(0.75);
+  });
+
   test('initial state has default queue and network UX values', () => {
     expect(controller.currentTrack).toBeNull();
     expect(controller.upNextQueue).toEqual([]);
     expect(controller.networkStatus).toBe('good');
     expect(controller.nextTrackStatus).toBe('idle');
     expect(controller.networkError).toBeNull();
+  });
+
+  const queueIds = () => controller.upNextQueue.map((track) => track.id);
+  const startQueue = async () => {
+    await act(async () =>
+      controller.playTrackList(
+        [1, 2, 3, 4].map((id) => ({ id, title: `Track ${id}` })),
+      ),
+    );
+  };
+
+  test('queue edits address occurrences, update preloading and undo without restarting audio', async () => {
+    await startQueue();
+    await act(async () => controller.queueControls.enqueue({ id: 2 }, 'next'));
+    expect(queueIds()).toEqual([2, 2, 3, 4]);
+    const added = controller.upNextQueue[0];
+    const original = controller.upNextQueue[1];
+    expect(queueKey(added)).not.toBe(queueKey(original));
+    const playbackCalls = defaultPlaybackCoordinator.play.mock.calls.length;
+    await act(async () => controller.queueControls.remove(queueKey(added)));
+    expect(queueIds()).toEqual([2, 3, 4]);
+    expect(controller.queueControls.undoMessage).toBeTruthy();
+    await act(async () => controller.queueControls.undo());
+    expect(queueIds()).toEqual([2, 2, 3, 4]);
+    await act(async () =>
+      controller.queueControls.move(
+        queueKey(original),
+        queueKey(controller.upNextQueue[3]),
+      ),
+    );
+    expect(queueIds()).toEqual([2, 3, 4, 2]);
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(
+      playbackCalls,
+    );
+    expect(
+      defaultPlaybackCoordinator.updateQueue.mock.calls
+        .at(-1)[1]
+        .map((track) => track.id),
+    ).toEqual([2, 3, 4, 2]);
+  });
+
+  test('clear and undo leave the current song playing, and a new selection invalidates undo', async () => {
+    await startQueue();
+    await act(async () => controller.queueControls.clear());
+    expect(queueIds()).toEqual([]);
+    expect(controller.currentTrack.id).toBe(1);
+    await act(async () => controller.queueControls.undo());
+    expect(queueIds()).toEqual([2, 3, 4]);
+    await act(async () => controller.queueControls.clear());
+    await act(async () => controller.playTrack({ id: 99 }));
+    await act(async () => controller.queueControls.undo());
+    expect(controller.currentTrack.id).toBe(99);
+    expect(queueIds()).toEqual([]);
+  });
+
+  test('shuffle restores unplayed order, including after metadata changes and additions', async () => {
+    await startQueue();
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      await act(async () => controller.queueControls.toggleShuffle());
+      expect(queueIds()).toEqual([3, 4, 2]);
+      expect(controller.queueControls.shuffleEnabled).toBe(true);
+      await act(async () =>
+        controller.handleToggleLike(controller.upNextQueue[0]),
+      );
+      await act(async () => controller.queueControls.enqueue({ id: 5 }));
+      await act(async () => controller.queueControls.toggleShuffle());
+      expect(queueIds()).toEqual([2, 3, 4, 5]);
+      expect(controller.queueControls.shuffleEnabled).toBe(false);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  test('repeat all cycles the collection before asking for recommendations', async () => {
+    await startQueue();
+    await act(async () => controller.queueControls.cycleRepeatMode());
+    for (let i = 0; i < 4; i++)
+      await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe(1);
+    expect(queueIds()).toEqual([2, 3, 4]);
+    expect(
+      authFetch.mock.calls.some(([url]) => url.includes('/api/wave/queue')),
+    ).toBe(false);
+  });
+
+  test('repeat one replays on finish but manual Next still advances', async () => {
+    await startQueue();
+    await act(async () => {
+      controller.queueControls.cycleRepeatMode();
+      controller.queueControls.cycleRepeatMode();
+    });
+    expect(controller.queueControls.repeatMode).toBe('one');
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe(1);
+    expect(queueIds()).toEqual([2, 3, 4]);
+    expect(defaultPlaybackCoordinator.play.mock.calls.at(-1)[1].id).toBe(1);
+    await act(async () => controller.fetchNextTrack());
+    expect(controller.currentTrack.id).toBe(2);
+  });
+
+  test('autoplay off stops at the end without requesting a recommendation', async () => {
+    await act(async () => controller.playTrackList([{ id: 1 }]));
+    await act(async () => controller.queueControls.toggleAutoplay());
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(
+      authFetch.mock.calls.some(([url]) => url.includes('/api/wave/queue')),
+    ).toBe(false);
+    expect(defaultPlaybackCoordinator.setIntent).toHaveBeenLastCalledWith(
+      mockPlayerInstance,
+      expect.objectContaining({ type: 'pause' }),
+    );
+  });
+
+  test('editing the queue rejects a recommendation response already in flight', async () => {
+    let resolveQueue;
+    authFetch.mockImplementation(async (url) => {
+      if (url.includes('/api/wave/queue'))
+        return new Promise((resolve) => {
+          resolveQueue = resolve;
+        });
+      return { ok: true, json: async () => ({}) };
+    });
+    await act(async () =>
+      controller.playTrack({ id: 1 }, { source: 'search' }),
+    );
+    await act(async () => controller.queueControls.enqueue({ id: 2 }, 'next'));
+    await act(async () =>
+      resolveQueue({ ok: true, json: async () => [{ id: 99 }] }),
+    );
+    expect(queueIds()).toEqual([2]);
+    await act(async () => controller.fetchNextTrack());
+    expect(controller.currentTrack.id).toBe(2);
   });
 
   test.each([false, true])('startup indicator uses loaded status only without native identity (identity=%s)', async (identityAvailable) => {

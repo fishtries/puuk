@@ -45,6 +45,8 @@ export default function PlayerHeader({
   displayTitle,
   handleMenuAction,
   menuActions,
+  menuOnly = false,
+  leadingActions,
 }) {
   const hasNativeMenu = useMemo(() => isNativeMenuAvailable(), []);
 
@@ -89,6 +91,44 @@ export default function PlayerHeader({
     }
   }, [handleMenuAction, menuActions]);
 
+  const menu = (
+    <View style={styles.topHeaderRight}>
+      {leadingActions}
+      <TrackLoadingBadge
+        isLoading={isLoading}
+        isBufferingSlow={isBufferingSlow}
+        networkStatus={networkStatus}
+      />
+
+      {hasNativeMenu ? (
+        <MenuView
+          onPressAction={handleMenuAction}
+          actions={menuActions}
+          shouldOpenOnLongPress={false}
+        >
+          <View
+            style={styles.topMenuButton}
+            accessibilityRole="button"
+            accessibilityLabel="Track options"
+          >
+            <Ionicons name="ellipsis-horizontal" size={17} color="#ffffff" />
+          </View>
+        </MenuView>
+      ) : (
+        <TouchableOpacity
+          onPress={handleFallbackPress}
+          style={styles.topMenuButton}
+          accessibilityRole="button"
+          accessibilityLabel="Track options"
+          activeOpacity={0.7}
+        >
+          <Ionicons name="ellipsis-horizontal" size={17} color="#ffffff" />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+  if (menuOnly) return menu;
+
   return (
     <>
       <TouchableOpacity
@@ -100,45 +140,9 @@ export default function PlayerHeader({
         <View style={styles.topGrabberPill} />
       </TouchableOpacity>
 
-      <View style={styles.topHeaderRow}>
-        <View style={{ flex: 1 }} />
-        <View style={styles.topHeaderRight}>
-          <TrackLoadingBadge
-            isLoading={isLoading}
-            isBufferingSlow={isBufferingSlow}
-            networkStatus={networkStatus}
-          />
-
-          {hasNativeMenu ? (
-            <MenuView
-              onPressAction={handleMenuAction}
-              actions={menuActions}
-              shouldOpenOnLongPress={false}
-            >
-              <View
-                style={styles.topMenuButton}
-                accessibilityRole="button"
-                accessibilityLabel="Track options"
-              >
-                <Ionicons
-                  name="ellipsis-horizontal"
-                  size={17}
-                  color="#ffffff"
-                />
-              </View>
-            </MenuView>
-          ) : (
-            <TouchableOpacity
-              onPress={handleFallbackPress}
-              style={styles.topMenuButton}
-              accessibilityRole="button"
-              accessibilityLabel="Track options"
-              activeOpacity={0.7}
-            >
-              <Ionicons name="ellipsis-horizontal" size={17} color="#ffffff" />
-            </TouchableOpacity>
-          )}
-        </View>
+      <View style={styles.topHeaderRow} pointerEvents="box-none">
+        <View style={{ flex: 1 }} pointerEvents="none" />
+        {menu}
       </View>
     </>
   );

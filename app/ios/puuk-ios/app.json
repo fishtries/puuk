@@ -12,7 +12,9 @@
       "bundleIdentifier": "com.fishtries.puuk",
       "buildNumber": "1",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -27,9 +29,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       }
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       [
@@ -54,6 +53,10 @@
           "photosPermission": "Puuk requires access to your photos to set custom playlist and track artwork."
         }
       ]
+    ],
+    "platforms": [
+      "ios",
+      "android"
     ]
   }
 }

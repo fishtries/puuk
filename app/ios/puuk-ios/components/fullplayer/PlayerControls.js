@@ -1,4 +1,4 @@
-import React, { useMemo, useLayoutEffect } from 'react';
+import React, { useMemo, useLayoutEffect, useCallback, useEffect } from 'react';
 import { View, Pressable, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SymbolView } from 'expo-symbols';
@@ -18,12 +18,15 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ChasingArrowsIcon from './ChasingArrowsIcon';
 import ProgressBar from './ProgressBar';
+import PlaybackSpeedControl from './PlaybackSpeedControl';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const AnimatedTouchableOpacity =
   Animated.createAnimatedComponent(TouchableOpacity);
 
 const PlayerControls = ({
+  playbackRate = 1,
+  onPlaybackRateChange,
   styles,
   isEffectivelyCompact,
   isPlaying,
@@ -199,13 +202,13 @@ const PlayerControls = ({
     };
   });
 
-  const handleExitCompact = () => {
+  const handleExitCompact = useCallback(() => {
     if (triggerExitCompactMode) {
       triggerExitCompactMode();
     } else if (exitCompactMode) {
       exitCompactMode();
     }
-  };
+  }, [triggerExitCompactMode, exitCompactMode]);
 
   const swipeUpCompactGesture = useMemo(() => {
     return Gesture.Pan()
@@ -218,7 +221,27 @@ const PlayerControls = ({
           runOnJS(handleExitCompact)();
         }
       });
-  }, [isEffectivelyCompact, triggerExitCompactMode, exitCompactMode]);
+  }, [isEffectivelyCompact, handleExitCompact]);
+
+  // Keep native recognizers attached across audio-position renders. Replacing
+  // them during a touch can cancel press-out and repeatedly restart press-in.
+  const controlsGesture = useMemo(() => Gesture.Simultaneous(
+    bottomSwipeGesture, swipeUpCompactGesture,
+  ), [bottomSwipeGesture, swipeUpCompactGesture]);
+
+  const releasePressFeedback = useCallback(() => {
+    backPressScale.value = withSpring(1, { damping: 14, stiffness: 180, mass: 0.7 });
+    nextPressScale.value = withSpring(1, { damping: 14, stiffness: 180, mass: 0.7 });
+    playPausePressScale.value = withSpring(1, { damping: 14, stiffness: 180, mass: 0.7 });
+    backHighlightOpacity.value = withTiming(0, { duration: 240 });
+    nextHighlightOpacity.value = withTiming(0, { duration: 240 });
+    playPauseHighlightOpacity.value = withTiming(0, { duration: 240 });
+  }, [backPressScale, nextPressScale, playPausePressScale,
+    backHighlightOpacity, nextHighlightOpacity, playPauseHighlightOpacity]);
+
+  useEffect(() => {
+    releasePressFeedback();
+  }, [isPlaying, isEffectivelyCompact, isLyricsView, isQueueVisible, releasePressFeedback]);
 
   const sideBtnContainerStyle = useAnimatedStyle(() => {
     const size = interpolate(compactProgress.value, [0, 1], [64, 48]);
@@ -293,13 +316,9 @@ const PlayerControls = ({
   });
 
   return (
-    <Animated.View style={{ width: '100%', zIndex: 20 }}>
-      <GestureDetector
-        gesture={Gesture.Simultaneous(
-          bottomSwipeGesture,
-          swipeUpCompactGesture,
-        )}
-      >
+    <Animated.View style={{ width: '100%', zIndex: 20 }}
+      onTouchEnd={releasePressFeedback} onTouchCancel={releasePressFeedback}>
+      <GestureDetector gesture={controlsGesture}>
         <Animated.View
           layout={LinearTransition.springify()}
           style={{ width: '100%' }}
@@ -534,6 +553,14 @@ const PlayerControls = ({
                   </Animated.View>
                 </AnimatedTouchableOpacity>
               </Animated.View>
+
+              {!isEffectivelyCompact && onPlaybackRateChange && (
+                <PlaybackSpeedControl
+                  rate={playbackRate}
+                  onChange={onPlaybackRateChange}
+                  onOpen={notifyUserInteraction}
+                />
+              )}
 
               {!isEffectivelyCompact && (
                 <Animated.View

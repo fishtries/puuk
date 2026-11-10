@@ -24,6 +24,7 @@ import { getTrackId } from '../../../shared/domain/trackAdapter';
 
 import Animated, {
   useSharedValue,
+  useReducedMotion,
   useAnimatedStyle,
   withSpring,
   withTiming,
@@ -38,6 +39,10 @@ import AnimatedLyricLine from './AnimatedLyricLine';
 import { TopBlurOverlay, BottomBlurOverlay } from '../BlurOverlays';
 import { computeActiveLyricIndex } from './lyricDepth';
 import { parsePlainLyrics } from './plainLyrics';
+import {
+  validateAndParseWordLyrics,
+  computeActiveWordLineIndex,
+} from './wordLyricsParser';
 
 const createLyricsStyles = ({
   width,
@@ -179,6 +184,7 @@ const AppleLyricsView = ({
   const [lyrics, setLyrics] = useState([]);
   const [plainLyricsText, setPlainLyricsText] = useState('');
   const [hasSyncedLyrics, setHasSyncedLyrics] = useState(false);
+  const [hasWordLyrics, setHasWordLyrics] = useState(false);
   const isLyricsMountedRef = useRef(false);
   isLyricsMountedRef.current = isLyricsMounted;
 
@@ -325,6 +331,8 @@ const AppleLyricsView = ({
   onCloseRef.current = onClose;
 
   const trackId = getTrackId(currentTrack);
+  const trackIdRef = useRef(trackId);
+  trackIdRef.current = trackId;
 
   // Reset flags and scroll positions on track change
   useEffect(() => {
@@ -371,13 +379,51 @@ const AppleLyricsView = ({
     };
   }, []);
 
-  // Fetch track lyrics
+  // Fetch track lyrics with race-condition guard (A -> B -> A) and HTTP status check
   useEffect(() => {
-    if (trackId !== null) {
+    let isCancelled = false;
+    const currentTrackId = trackId;
+
+    if (
+      currentTrackId !== null &&
+      currentTrackId !== undefined &&
+      String(currentTrackId).trim() !== ''
+    ) {
       setIsLoadingLyrics(true);
-      authFetch(`/api/tracks/${encodeURIComponent(String(trackId))}/lyrics`)
-        .then((res) => res.json())
+      setLyrics([]);
+      setPlainLyricsText('');
+      setHasSyncedLyrics(false);
+      setHasWordLyrics(false);
+
+      authFetch(`/api/tracks/${encodeURIComponent(String(currentTrackId))}/lyrics`)
+        .then((res) => {
+          if (
+            res.ok === false ||
+            (res.status !== undefined && (res.status < 200 || res.status >= 300))
+          ) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return res.json();
+        })
         .then((data) => {
+          if (isCancelled || trackIdRef.current !== currentTrackId) {
+            return;
+          }
+
+          if (data && data.wordLyrics) {
+            const parsedWord = validateAndParseWordLyrics(data.wordLyrics, currentTrackId);
+            if (parsedWord) {
+              setHasWordLyrics(true);
+              setHasSyncedLyrics(true);
+              setLyrics(parsedWord.lines);
+              const plain =
+                data.plainLyrics || parsedWord.lines.map((l) => l.text).join('\n');
+              setPlainLyricsText(plain);
+              return;
+            }
+          }
+
+          setHasWordLyrics(false);
           if (data && data.lyrics) {
             const raw = data.lyrics;
             const isSynced =
@@ -397,52 +443,63 @@ const AppleLyricsView = ({
           }
         })
         .catch(() => {
+          if (isCancelled || trackIdRef.current !== currentTrackId) {
+            return;
+          }
           setLyrics([]);
           setPlainLyricsText('');
           setHasSyncedLyrics(false);
+          setHasWordLyrics(false);
         })
-        .finally(() => setIsLoadingLyrics(false));
+        .finally(() => {
+          if (!isCancelled && trackIdRef.current === currentTrackId) {
+            setIsLoadingLyrics(false);
+          }
+        });
     } else {
       setLyrics([]);
       setPlainLyricsText('');
       setHasSyncedLyrics(false);
+      setHasWordLyrics(false);
       setIsLoadingLyrics(false);
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [trackId]);
 
-  // Active lyric index computation
+  // Active lyric index computation (word-level or line-level)
   const activeIndex = useMemo(() => {
     if (!hasSyncedLyrics || lyrics.length === 0) return -1;
+    if (hasWordLyrics) {
+      return computeActiveWordLineIndex(lyrics, currentTime);
+    }
     return computeActiveLyricIndex(lyrics, currentTime);
-  }, [hasSyncedLyrics, lyrics, currentTime]);
+  }, [hasSyncedLyrics, hasWordLyrics, lyrics, currentTime]);
 
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
 
-  // Focal position calculation: optical center at 40% of viewport
-  useEffect(() => {
-    if (!isLyricsView && !isLyricsMounted) return;
-    if (activeIndex < 0 || !hasSyncedLyrics) {
-      setBaseTargetY(0);
-      return;
-    }
-
-    // Freeze autoscroll while user is manually scrolling
-    if (isManualScrolling) {
-      return;
-    }
-
+  // Resolve focus in the same render as highlighting. An effect-driven target
+  // gives the new active line one commit of color with its old position.
+  let focusedTargetY = baseTargetY;
+  if (!isManualScrolling && (isLyricsView || isLyricsMounted)) {
     const focalY = Math.max(160, height * 0.4);
     const layout = lyricLayouts.current[activeIndex];
     const lineTop = layout ? layout.y : activeIndex * 80;
     const lineHeight = layout ? layout.height : 44;
-    const newTarget = -(lineTop - focalY + lineHeight / 2);
-    setBaseTargetY((prev) => {
-      const next = Math.abs(prev - newTarget) > 0.5 ? newTarget : prev;
-      baseTargetYShared.value = next;
-      return next;
-    });
-  }, [activeIndex, isManualScrolling, height, hasSyncedLyrics]);
+    focusedTargetY = activeIndex < 0 || !hasSyncedLyrics
+      ? 0 : -(lineTop - focalY + lineHeight / 2);
+  }
+
+  useEffect(() => {
+    setBaseTargetY((previous) => Math.abs(previous - focusedTargetY) > 0.5 ? focusedTargetY : previous);
+  }, [focusedTargetY]);
+
+  useEffect(() => {
+    baseTargetYShared.value = baseTargetY;
+  }, [baseTargetY, baseTargetYShared]);
 
   // Record line layout from children
   const handleLineLayout = useCallback((index, y, lineHeight) => {
@@ -450,11 +507,7 @@ const AppleLyricsView = ({
     if (index === activeIndexRef.current && !isManualScrollingRef.current) {
       const focalY = Math.max(160, heightRef.current * 0.4);
       const newTarget = -(y - focalY + (lineHeight || 44) / 2);
-      setBaseTargetY((prev) => {
-        const next = Math.abs(prev - newTarget) > 0.5 ? newTarget : prev;
-        baseTargetYShared.value = next;
-        return next;
-      });
+      setBaseTargetY((prev) => Math.abs(prev - newTarget) > 0.5 ? newTarget : prev);
     }
   }, []);
 
@@ -478,6 +531,7 @@ const AppleLyricsView = ({
   }, []);
 
   const scheduleManualScrollResume = useCallback(() => {
+    if (!isManualScrollingRef.current) return;
     if (manualScrollTimeoutRef.current) {
       clearTimeout(manualScrollTimeoutRef.current);
     }
@@ -485,26 +539,31 @@ const AppleLyricsView = ({
       resetInactivityTimer();
     }
     manualScrollTimeoutRef.current = setTimeout(() => {
-      manualScrollY.value = withSpring(
-        0,
-        {
-          damping: 26,
-          stiffness: 200,
-          mass: 0.8,
-        },
-        (finished) => {
-          'worklet';
-          if (finished) {
-            runOnJS(handleManualScrollFinished)();
-          }
-        },
-      );
+      // Resume even if the return animation is interrupted or has zero distance.
+      handleManualScrollFinished();
+      cancelAnimation(manualScrollY);
+      manualScrollY.value = withSpring(0, {
+        damping: 26,
+        stiffness: 200,
+        mass: 0.8,
+      });
     }, 3000);
   }, [resetInactivityTimer, handleManualScrollFinished, manualScrollY]);
+
+  // Native touch completion is a fallback when a recognizer is detached or
+  // cancelled before its worklet finalizer reaches JS. It also covers taps.
+  const handleLyricsTouchFinished = useCallback(() => {
+    if (isManualScrollingRef.current) {
+      scheduleManualScrollResume();
+    } else {
+      resetInactivityTimer();
+    }
+  }, [scheduleManualScrollResume, resetInactivityTimer]);
 
   // Handle line click: cancel manual scroll, reset offset, and seek
   const handleLineClick = useCallback(
     (time) => {
+      setIsInitialMount(true);
       if (manualScrollTimeoutRef.current) {
         clearTimeout(manualScrollTimeoutRef.current);
       }
@@ -584,6 +643,10 @@ const AppleLyricsView = ({
             deceleration: 0.998,
           });
         }
+      })
+      .onFinalize(() => {
+        'worklet';
+        // Also runs for cancellation by another gesture / system interruption.
         runOnJS(scheduleManualScrollResume)();
       });
   }, [
@@ -619,39 +682,69 @@ const AppleLyricsView = ({
         insets,
         isEffectivelyCompact,
       }),
-    [width, height, insets, isEffectivelyCompact],
+    [width, height, insets?.top, insets?.bottom, isEffectivelyCompact],
+  );
+
+  const currentMs = Math.round((currentTime || 0) * 1000);
+  const playbackMs = useSharedValue(currentMs);
+  const lastPlaybackMs = useRef(currentMs);
+  const reducedMotion = useReducedMotion();
+  useEffect(() => {
+    const delta = currentMs - lastPlaybackMs.current;
+    lastPlaybackMs.current = currentMs;
+    // Smooth observed audio positions only; never extrapolate past a pause.
+    playbackMs.value = reducedMotion || delta <= 0 || delta > 250
+      ? currentMs
+      : withTiming(currentMs, { duration: 100, easing: Easing.linear });
+  }, [currentMs, playbackMs, reducedMotion]);
+
+  const linePressHandlers = useMemo(
+    () => lyrics.map((line) => () => handleLineClick(line.time)),
+    [lyrics, handleLineClick],
   );
 
   const renderedSyncedLyrics = useMemo(() => {
+    if (!isLyricsView && !isLyricsMounted) return null;
     if (!hasSyncedLyrics || lyrics.length === 0) return null;
     return lyrics.map((line, idx) => {
       const isActive = activeIndex >= 0 && idx === activeIndex;
       return (
         <AnimatedLyricLine
-          key={idx}
+          key={line.id || idx}
           text={line.text}
           index={idx}
           activeIndex={activeIndex}
-          targetY={baseTargetY}
+          targetY={focusedTargetY}
           isActive={isActive}
           isInitial={isInitialMount}
           isManualScrolling={isManualScrolling}
           baseStyle={styles.lyricLine}
           onLayout={handleLineLayout}
-          onPress={() => handleLineClick(line.time)}
+          onPress={linePressHandlers[idx]}
+          words={line.words}
+          segments={line.segments}
+          hasWordTimings={Boolean(line.hasWordTimings)}
+          currentMs={line.hasWordTimings
+            ? currentMs < line.startMs ? -1 : Math.min(currentMs, line.endMs + 60)
+            : currentMs}
+          playbackMs={playbackMs}
         />
       );
     });
   }, [
+    isLyricsView,
+    isLyricsMounted,
     hasSyncedLyrics,
     lyrics,
     activeIndex,
-    baseTargetY,
+    focusedTargetY,
     isInitialMount,
     isManualScrolling,
     styles.lyricLine,
     handleLineLayout,
-    handleLineClick,
+    linePressHandlers,
+    currentMs,
+    playbackMs,
   ]);
 
   const renderedPlainLyrics = useMemo(() => {
@@ -777,7 +870,9 @@ const AppleLyricsView = ({
             ) : hasSyncedLyrics && lyrics.length > 0 ? (
               /* Synced Lyrics with Staggered Traffic-Jam Wave Propagation */
               <GestureDetector gesture={panGesture}>
-                <Animated.View style={styles.syncedLyricsWrapper}>
+                <Animated.View style={styles.syncedLyricsWrapper}
+                  onTouchEnd={handleLyricsTouchFinished}
+                  onTouchCancel={handleLyricsTouchFinished}>
                   <Animated.View
                     style={[styles.syncedLyricsList, animatedListStyle]}
                     onLayout={(e) => {

@@ -227,6 +227,16 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
             });
           }
         }
+      })
+      .onFinalize((_event, success) => {
+        'worklet';
+        if (success) return;
+        if (expandProgress) {
+          expandProgress.value = withTiming(0, { duration: 250 });
+        }
+        if (dismissDragY) {
+          dismissDragY.value = withSpring(0, { damping: 24, stiffness: 240 });
+        }
       });
   }, [
     currentTrack,

@@ -6,7 +6,7 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import { easeGradient } from 'react-native-easing-gradient';
 import Animated from 'react-native-reanimated';
 
-export const TopBlurOverlay = ({ animatedBgStyle, insets }) => {
+export const TopBlurOverlay = React.memo(({ animatedBgStyle, insets }) => {
   const { colors, locations } = easeGradient({
     colorStops: {
       0: { color: 'rgba(0,0,0,1)' },
@@ -50,9 +50,9 @@ export const TopBlurOverlay = ({ animatedBgStyle, insets }) => {
       </MaskedView>
     </View>
   );
-};
+});
 
-export const BottomBlurOverlay = ({ insets }) => {
+export const BottomBlurOverlay = React.memo(({ insets }) => {
   const { colors, locations } = easeGradient({
     colorStops: {
       0: { color: 'rgba(0,0,0,0)' },
@@ -90,4 +90,4 @@ export const BottomBlurOverlay = ({ insets }) => {
       </MaskedView>
     </View>
   );
-};
+});

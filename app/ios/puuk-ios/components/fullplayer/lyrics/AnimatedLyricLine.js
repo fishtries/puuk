@@ -1,15 +1,62 @@
-import React, { useEffect, useRef } from 'react';
-import { Pressable } from 'react-native';
+import React, { useLayoutEffect, useState, useCallback, useMemo, memo } from 'react';
+import { Pressable, View, Text, StyleSheet } from 'react-native';
+import MaskedView from '@react-native-masked-view/masked-view';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
   withDelay,
-  Easing,
   interpolateColor,
+  useReducedMotion,
 } from 'react-native-reanimated';
 import { getProgressiveValues, getWaveSpring } from './lyricDepth';
+
+const useLyricsReducedMotion = useReducedMotion || (() => false);
+
+export const wordSweepProgress = (segment, currentMs) => {
+  'worklet';
+  return Math.max(0, Math.min(1, (currentMs - segment.startMs) / (segment.endMs - segment.startMs)));
+};
+
+const wordPhase = (segment, ms) => ms < segment.startMs ? 0 : ms >= segment.endMs + 60 ? 2 : 1;
+
+// Only sounding words run a sweep worklet and allocate a native mask.
+const WordSweep = ({ width, segment, playbackMs, textStyle }) => {
+  const sweepStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: -width * 2.1 + width * 1.2 * wordSweepProgress(segment, playbackMs.value) }],
+  }));
+  return (
+    <MaskedView pointerEvents="none" accessible={false}
+      style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}
+      maskElement={<Text style={[textStyle, { color: 'black' }]}>{segment.text}</Text>}>
+      <Animated.View style={[{ width: width * 3, height: '100%',
+        transform: [{ translateX: -width * 2.1 }] }, sweepStyle]}>
+        <LinearGradient colors={['#fff', '#fff', 'rgba(255,255,255,0)']}
+          locations={[0, 0.64, 0.7]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+          style={StyleSheet.absoluteFill} />
+      </Animated.View>
+    </MaskedView>
+  );
+};
+
+// Keep the measured word mounted across all phases. Both the initial native
+// style and the worklet start the sweep outside the glyphs, without layout work.
+const TimedWord = memo(({ segment, playbackMs, textStyle, phase }) => {
+  const [width, setWidth] = useState(0);
+  const handleLayout = useCallback((event) => {
+    const measured = event.nativeEvent.layout.width;
+    setWidth((previous) => Math.abs(previous - measured) > 0.5 ? measured : previous);
+  }, []);
+  return (
+    <View accessible={false} onLayout={handleLayout}>
+      <Text style={[textStyle, { color: phase === 2 ? '#fff' : 'rgba(215,215,225,0.40)' }]}>{segment.text}</Text>
+      {phase === 1 && width > 0 && <WordSweep width={width} segment={segment}
+        playbackMs={playbackMs} textStyle={textStyle} />}
+    </View>
+  );
+});
 
 /**
  * AnimatedLyricLine: Individual lyric line with staggered traffic-jam spring wave propagation.
@@ -21,6 +68,11 @@ import { getProgressiveValues, getWaveSpring } from './lyricDepth';
  * - Ahead lines (index < activeIndex) follow with cascade pull upward (45ms, 100ms, ...)
  * - When manual scrolling occurs (isManualScrolling = true), wave delay is disabled (0ms)
  *   and all lines scroll synchronously as a single solid unit with full clarity.
+ *
+ * Word timings drive a masked gradient sweep through each glyph. Completed
+ * words remain filled; future words keep a dim base. Layout is measured once
+ * per word, without moving or scaling the letters during highlighting.
+ * Lines without timings retain the existing line-level presentation.
  */
 const AnimatedLyricLine = ({
   text,
@@ -33,7 +85,13 @@ const AnimatedLyricLine = ({
   baseStyle,
   onLayout,
   onPress,
+  words,
+  segments,
+  hasWordTimings = false,
+  currentMs = 0,
+  playbackMs,
 }) => {
+  const reducedMotion = useLyricsReducedMotion();
   const progressive = isManualScrolling
     ? isActive
       ? { scale: 1.03, opacity: 1.0, blur: 0 }
@@ -41,13 +99,10 @@ const AnimatedLyricLine = ({
     : getProgressiveValues(index, activeIndex);
 
   const spring = getWaveSpring(index, activeIndex, isInitial, isManualScrolling);
-  const delayMs = Math.round((spring.delay || 0) * 1000);
-  const springStiffness = spring.stiffness;
-  const springDamping = spring.damping;
-  const springMass = spring.mass;
-
-  const targetYRef = useRef(targetY);
-  targetYRef.current = targetY;
+  const delayMs = reducedMotion ? 0 : Math.round((spring.delay || 0) * 1000);
+  const springStiffness = reducedMotion ? 400 : spring.stiffness;
+  const springDamping = reducedMotion ? 40 : spring.damping;
+  const springMass = reducedMotion ? 0.3 : spring.mass;
 
   const lineY = useSharedValue(targetY);
   const lineScale = useSharedValue(progressive.scale);
@@ -56,9 +111,9 @@ const AnimatedLyricLine = ({
     isActive ? 1.0 : (Math.abs(index - activeIndex) <= 1 ? 0.6 : 0.25)
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Initial mount or track reset: snap without animation
-    if (isInitial) {
+    if (isInitial || reducedMotion) {
       lineY.value = targetY;
       lineScale.value = progressive.scale;
       lineOpacity.value = progressive.opacity;
@@ -118,6 +173,7 @@ const AnimatedLyricLine = ({
     activeIndex,
     isActive,
     isInitial,
+    reducedMotion,
     isManualScrolling,
     index,
     progressive.scale,
@@ -150,23 +206,84 @@ const AnimatedLyricLine = ({
     };
   });
 
+  const resolvedStyle = useMemo(() => StyleSheet.flatten(baseStyle) || {}, [baseStyle]);
+  const { marginVertical, marginTop, marginBottom } = resolvedStyle;
+  const wordTextStyle = useMemo(() => {
+    const { marginVertical, marginTop, marginBottom, ...typography } = resolvedStyle;
+    return typography;
+  }, [resolvedStyle]);
+  const handleLayout = useCallback((event) => {
+    const { y, height } = event.nativeEvent.layout;
+    onLayout?.(index, y, height);
+  }, [index, onLayout]);
+
+  // Render content with word-level highlights if applicable
+  const renderLineContent = () => {
+    if (!hasWordTimings || !segments || segments.length === 0) {
+      return text;
+    }
+
+    // Scroll focus does not control whether a sounding word is highlighted.
+    if (hasWordTimings) {
+      return segments.map((seg, i) => {
+        if (!seg.isWord) {
+          return (
+            <Text key={`sep-${i}`} style={[wordTextStyle, { color: 'rgba(215,215,225,0.40)' }]}>
+              {seg.text}
+            </Text>
+          );
+        }
+
+        const phase = wordPhase(seg, currentMs);
+        if (!playbackMs) {
+          return <Text key={seg.id || `word-${i}`} style={[wordTextStyle,
+            { color: phase === 2 ? '#fff' : 'rgba(215,215,225,0.40)' }]}>{seg.text}</Text>;
+        }
+        return (
+          <TimedWord key={seg.id || `word-${i}`} segment={seg}
+            playbackMs={playbackMs} textStyle={wordTextStyle} phase={phase} />
+        );
+      });
+    }
+
+    // Lines without timings retain the existing uniform coloring.
+    return text;
+  };
+
   return (
-    <Animated.View
-      onLayout={(e) => onLayout && onLayout(index, e.nativeEvent.layout.y, e.nativeEvent.layout.height)}
-    >
+    <View collapsable={false} onLayout={handleLayout}>
       <Pressable
         onPress={onPress}
         disabled={!onPress}
+        accessibilityLabel={text}
+        accessibilityRole="button"
+        accessibilityHint="Tap to seek to this line"
         style={({ pressed }) => [{ opacity: pressed ? 0.8 : 1 }]}
       >
         <Animated.View style={animatedLineStyle}>
-          <Animated.Text style={[baseStyle, animatedTextStyle]}>
-            {text}
-          </Animated.Text>
+          {hasWordTimings ? (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline',
+              marginTop: marginTop ?? marginVertical, marginBottom: marginBottom ?? marginVertical }}>
+              {renderLineContent()}
+            </View>
+          ) : (
+            <Animated.Text style={[baseStyle, animatedTextStyle]}>{text}</Animated.Text>
+          )}
         </Animated.View>
       </Pressable>
-    </Animated.View>
+    </View>
   );
 };
 
-export default AnimatedLyricLine;
+// Status updates need a React render only when a word changes state or the
+// line's layout/focus props change. Pauses and seeks use the same comparison.
+export default memo(AnimatedLyricLine, (previous, next) => {
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (key !== 'currentMs' && !Object.is(previous[key], next[key])) return false;
+  }
+  if (!next.hasWordTimings) return true;
+  if (previous.currentMs === next.currentMs) return true;
+  return (next.segments || []).every((segment) => !segment.isWord ||
+    wordPhase(segment, previous.currentMs) === wordPhase(segment, next.currentMs));
+});

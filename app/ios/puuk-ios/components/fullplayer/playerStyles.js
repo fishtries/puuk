@@ -2,6 +2,9 @@ import { Dimensions, StyleSheet } from 'react-native';
 
 const { width, height } = Dimensions.get('window');
 
+export const QUEUE_COVER_SIZE = 54;
+export const PLAYER_HEADER_CONTENT_GAP = 12;
+
 const styles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
@@ -31,8 +34,8 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    marginBottom: 2,
+    paddingTop: 6,
+    marginBottom: PLAYER_HEADER_CONTENT_GAP,
   },
   topGrabberPill: {
     width: 38,

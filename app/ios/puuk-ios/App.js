@@ -9,6 +9,7 @@ import React, {
 import { StatusBar } from 'expo-status-bar';
 import {
   View,
+  Text,
   Dimensions,
   StyleSheet,
   ActivityIndicator,
@@ -79,6 +80,12 @@ function AppContent() {
   const insets = useSafeAreaInsets();
   const [trackToAdd, setTrackToAdd] = useState(null);
   const [trackToManage, setTrackToManage] = useState(null);
+  const [queueNotice, setQueueNotice] = useState(null);
+  useEffect(() => {
+    if (!queueNotice) return;
+    const timer = setTimeout(() => setQueueNotice(null), 2500);
+    return () => clearTimeout(timer);
+  }, [queueNotice]);
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [restoreError, setRestoreError] = useState(null);
@@ -104,6 +111,8 @@ function AppContent() {
   const {
     player,
     status,
+    playbackRate,
+    changePlaybackRate,
     currentTrack,
     setCurrentTrack,
     isPlaying,
@@ -114,6 +123,7 @@ function AppContent() {
     playerExpandToken,
     requestExpandPlayer,
     upNextQueue,
+    queueControls,
     history,
     previousTrack: controllerPrevTrack,
     nextTrack: controllerNextTrack,
@@ -452,6 +462,14 @@ function AppContent() {
             stiffness: 240,
           });
         }
+      })
+      .onFinalize((_event, success) => {
+        'worklet';
+        if (success) return;
+        // A cancelled opening must not leave a partial expansion hiding the
+        // mini-player while React still considers the full player closed.
+        expandProgress.value = withTiming(0, { duration: 250 });
+        dismissDragY.value = withSpring(0, { damping: 24, stiffness: 240 });
       });
 
     const horizontalGesture = Gesture.Pan()
@@ -785,6 +803,8 @@ function AppContent() {
 
       {/* СЛОЙ 0 (ПОДЛОЖКА): Плеер на весь экран под карточкой */}
       <FullPlayerModal
+        playbackRate={playbackRate}
+        onPlaybackRateChange={changePlaybackRate}
         isPlayerVisible={isPlayerVisible}
         playerExpandToken={playerExpandToken}
         onExpand={handleExpand}
@@ -799,6 +819,7 @@ function AppContent() {
         isLoading={isLoading || isStartingPlayback}
         seekTo={handleSeekTo}
         upNextQueue={upNextQueue}
+        queueControls={queueControls}
         history={history}
         previousTrack={previousTrack}
         nextTrack={nextTrack}
@@ -910,7 +931,38 @@ function AppContent() {
         onClose={handleCloseManageModal}
         onAddToPlaylist={setTrackToAdd}
         onEditTrack={handleEditTrack}
+        onPlayNext={(track) => {
+          if (!currentTrack) playTrack(track);
+          else if (queueControls.enqueue(track, 'next'))
+            setQueueNotice({ text: 'Будет играть следующим' });
+        }}
+        onEnqueue={(track) => {
+          if (!currentTrack) playTrack(track);
+          else if (queueControls.enqueue(track))
+            setQueueNotice({ text: 'Добавлено в конец очереди' });
+        }}
       />
+
+      {queueNotice && (
+        <View
+          pointerEvents="none"
+          accessibilityLiveRegion="polite"
+          style={{
+            position: 'absolute',
+            bottom: bottomBarHeight + 86,
+            left: 30,
+            right: 30,
+            backgroundColor: '#28252d',
+            borderRadius: 16,
+            padding: 16,
+            zIndex: 100,
+          }}
+        >
+          <Text style={{ color: 'white', textAlign: 'center', fontSize: 15 }}>
+            {queueNotice.text}
+          </Text>
+        </View>
+      )}
 
       <AddToPlaylistModal
         visible={!!trackToAdd}
@@ -954,5 +1006,8 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'transparent',
+    // This sibling must sit above FullPlayerModal's background (zIndex: 1).
+    // The zIndex inside MiniPlayerBar cannot lift it out of this wrapper.
+    zIndex: 30,
   },
 });

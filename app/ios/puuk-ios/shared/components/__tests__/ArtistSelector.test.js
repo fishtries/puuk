@@ -106,7 +106,7 @@ test.each(['identity', 'revision'])(
   },
 );
 
-test('native long press offers album and artist with subtitles; tap opens the artist', () => {
+test('native menu uses a participant folder before the album even for one artist', () => {
   Constants.appOwnership = 'standalone';
   const select = jest.fn();
   const selectAlbum = jest.fn();
@@ -127,23 +127,45 @@ test('native long press offers album and artist with subtitles; tap opens the ar
     );
   });
   const menu = tree.root.findByType(MenuView);
-  expect(menu.props.shouldOpenOnLongPress).toBe(true);
+  expect(menu.props.shouldOpenOnLongPress).toBe(false);
   expect(menu.props.actions).toEqual([
+    expect.objectContaining({
+      id: 'artists',
+      image: 'mic',
+      subactions: [{ id: 'artist:a', title: 'Artist A', image: 'mic' }],
+    }),
     expect.objectContaining({
       id: 'album',
       subtitle: 'Album A',
       image: 'square.stack',
     }),
-    expect.objectContaining({
-      id: 'artist:a',
-      subtitle: 'Artist A',
-      image: 'mic',
-    }),
   ]);
-  act(() => tree.root.findByProps({ testID: 'artist-button' }).props.onPress());
+  expect(
+    tree.root.findByProps({ testID: 'artist-button' }).props.onPress,
+  ).toBeUndefined();
+  act(() => menu.props.onPressAction({ nativeEvent: { event: 'artist:a' } }));
   expect(select).toHaveBeenCalledWith('a');
   act(() => menu.props.onPressAction({ nativeEvent: { event: 'album' } }));
   expect(selectAlbum).toHaveBeenCalledWith('album-1');
+});
+
+test('a wave track without an album uses the same native participant folder', () => {
+  Constants.appOwnership = 'standalone';
+  const select = jest.fn();
+  let tree;
+  act(() => {
+    tree = TestRenderer.create(render({ artists: [credits[0]] }, select));
+  });
+  const menu = tree.root.findByType(MenuView);
+  expect(menu.props.shouldOpenOnLongPress).toBe(false);
+  expect(menu.props.actions).toEqual([
+    expect.objectContaining({
+      id: 'artists',
+      subactions: [{ id: 'artist:a', title: 'Artist A', image: 'mic' }],
+    }),
+  ]);
+  act(() => menu.props.onPressAction({ nativeEvent: { event: 'artist:a' } }));
+  expect(select).toHaveBeenCalledWith('a');
 });
 
 test('native artist folder selects participants and rejects selections from a previous track', () => {

@@ -6,6 +6,7 @@ import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
 import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
 import { ActionSheetIOS, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
 import Constants from 'expo-constants';
 
 jest.mock('@expo/vector-icons', () => ({
@@ -84,7 +85,7 @@ jest.mock('react-native-reanimated', () => {
       View,
       Text,
     },
-    useSharedValue: (init) => ({ value: init }),
+    useSharedValue: (init) => require('react').useRef({ value: init }).current,
     useAnimatedStyle: (fn) => fn(),
     withSpring: (to) => to,
     withTiming: (to) => to,
@@ -93,6 +94,7 @@ jest.mock('react-native-reanimated', () => {
     runOnJS: (fn) => fn,
     interpolate: () => 1,
     Extrapolation: { CLAMP: 'clamp' },
+    ReduceMotion: { System: 'system' },
     Easing: {
       bezier: () => () => {},
     },
@@ -109,6 +111,46 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     artist: 'Queen',
     coverArt: 'https://puuk.app/cover.jpg',
   };
+
+  it('gives each detector its own gesture, including controls and the footer', async () => {
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<FullPlayerModal isPlayerVisible currentTrack={mockTrack} />);
+    });
+    const controls = renderer.root.findByType('PlayerControls');
+    const gestures = renderer.root.findAllByType(GestureDetector).map(node => node.props.gesture);
+    gestures.push(controls.props.bottomSwipeGesture);
+    expect(new Set(gestures).size).toBe(gestures.length);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('moves the existing cover into the queue without fading its parent or replacing the image', async () => {
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<FullPlayerModal isPlayerVisible currentTrack={mockTrack} />);
+    });
+    const cover = renderer.root.findByType('CoverImage');
+    const queue = renderer.root.findByType('QueuePanel');
+    await act(async () => {
+      queue.props.onCoverLayout({ x: 0, y: 23, width: 54, height: 54 });
+      renderer.root.findByType('PlayerControls').props.onToggleQueue();
+    });
+    expect(renderer.root.findAllByType('CoverImage')).toHaveLength(1);
+    expect(renderer.root.findByType('CoverImage')).toBe(cover);
+    let parent = cover.parent;
+    while (parent && parent.props.pointerEvents !== 'none') parent = parent.parent;
+    expect(parent).toBeTruthy();
+    expect(require('react-native').StyleSheet.flatten(parent.props.style).opacity).toBeUndefined();
+    const imageContainer = renderer.root.find((node) => node.props.accessibilityRole === 'image');
+    const imageStyle = require('react-native').StyleSheet.flatten(imageContainer.props.style);
+    const scale = imageStyle.transform.find((transform) => transform.scale !== undefined).scale;
+    const imageWidth = require('react-native').StyleSheet.flatten(styles.artContainer).width;
+    expect(scale).toBeCloseTo(54 / imageWidth);
+    expect(imageStyle.opacity).toBe(1);
+    await act(async () => renderer.root.findByType('PlayerControls').props.onToggleQueue());
+    expect(renderer.root.findByType('CoverImage')).toBe(cover);
+    await act(async () => renderer.unmount());
+  });
 
   it('does not give the empty player a track ID for background or lyrics requests', async () => {
     let renderer;
@@ -144,7 +186,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     );
     expect(headerRight).toBeTruthy();
 
-    const children = headerRight.props.children;
+    const children = React.Children.toArray(headerRight.props.children);
     // Child 0: TrackLoadingBadge (значок загрузки / kinda slow слева)
     expect(children[0].type).toBe(TrackLoadingBadge);
     // Child 1: MenuView (нативный компонент поп ап кнопки справа)
@@ -356,7 +398,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
       expect(artistText.props.ellipsizeMode).toBe('tail');
     });
 
-    it('pressing artist control navigates by stable artistId without altering playback or queue', async () => {
+    it('selecting an artist in the menu navigates by stable artistId without altering playback or queue', async () => {
       const onArtistPressMock = jest.fn();
       const togglePlayPauseMock = jest.fn();
       const fetchNextTrackMock = jest.fn();
@@ -380,10 +422,12 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
       });
 
       const root = renderer.root;
-      const artistButton = root.findByProps({ testID: 'player-artist-button' });
+      const artistMenu = root.findAllByType(MenuView).find(
+        (menu) => menu.props.actions.some((action) => action.id === 'artists'),
+      );
 
       act(() => {
-        artistButton.props.onPress();
+        artistMenu.props.onPressAction({ nativeEvent: { event: 'artist:art_radiohead_123' } });
       });
 
       expect(onArtistPressMock).toHaveBeenCalledTimes(1);

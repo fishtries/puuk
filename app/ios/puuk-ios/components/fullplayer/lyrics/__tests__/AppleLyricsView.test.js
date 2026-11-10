@@ -41,6 +41,7 @@ jest.mock('react-native-gesture-handler', () => {
             gesture._onUpdate = cb;
             return gesture;
           },
+          onFinalize: (cb) => { gesture._onFinalize = cb; return gesture; },
           onEnd: (cb) => {
             gesture._onEnd = cb;
             return gesture;
@@ -62,7 +63,8 @@ jest.mock('react-native-reanimated', () => {
       View,
       Text,
     },
-    useSharedValue: (init) => ({ value: init }),
+    useReducedMotion: () => false,
+    useSharedValue: (init) => require('react').useRef({ value: init }).current,
     useAnimatedStyle: (fn) => fn(),
     withSpring: (to) => to,
     withTiming: (to) => to,
@@ -436,6 +438,97 @@ describe('AppleLyricsView', () => {
       jest.advanceTimersByTime(1);
     });
     expect(onLyricsCompactChange).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps wave motion after a delayed audio update instead of mistaking lag for a seek', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: '[00:01.00]First\n[00:04.00]Next', isSynced: true }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={2} />);
+    });
+    act(() => { jest.advanceTimersByTime(1500); });
+    act(() => { renderer.update(<AppleLyricsView {...defaultProps} currentTime={4.2} />); });
+    const next = renderer.root.findAllByType(AnimatedLyricLine)[1];
+    expect(next.props.isActive).toBe(true);
+    expect(next.props.isInitial).toBe(false);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('commits the new highlight and scroll target together', async () => {
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: '[00:01.00]First\n[00:04.00]Next', isSynced: true }),
+    });
+    let renderer;
+    const commits = [];
+    const render = (time) => (
+      <React.Profiler id="lyrics" onRender={() => {
+        if (!renderer) return;
+        const active = renderer.root.findAllByType(AnimatedLyricLine).find(line => line.props.isActive);
+        if (active) commits.push({ index: active.props.index, target: active.props.targetY });
+      }}>
+        <AppleLyricsView {...defaultProps} currentTime={time} />
+      </React.Profiler>
+    );
+    await act(async () => { renderer = TestRenderer.create(render(2)); });
+    act(() => { jest.advanceTimersByTime(300); });
+    commits.length = 0;
+    act(() => { renderer.update(render(4.1)); });
+    const nextCommits = commits.filter(commit => commit.index === 1);
+    expect(nextCommits.length).toBeGreaterThan(0);
+    for (const commit of nextCommits) {
+      expect(commit.target).toBeCloseTo(-(80 - 844 * 0.4 + 22));
+    }
+    act(() => { renderer.unmount(); });
+  });
+
+  it('resumes following and collapses after a cancelled scroll without spring completion', async () => {
+    const onLyricsCompactChange = jest.fn();
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: '[00:01.00]First\n[00:10.00]Next', isSynced: true }),
+    });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps}
+        currentTime={2} onLyricsCompactChange={onLyricsCompactChange} />);
+    });
+    act(() => { lastPanGesture._onStart(); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props.isManualScrolling).toBe(true);
+    act(() => { lastPanGesture._onFinalize(); });
+    act(() => { jest.advanceTimersByTime(3000); });
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props.isManualScrolling).toBe(false);
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
+    act(() => { renderer.unmount(); });
+  });
+
+  it('returns to the latest active line after native touch completion without a gesture finalizer', async () => {
+    const onLyricsCompactChange = jest.fn();
+    authFetch.mockResolvedValueOnce({
+      json: async () => ({ lyrics: '[00:01.00]First\n[00:04.00]Next', isSynced: true }),
+    });
+    const props = { ...defaultProps, onLyricsCompactChange };
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...props} currentTime={2} />);
+    });
+    act(() => { lastPanGesture._onStart(); });
+    const { View } = require('react-native');
+    const surface = renderer.root.findAllByType(View).find(node => node.props.onTouchEnd);
+    act(() => { surface.props.onTouchEnd(); });
+    // Audio updates continue during the grace period without resetting timers.
+    for (let step = 1; step <= 5; step += 1) {
+      act(() => { jest.advanceTimersByTime(500); });
+      act(() => { renderer.update(<AppleLyricsView {...props} currentTime={2 + step * 0.5} />); });
+    }
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[1].props.isManualScrolling).toBe(true);
+    act(() => { jest.advanceTimersByTime(500); });
+    const line = renderer.root.findAllByType(AnimatedLyricLine)[1];
+    expect(line.props.isActive).toBe(true);
+    expect(line.props.isManualScrolling).toBe(false);
+    expect(line.props.targetY).toBeCloseTo(-(80 - 844 * 0.4 + 22));
+    expect(onLyricsCompactChange).toHaveBeenLastCalledWith(true);
+    act(() => { renderer.unmount(); });
   });
 
   it('does NOT expand compact mode when scrolling lyrics', async () => {
