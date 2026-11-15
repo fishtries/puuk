@@ -25,6 +25,7 @@ import db
 from repositories.artist_credits import CreditSource
 from services.media_locations import resolve_import_album
 from downloader import download_audio, download_spotify, search_youtube
+from download_queue import DownloadQueue
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -85,6 +86,7 @@ logging.getLogger("aiogram.dispatcher").addFilter(NetworkDropFilter())
 
 user_modes = {} # user_id -> 'server' or 'chat'
 MUSIC_DIR = os.getenv('MUSIC_DIR', '/mnt/data/projects/puuk/music')
+download_jobs = None
 
 def get_puuk_user(tg_id: int) -> dict | None:
     """Ищет пользователя Puuk по Telegram ID или fallback в ALLOWED_USERS."""
@@ -311,7 +313,7 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
                 artist_source=credit_source('artists'),
             )
             if not is_playlist:
-                db.add_favorite(puuk_user['id'], track_uuid)
+                db.add_favorite(puuk_user['id'], track_uuid, provenance='import')
             if has_real_file:
                 real_files.append({
                     'id': track_uuid,
@@ -327,7 +329,7 @@ def index_downloaded_tracks(track_info: dict, puuk_user: dict | None, music_dir:
     return indexed
 
 
-async def process_download(user_id: int, chat_id: int, url: str, status_msg: Message):
+async def process_download(user_id: int, chat_id: int, url: str, status_msg: Message, *, queued=False, checkpoint_dir=None):
     loop = asyncio.get_running_loop()
     last_edit_time = 0
 
@@ -345,12 +347,16 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
     def update_progress_sync(text: str):
         asyncio.run_coroutine_threadsafe(update_progress_async(text), loop)
 
-    mode = user_modes.get(user_id, 'server')
+    mode = 'server' if queued else user_modes.get(user_id, 'server')
+    if not queued and mode == 'server' and 'open.spotify.com/' in url and download_jobs is not None:
+        job_id = download_jobs.enqueue(user_id, chat_id, status_msg.message_id, url)
+        await status_msg.edit_text(f'⏳ Загрузка №{job_id} добавлена в очередь. Статус: /downloads')
+        return
     output_dir = MUSIC_DIR if mode == 'server' else f'/tmp/music_req_{uuid.uuid4()}'
 
     try:
         if 'spotify.com' in url:
-            track_info = await download_spotify(url, output_dir=output_dir, progress_cb=update_progress_async)
+            track_info = await download_spotify(url, output_dir=output_dir, progress_cb=update_progress_async, checkpoint_dir=checkpoint_dir)
         else:
             track_info = await loop.run_in_executor(None, download_audio, url, output_dir, update_progress_sync)
         
@@ -390,12 +396,28 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
 
             if track_info.get('is_spotify'):
                 total_dl = track_info.get('total_tracks', 0)
-                if total_dl > 1:
-                    response_text = f"✅ <b>Плейлист Spotify успешно скачан!</b>\nЗагружено треков: {total_dl}\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>{liked_note}"
-                elif total_dl == 1:
-                    response_text = f"✅ <b>Трек Spotify успешно скачан!</b>\n\n📁 Сохранен в: <code>{MUSIC_DIR}</code>{liked_note}"
-                else:
-                    response_text = f"❌ <b>Не удалось загрузить трек Spotify.</b>"
+                expected = track_info.get('expected_tracks', total_dl)
+                failed = track_info.get('failed_tracks', 0)
+                reused = track_info.get('reused_tracks', 0)
+                source_type = track_info.get('source_type', 'Spotify')
+                heading = "⚠️ Загрузка завершена с пропусками" if failed else "✅ Загрузка завершена"
+                response_text = (
+                    f"<b>{heading}</b>\nSpotify: {source_type}\n"
+                    f"Обработано треков: {total_dl} из {expected}"
+                    + (f"\nУже в библиотеке: {reused}" if reused else "")
+                    + (f"\nНе удалось загрузить: {failed}" if failed else "")
+                    + f"\n\n📁 Сохранено в: <code>{MUSIC_DIR}</code>{liked_note}"
+                )
+                failures = track_info.get('failures') or []
+                if failures:
+                    details = '\n'.join(
+                        f"• {html.escape(str(item['title'])[:100])}"
+                        for item in failures[:6]
+                    )
+                    response_text += f"\n\nНе найдено:\n{details}"
+                    if len(failures) > 6:
+                        response_text += f"\n… ещё {len(failures) - 6}"
+                    response_text += "\nПришли ссылку на нужную версию в YouTube или SoundCloud."
             else:
                 duration_val = track_info.get('duration') or 0
                 minutes = int(duration_val // 60)
@@ -412,6 +434,7 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
                 )
                 
             await status_msg.edit_text(response_text, parse_mode='HTML')
+        return track_info
         
     except Exception as e:
         import html
@@ -422,6 +445,8 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
             pass
         if 'output_dir' in locals() and mode == 'chat' and os.path.exists(output_dir):
             shutil.rmtree(output_dir, ignore_errors=True)
+        if queued:
+            raise
 
 
 @dp.callback_query(F.data.startswith('dl_yt_'))
@@ -437,6 +462,60 @@ async def process_yt_selection(callback: types.CallbackQuery):
     await callback.answer()
     
     await process_download(callback.from_user.id, callback.message.chat.id, url, callback.message)
+
+
+class QueuedStatus:
+    def __init__(self, job):
+        self.job = job
+
+    async def edit_text(self, text, **kwargs):
+        try:
+            await bot.edit_message_text(text, chat_id=self.job['chat_id'],
+                                        message_id=self.job['message_id'], **kwargs)
+        except Exception as exc:
+            # Telegram delivery must not repeat already completed imports.
+            logging.warning('Queue status delivery: %s', type(exc).__name__)
+
+
+@dp.message(Command('downloads'))
+async def downloads_status(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    rows = download_jobs.list_user(message.from_user.id) if download_jobs else []
+    labels = {'queued': 'ожидает', 'running': 'загружается', 'done': 'готово',
+              'partial': 'есть пропуски', 'failed': 'ошибка'}
+    text = '\n'.join(f"№{r['id']}: {labels[r['status']]}" for r in rows)
+    await message.answer((text or 'Загрузок пока нет.') + '\nПовторить пропуски: /retry номер')
+
+
+@dp.message(Command('retry'))
+async def retry_download(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    parts = message.text.split()
+    ok = (len(parts) == 2 and parts[1].isdigit() and download_jobs is not None
+          and download_jobs.retry(int(parts[1]), message.from_user.id))
+    await message.answer('⏳ Загрузка возвращена в очередь.' if ok else 'Укажи номер своей незавершённой загрузки: /retry номер')
+
+
+async def run_download_queue():
+    while True:
+        job = download_jobs.claim()
+        if job is None:
+            await asyncio.sleep(1)
+            continue
+        try:
+            if not is_user_allowed(job['user_id']):
+                raise ValueError('Доступ к загрузке отозван')
+            result = await process_download(job['user_id'], job['chat_id'], job['url'],
+                QueuedStatus(job), queued=True,
+                checkpoint_dir=str(download_jobs.path.parent / 'imports' / str(job['id'])))
+            download_jobs.finish(job, result=result)
+        except asyncio.CancelledError:
+            raise  # exclusive worker recovery requeues this on the next start
+        except Exception as exc:
+            logging.exception('Queued download %s failed', job['id'])
+            download_jobs.finish(job, error=exc, transient=isinstance(exc, (TimeoutError, RuntimeError, OSError)))
 
 
 @dp.message(F.text)
@@ -498,6 +577,7 @@ async def handle_message(message: Message):
         await status_msg.edit_text("Выберите трек для скачивания:", reply_markup=keyboard)
 
 async def main():
+    global download_jobs
     if not BOT_TOKEN or BOT_TOKEN == 'your_bot_token_here':
         logging.error("BOT_TOKEN is not set correctly in .env file!")
         return
@@ -509,12 +589,26 @@ async def main():
             types.BotCommand(command="login", description="🔑 Войти в приложение Puuk"),
             types.BotCommand(command="start", description="🏠 Главное меню и режимы"),
             types.BotCommand(command="help", description="ℹ️ Справка и команды"),
+            types.BotCommand(command="downloads", description="Статус загрузок"),
+            types.BotCommand(command="retry", description="Повторить загрузку: /retry номер"),
         ])
     except Exception as e:
         logging.warning(f"Failed to set bot commands: {e}")
         
     logging.info(f"Starting polling (polling_timeout={POLLING_TIMEOUT}s)...")
-    await dp.start_polling(bot, polling_timeout=POLLING_TIMEOUT)
+    queue_path = os.getenv('PUUK_DOWNLOAD_QUEUE_PATH', os.path.join(os.path.dirname(__file__), 'state', 'downloads.sqlite3'))
+    download_jobs = DownloadQueue(queue_path)
+    download_jobs.start_worker()
+    worker = asyncio.create_task(run_download_queue())
+    try:
+        await dp.start_polling(bot, polling_timeout=POLLING_TIMEOUT)
+    finally:
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+        download_jobs.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -118,6 +118,7 @@ if [ -d "$BOT_LOCAL_DIR" ]; then
         --exclude '__pycache__/'
         --exclude '*.pyc'
         --exclude '.env'
+        --exclude 'state/'
     )
     rsync "${BOT_RSYNC_ARGS[@]}" "$BOT_LOCAL_DIR" "$SERVER_USER@$SERVER_IP:$BOT_REMOTE_DIR"
     

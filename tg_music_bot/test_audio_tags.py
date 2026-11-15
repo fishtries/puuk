@@ -124,6 +124,22 @@ class TestAudioTags(unittest.TestCase):
         self.assertEqual(audio_tags.extract_year(None), "")
 
 
+class TestSpotifyCoverEndpoint(unittest.TestCase):
+    def test_uses_spotify_alternate_cdn_for_same_image(self):
+        response = mock.Mock(status_code=200, content=b'jpeg', headers={'content-type': 'image/jpeg'})
+        with mock.patch('requests.get', return_value=response) as get:
+            result = audio_tags.fetch_cover('https://i.scdn.co/image/cover-id')
+        self.assertEqual(result, (b'jpeg', 'image/jpeg'))
+        get.assert_called_once_with('https://image-cdn-ak.spotifycdn.com/image/cover-id', timeout=12)
+
+    def test_falls_back_to_original_and_rejects_non_image(self):
+        blocked = mock.Mock(status_code=200, content=b'blocked', headers={'content-type': 'text/html'})
+        image = mock.Mock(status_code=200, content=b'jpeg', headers={'content-type': 'image/jpeg'})
+        with mock.patch('requests.get', side_effect=[blocked, image]) as get:
+            self.assertEqual(audio_tags.fetch_cover('https://i.scdn.co/image/id'), (b'jpeg', 'image/jpeg'))
+        self.assertEqual(get.call_count, 2)
+
+
 class TestDownloaderHelpers(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp(prefix="puuk_dl_")

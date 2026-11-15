@@ -354,15 +354,24 @@ def verify_audio_tags(path: str, require: tuple[str, ...] = ("title", "artist"))
 def fetch_cover(url: str, timeout: int = 12) -> Optional[tuple[bytes, str]]:
     if not url:
         return None
-    try:
-        import requests
+    import requests
+    from urllib.parse import urlsplit, urlunsplit
 
-        resp = requests.get(url, timeout=timeout)
-        if resp.status_code == 200 and resp.content:
-            mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-            return resp.content, mime or "image/jpeg"
-    except Exception as exc:
-        logger.debug("[audio_tags] cover fetch failed %s: %s", url, exc)
+    parsed = urlsplit(url)
+    urls = [url]
+    if parsed.hostname == 'i.scdn.co':
+        # The Akamai endpoint serves the same Spotify image ID and remains
+        # reachable on networks where i.scdn.co connections time out.
+        urls.insert(0, urlunsplit(parsed._replace(netloc='image-cdn-ak.spotifycdn.com')))
+    for candidate in urls:
+        try:
+            resp = requests.get(candidate, timeout=timeout)
+            if resp.status_code == 200 and resp.content:
+                mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                if mime.startswith('image/'):
+                    return resp.content, mime
+        except Exception as exc:
+            logger.debug("[audio_tags] cover fetch failed %s: %s", candidate, exc)
     return None
 
 

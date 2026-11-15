@@ -3,8 +3,12 @@ import json
 import logging
 import asyncio
 import re
-import shlex
+import signal
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
 import tempfile
+import hashlib
 
 from audio_tags import (
     AUDIO_EXTENSIONS,
@@ -269,6 +273,82 @@ def _build_tracks(changed_files: list, songs: list) -> list:
     return tracks
 
 
+def _existing_spotify_tracks(output_dir: str, songs: list, exclude: set) -> list:
+    """Reuse only files with a checked audio source, without editing their tags."""
+    from mutagen.id3 import ID3
+    from source_selection import Candidate, POLICY_VERSION, assess, duration_matches
+
+    wanted = {song['url'].split('?')[0]: song for song in songs if song.get('url')}
+    if not wanted:
+        return []
+    existing = []
+    for name in sorted(os.listdir(output_dir)):
+        path = os.path.join(output_dir, name)
+        if path in exclude or not name.lower().endswith('.mp3') or not os.path.isfile(path):
+            continue
+        try:
+            tags = ID3(path)
+            url = str(tags.get('WOAS', '')).split('?')[0]
+            if url not in wanted:
+                continue
+            raw_receipt = tags.get('TXXX:PUUK_SOURCE_V1')
+            if raw_receipt is None:
+                continue
+            receipt = json.loads(str(raw_receipt))
+            if receipt.get('policy') != POLICY_VERSION or receipt.get('spotify_url') != url:
+                continue
+            candidate = Candidate(**receipt['candidate'])
+            if assess(wanted[url], candidate)[1]:
+                continue
+            meta = read_audio_tags(path).as_metadata()
+            if not meta.get('title') or not meta.get('artist') or meta.get('duration', 0) <= 0:
+                continue
+            if not duration_matches(wanted[url].get('duration'), meta.get('duration')):
+                continue
+            meta['verification'] = True
+            meta['has_lyrics'] = bool(meta.get('lyrics'))
+            for key in ('artists', 'album_artists'):
+                meta[key + '_kind'] = 'tags' if meta.get(key) is not None else None
+            existing.append({**meta, 'filepath': path, 'verified_metadata': meta, 'source': receipt})
+            del wanted[url]
+        except Exception as exc:
+            logging.warning('[spotdl] cannot reuse %s: %s', path, exc)
+    return existing
+
+
+def _publish_tracks(tracks: list, output_dir: str) -> list:
+    """Publish complete files atomically; never replace an existing library file.
+
+    Staging lives on the same filesystem. link() arbitrates concurrent imports
+    of the same filename without exposing incomplete files to the scanner.
+    """
+    published = []
+    for track in tracks:
+        source = track['filepath']
+        target = os.path.join(output_dir, os.path.basename(source))
+        try:
+            os.link(source, target)
+        except FileExistsError:
+            # A filename collision does not establish recording identity. Keep
+            # the old file but never return it as the newly checked recording.
+            def digest(path):
+                with open(path, 'rb') as handle:
+                    return hashlib.file_digest(handle, 'sha256').hexdigest()
+            checksum = digest(source)
+            if digest(target) != checksum:
+                base, ext = os.path.splitext(target)
+                target = f'{base}-{checksum[:16]}{ext}'
+                try:
+                    os.link(source, target)
+                except FileExistsError:
+                    if digest(target) != checksum:
+                        raise ValueError('Конфликт файлов при публикации записи')
+        track['filepath'] = target
+        track['verified_metadata']['filepath'] = target
+        published.append(track)
+    return published
+
+
 def download_audio(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=None) -> dict:
     """
     Downloads audio from the given URL via yt-dlp.
@@ -319,18 +399,21 @@ def download_audio(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=No
         'retries': 10,
         'fragment_retries': 10,
         'js_runtimes': {'node': {}},
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            if urlparse(url).hostname in ('soundcloud.com', 'www.soundcloud.com', 'on.soundcloud.com'):
+                from soundcloud_source import register
+                register(ydl)
             info_dict = ydl.extract_info(url, download=True)
             
             if 'entries' in info_dict:
                 info_dict = info_dict['entries'][0]
                 
-            title = info_dict.get('title', 'Unknown Title')
-            uploader = info_dict.get('uploader', info_dict.get('artist', 'Unknown Artist'))
+            title = info_dict.get('track') or info_dict.get('title', 'Unknown Title')
+            uploader = (info_dict.get('artist') or ', '.join(info_dict.get('artists') or [])
+                        or info_dict.get('uploader') or 'Unknown Artist')
             duration = info_dict.get('duration', 0)
             
             # Определяем точный путь к созданному mp3 файлу
@@ -362,6 +445,8 @@ def download_audio(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=No
                 'url': url,
                 'filepath': final_mp3,
                 'is_spotify': False,
+                'source_provider': 'soundcloud' if urlparse(url).hostname in ('soundcloud.com', 'www.soundcloud.com', 'on.soundcloud.com') else None,
+                'source_explicit': info_dict.get('explicit'),
                 'metadata': metadata,
                 'verified_metadata': metadata,
             }
@@ -377,7 +462,6 @@ def search_youtube(query: str, max_results: int = 5) -> list:
         'quiet': True,
         'no_warnings': True,
         'js_runtimes': {'node': {}},
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -400,169 +484,149 @@ def search_youtube(query: str, max_results: int = 5) -> list:
         logging.error(f"Search failed: {e}")
         return []
 
-async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=None) -> dict:
-    """
-    Downloads Spotify tracks or playlists using spotdl.
-    progress_cb is an asynchronous callback.
-    """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-
-    import sys
-    save_dir = tempfile.mkdtemp(prefix="spotdl_meta_")
-    save_file = os.path.join(save_dir, "metadata.spotdl")
-    cmd = [
-        sys.executable, "-m", "spotdl", "download", url,
-        "--output", output_dir,
-        "--audio", "youtube", "piped",
-        "--lyrics",
-        "--overwrite", "metadata",
-        "--save-file", save_file,
-        "--yt-dlp-args", "--js-runtimes node:/usr/bin/node --extractor-args youtube:player_client=android,web"
-    ]
-
-    logging.info(
-        "[spotdl] starting: url=%s output_dir=%s command=%s",
-        url,
-        output_dir,
-        shlex.join(cmd),
-    )
-
-    before_snapshot = _snapshot_dir(output_dir)
-
+async def _run_download_process(cmd: list[str], log_path: str, timeout: float) -> None:
+    """Bound the entire child process tree, including ffmpeg, and disk-backed logs."""
     process = None
-    stderr_task = None
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-
-        total_tracks = 0
-        downloaded_tracks = 0
-        track_history = []
-        output_lines = []
-        error_lines = []
-
-        async def read_stderr() -> None:
-            """Drain spotdl stderr while stdout is being processed."""
-            while True:
-                line = await process.stderr.readline()
-                if not line:
-                    break
-
-                line_str = strip_ansi(line.decode('utf-8', errors='replace')).strip()
-                if not line_str:
-                    continue
-
-                error_lines.append(line_str)
-                logging.warning("[spotdl][stderr] %s", line_str)
-
-        stderr_task = asyncio.create_task(read_stderr())
-
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-
-            line_str = strip_ansi(line.decode('utf-8', errors='ignore')).strip()
-            if not line_str:
-                continue
-
-            output_lines.append(line_str)
-            logging.info("[spotdl][stdout] %s", line_str)
-            if any(err_kw in line_str.lower() for err_kw in ("error:", "exception:", "failed", "unavailable", "blocked", "http error")):
-                error_lines.append(line_str)
-
-            # Parsing spotdl output
-            if "Found" in line_str and "songs" in line_str:
-                m = re.search(r'Found (\d+) songs', line_str)
-                if m:
-                    total_tracks = int(m.group(1))
-                    if progress_cb:
-                        await progress_cb(f"Найдено {total_tracks} треков. Начинаю скачивание...")
-            elif "Downloaded" in line_str or "Skipping" in line_str or "Skipped" in line_str or "Updated" in line_str:
-                downloaded_tracks += 1
-
-                track_name = ""
-                m_track = re.search(r'(?:Downloaded|Skipping|Skipped|Updated).*?"(.*?)"', line_str)
-                if not m_track:
-                    m_track = re.search(r'"(.*?)"', line_str)
-                if m_track:
-                    track_name = m_track.group(1)
-
-                if progress_cb:
-                    if total_tracks > 1:
-                        icon = "⏩ (пропуск)" if "Skip" in line_str else "✅"
-                        if track_name:
-                            track_history.append(f"{icon} {track_name}")
-
-                        display_history = track_history[-20:]
-                        history_str = "\n".join(display_history)
-                        if len(track_history) > 20:
-                            history_str = f"... и еще {len(track_history) - 20} треков\n" + history_str
-
-                        msg = f"Обработано {downloaded_tracks} из {total_tracks} треков...\n\n{history_str}"
-                        await progress_cb(msg)
-                    else:
-                        if "Skip" in line_str:
-                            await progress_cb(f"Трек уже существует. Обновляю метаданные...")
-                        else:
-                            await progress_cb(f"Трек загружен. Обработка метаданных...")
-
-        await process.wait()
-        await stderr_task
-
+        with open(log_path, 'wb') as log:
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=log, stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            async with asyncio.timeout(timeout):
+                await process.wait()
         if process.returncode != 0:
-            logging.error("[spotdl] failed with return code %s", process.returncode)
-            relevant_errors = "\n".join(error_lines[-5:]) if error_lines else ("\n".join(output_lines[-5:]) if output_lines else "Неизвестная ошибка")
-            raise Exception(f"SpotDL Error:\n{relevant_errors}")
-
-        songs = _load_spotdl_songs(save_file)
-        changed_files = _changed_audio_files(output_dir, before_snapshot)
-
-        # Финализация ходит в сеть за обложкой — уводим из event loop.
-        tracks = await asyncio.to_thread(_build_tracks, changed_files, songs)
-
-        logging.info(
-            "[spotdl] finished: returncode=%s total_tracks=%s processed_tracks=%s changed_files=%s tracks=%s",
-            process.returncode,
-            total_tracks,
-            downloaded_tracks,
-            changed_files,
-            [t['filepath'] for t in tracks],
-        )
-
-        if downloaded_tracks == 0 and not tracks:
-            logging.error("[spotdl] completed without processed tracks")
-            if error_lines:
-                detail = "\n".join(error_lines[-3:])
-                raise Exception(f"Ни один трек не был загружен:\n{detail}")
-            raise Exception("Ни один трек не был загружен. Возможно, трек заблокирован на YouTube или недоступен.")
-
-        return {
-            'title': f"Spotify {'Плейлист' if total_tracks > 1 else 'Трек'}",
-            'artist': 'Spotify',
-            'duration': 0,
-            'url': url,
-            'is_spotify': True,
-            'total_tracks': len(tracks) or downloaded_tracks,
-            'tracks': tracks,
-        }
+            with open(log_path, 'rb') as log:
+                log.seek(0, os.SEEK_END)
+                log.seek(max(0, log.tell() - 4000))
+                detail = strip_ansi(log.read().decode('utf-8', errors='replace'))
+            logging.warning('[download] child failed (%s): %s', process.returncode, detail)
+            raise RuntimeError('Сервис загрузки недоступен; подробности записаны в журнал')
     finally:
         if process is not None and process.returncode is None:
             try:
-                process.kill()
-                await process.wait()
-            except Exception:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
                 pass
-        if stderr_task is not None and not stderr_task.done():
-            stderr_task.cancel()
+            await process.wait()
+
+
+async def download_spotify(url: str, output_dir: str = DEFAULT_MUSIC_DIR, progress_cb=None, checkpoint_dir=None) -> dict:
+    """Spotify supplies identity, not audio. Publish only checked recording results.
+
+    Metadata and each recording run in separate killable processes. A failed item
+    does not discard other songs. No arbitrary-video fallback and no legacy file
+    reuse based solely on the Spotify tag (those tags can describe wrong audio).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != 'https' or parsed.hostname != 'open.spotify.com' or not re.fullmatch(
+        r'/(?:intl-[a-z-]+/)?(?:track|album|playlist)/[A-Za-z0-9]+/?', parsed.path,
+    ):
+        raise ValueError('Нужна ссылка Spotify на трек, альбом или плейлист')
+    os.makedirs(output_dir, exist_ok=True)
+    stage = tempfile.mkdtemp(prefix='puuk_spotify_', dir=os.path.dirname(os.path.abspath(output_dir)))
+    save_file = os.path.join(checkpoint_dir or stage, 'metadata.spotdl')
+    if checkpoint_dir:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    deadline = asyncio.get_running_loop().time() + 1800
+    tracks, failures = [], []
+    try:
+        if progress_cb:
+            await progress_cb('Получаю список треков и проверяю версии...')
+        # Metadata only. No spotDL audio matcher, Piped or automatic video fallback.
+        if not os.path.isfile(save_file):
+            pending_file = save_file + '.pending.spotdl'
+            if '/album/' in parsed.path:
+                progress_file = os.path.join(stage, 'metadata-progress.txt')
+                command = [sys.executable, os.path.join(os.path.dirname(__file__), 'spotify_metadata.py'),
+                           url, '--output', pending_file, '--progress', progress_file]
+                task = asyncio.create_task(_run_download_process(command, os.path.join(stage, 'metadata.log'), 90))
+                last_progress = ''
+                try:
+                    while not task.done():
+                        await asyncio.wait([task], timeout=2)
+                        if os.path.isfile(progress_file):
+                            message = Path(progress_file).read_text()
+                            if message != last_progress and progress_cb:
+                                await progress_cb(message)
+                                last_progress = message
+                    await task
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+            else:
+                await _run_download_process([
+                    sys.executable, '-m', 'spotdl', 'save', url,
+                    '--save-file', pending_file, '--lyrics', '--threads', '2', '--audio', 'youtube',
+                ], os.path.join(stage, 'metadata.log'), 180)
+            os.replace(pending_file, save_file)
+        songs = _load_spotdl_songs(save_file)
+        if not songs or len(songs) > 1000 or any(
+            not isinstance(song, dict) or not song.get('url') or not song.get('name')
+            or not song.get('artists') or not song.get('duration') for song in songs
+        ):
+            raise ValueError('Spotify не вернул проверяемый список треков (максимум 1000)')
+        # Repeated playlist positions refer to the same file; preserve first order.
+        songs = list({song['url']: song for song in songs}.values())
+        reused = await asyncio.to_thread(_existing_spotify_tracks, output_dir, songs, set())
+        existing = {t['source']['spotify_url']: t for t in reused}
+        for index, song in enumerate(songs):
+            label = f"{', '.join(song['artists'])} — {song['name']}"
+            if progress_cb:
+                await progress_cb(f'Проверяю {index + 1}/{len(songs)}: {label}')
+            known = existing.get(song['url'].split('?')[0])
+            if known:
+                tracks.append(known)
+                continue
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                failures.extend({'title': s['name'], 'reason': 'Истёк срок загрузки альбома'} for s in songs[index:])
+                break
+            item_dir = os.path.join(stage, str(index))
+            os.mkdir(item_dir)
+            song_file = os.path.join(item_dir, 'song.json')
+            result_file = os.path.join(item_dir, 'result.json')
+            Path(song_file).write_text(json.dumps(song, ensure_ascii=False))
             try:
-                await stderr_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        _cleanup_dir(save_dir)
+                await _run_download_process([
+                    sys.executable, os.path.join(os.path.dirname(__file__), 'source_worker.py'),
+                    '--song', song_file, '--output', item_dir, '--result', result_file,
+                ], os.path.join(item_dir, 'worker.log'), min(180, remaining))
+                result = json.loads(Path(result_file).read_text())
+                if not result.get('track'):
+                    raise ValueError(result.get('error') or 'Подтверждённая запись не найдена')
+                track = result['track']
+                file_path = Path(track['filepath']).resolve()
+                if file_path.parent != Path(item_dir).resolve() or not file_path.is_file():
+                    raise ValueError('Некорректный результат загрузки')
+                # Verify provenance again at the publication boundary.
+                checked = _existing_spotify_tracks(item_dir, [song], set())
+                if len(checked) != 1 or Path(checked[0]['filepath']).resolve() != file_path:
+                    raise ValueError('Нет подтверждения соответствия записи')
+                # Publish each verified song before advancing. A restart reuses
+                # the receipt instead of downloading the completed part again.
+                tracks.append(_publish_tracks([track], output_dir)[0])
+            except TimeoutError:
+                failures.append({'title': song['name'], 'reason': 'Источник не ответил за отведённое время'})
+            except Exception as exc:
+                logging.warning('[download] %s: %s', label, exc)
+                failures.append({'title': song['name'], 'reason': str(exc)[:500]})
+        if not tracks:
+            titles = ', '.join(str(f['title'])[:100] for f in failures[:6])
+            more = f' и ещё {len(failures) - 6}' if len(failures) > 6 else ''
+            raise ValueError(f'Не найдено: {titles}{more}.\nПришли ссылку на нужную версию в YouTube или SoundCloud.')
+        return {
+            'title': f"Spotify {'Плейлист' if len(songs) > 1 else 'Трек'}",
+            'artist': 'Spotify', 'duration': 0, 'url': url, 'is_spotify': True,
+            'total_tracks': len(tracks), 'reused_tracks': len(reused),
+            'expected_tracks': len(songs), 'failed_tracks': len(failures),
+            'failures': failures,
+            'source_type': 'альбом' if '/album/' in url else ('плейлист' if '/playlist/' in url else 'трек'),
+            'tracks': tracks,
+        }
+    finally:
+        _cleanup_dir(stage)

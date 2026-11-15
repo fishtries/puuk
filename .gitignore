@@ -37,3 +37,6 @@ Thumbs.db
 # Local env
 .env
 .env.local
+
+# Durable Telegram import queue (server-local state)
+tg_music_bot/state/
