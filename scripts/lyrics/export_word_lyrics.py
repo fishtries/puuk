@@ -87,6 +87,9 @@ def build_word_lyrics_snapshot(
         prev_word_start_ms = -1
 
         for w_idx, rw in enumerate(line_ref_words):
+            # Standalone punctuation remains in line text without requiring timing.
+            if not any(char.isalnum() for char in rw["text"]):
+                continue
             wid = rw["id"]
             aw = word_map.get(wid)
             if not aw:
