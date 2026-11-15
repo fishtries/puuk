@@ -138,7 +138,7 @@ def test_bot_provider_survives_scan_and_redownload(tagged_audio, tmp_path, monke
     monkeypatch.setattr(library_service, 'get_effective_music_dir', lambda: str(tmp_path))
     monkeypatch.setattr(library_service, '_deliver_embedding_queue', lambda: None)
     monkeypatch.setattr(bot, 'enqueue_embedding_tasks', lambda *args: None)
-    monkeypatch.setattr(db, 'add_favorite', lambda *args: None)
+    monkeypatch.setattr(db, 'add_favorite', lambda *args, **kwargs: None)
     user_id = db.create_user('import_test', role='user')
     raw = metadata.read_audio_metadata(str(path))
     provider = {'filepath': str(path), 'title': 'Title', 'artist': raw.artist,

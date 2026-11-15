@@ -6,7 +6,9 @@ from collections import defaultdict
 from threading import Lock
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+from datetime import datetime, timezone, timedelta
+from repositories.wave import record_listening_event
 
 # Ensure brain path is available
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -45,8 +47,21 @@ feedback_rate_limiter = InMemoryRateLimiter(max_requests=100, window_seconds=60)
 class WaveFeedbackRequest(BaseModel):
     track_id: str
     event_type: Literal["like", "skip", "finish"]
-    listen_duration_ms: int = 0
-    track_duration_ms: int = 0
+    listen_duration_ms: int = Field(default=0, ge=0, le=86400000)
+    track_duration_ms: int = Field(default=0, ge=0, le=86400000)
+    event_id: str | None = Field(default=None, min_length=1, max_length=128)
+    occurred_at: datetime | None = None
+    context: Literal['wave', 'manual', 'unknown'] = 'unknown'
+    client: str | None = Field(default=None, max_length=64)
+
+    @field_validator('occurred_at')
+    @classmethod
+    def validate_event_time(cls, value):
+        if value is not None:
+            if value.tzinfo is None or value > datetime.now(timezone.utc) + timedelta(minutes=5):
+                raise ValueError('occurred_at must have a timezone and cannot be in the future')
+            return value.astimezone(timezone.utc)
+        return value
 
 def get_qdrant_client():
     return QdrantClient(url=QDRANT_URL)
@@ -74,13 +89,18 @@ def record_wave_feedback(
 
     # 1. Сохраняем событие в user_wave_feedback
     try:
-        db.add_wave_feedback(
+        inserted = record_listening_event(
             user_id=user_id,
             track_id=feedback.track_id,
             event_type=feedback.event_type,
             listen_duration_ms=feedback.listen_duration_ms,
-            track_duration_ms=feedback.track_duration_ms
+            track_duration_ms=feedback.track_duration_ms,
+            event_id=feedback.event_id,
+            occurred_at=feedback.occurred_at.isoformat() if feedback.occurred_at else None,
+            context=feedback.context, client=feedback.client,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except sqlite3.IntegrityError as exc:
         # Check after the failed INSERT: deletion may race a preflight lookup.
         # Other constraints (including a missing user) remain visible errors.
@@ -89,14 +109,8 @@ def record_wave_feedback(
             raise HTTPException(status_code=404, detail="Трек не найден") from exc
         raise
 
-    # 2. Если поставлен лайк, гарантируем запись в избранное
-    if feedback.event_type == "like":
-        db.add_favorite(user_id, feedback.track_id)
-
-    # 3. Обновляем агрегированную статистику трека
-    total_ms = max(feedback.track_duration_ms, 1)
-    listen_pct = min(1.0, max(0.0, feedback.listen_duration_ms / total_ms))
-    db.update_track_stats(feedback.track_id, feedback.event_type, listen_pct)
+    if not inserted:
+        return {"status": "ok"}
 
     # 4. Проверяем триггер пересчета профиля вкусов (10 треков, 24 часа или немедленный лайк)
     needs_recompute = (feedback.event_type == "like") or should_recompute_embedding(user_id, threshold=10, hours=24)

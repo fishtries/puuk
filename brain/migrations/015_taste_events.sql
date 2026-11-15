@@ -1,0 +1,10 @@
+ALTER TABLE user_wave_feedback ADD COLUMN event_id TEXT;
+ALTER TABLE user_wave_feedback ADD COLUMN occurred_at TEXT;
+ALTER TABLE user_wave_feedback ADD COLUMN context TEXT;
+ALTER TABLE user_wave_feedback ADD COLUMN client TEXT;
+ALTER TABLE user_wave_feedback ADD COLUMN provenance TEXT NOT NULL DEFAULT 'listening';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_event_identity ON user_wave_feedback(user_id, event_id) WHERE event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS user_taste_revisions (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, revision INTEGER NOT NULL DEFAULT 0);
+ALTER TABLE user_embeddings ADD COLUMN source_revision INTEGER;
+ALTER TABLE user_favorites ADD COLUMN provenance TEXT NOT NULL DEFAULT 'legacy';
+CREATE INDEX IF NOT EXISTS idx_feedback_user_track ON user_wave_feedback(user_id,track_id);

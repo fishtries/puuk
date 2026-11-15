@@ -33,11 +33,16 @@ export async function sendWaveFeedback(
   trackId: string,
   eventType: 'like' | 'skip' | 'finish',
   listenDurationMs: number = 0,
-  trackDurationMs: number = 0
+  trackDurationMs: number = 0,
+  context: 'wave' | 'manual' | 'unknown' = 'unknown'
 ): Promise<void> {
   await apiClient<{ status: string }>('/api/wave/feedback', {
     method: 'POST',
     body: JSON.stringify({
+      event_id: globalThis.crypto?.randomUUID?.() ?? `web-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      occurred_at: new Date().toISOString(),
+      client: 'web',
+      context,
       track_id: trackId,
       event_type: eventType,
       listen_duration_ms: Math.max(0, Math.round(listenDurationMs)),

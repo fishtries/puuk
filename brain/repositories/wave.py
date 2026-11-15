@@ -29,29 +29,35 @@ def get_user_embedding(user_id: int) -> Optional[Any]:
         print(f"[DB] Error deserializing user embedding: {e}")
     return None
 
-def set_user_embedding(user_id: int, embedding: Any, track_count: int):
+def set_user_embedding(user_id: int, embedding: Any, track_count: int, source_revision=None):
     """Сохранить или обновить 400-мерный вектор пользователя в SQLite."""
     if np is None:
         raise RuntimeError("numpy is required for user embeddings")
     conn = get_connection()
-    cursor = conn.cursor()
-    blob = embedding.astype(np.float32).tobytes()
-    cursor.execute("""
-        INSERT INTO user_embeddings (user_id, embedding_vector, track_count, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(user_id) DO UPDATE SET
-            embedding_vector = excluded.embedding_vector,
-            track_count = excluded.track_count,
-            updated_at = CURRENT_TIMESTAMP
-    """, (user_id, blob, track_count))
-    conn.commit()
-    conn.close()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            current = conn.execute('SELECT revision FROM user_taste_revisions WHERE user_id=?', (user_id,)).fetchone()
+            revision = current['revision'] if current else 0
+            if source_revision is not None and source_revision != revision:
+                return  # feedback arrived while computing the vector
+            vector = np.asarray(embedding, dtype=np.float32)
+            if vector.shape != (400,) or not np.isfinite(vector).all():
+                raise ValueError('Expected a finite 400-dimensional taste vector')
+            conn.execute("""INSERT INTO user_embeddings
+                (user_id,embedding_vector,track_count,source_revision,updated_at)
+                VALUES (?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET
+                embedding_vector=excluded.embedding_vector,track_count=excluded.track_count,
+                source_revision=excluded.source_revision,updated_at=CURRENT_TIMESTAMP""",
+                (user_id,vector.tobytes(),track_count,revision))
+    finally:
+        conn.close()
 
 def get_user_embedding_metadata(user_id: int) -> Optional[dict]:
     """Получить метаданные эмбеддинга (track_count, updated_at) для проверки необходимости пересчета."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT track_count, updated_at FROM user_embeddings WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT track_count, updated_at, source_revision FROM user_embeddings WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -161,9 +167,10 @@ def get_recent_artist_counts(user_id: int, limit: int = 5) -> dict[str, int]:
     finally:
         conn.close()
 
-def update_track_stats(track_id: str, event_type: str, listen_pct: float):
+def update_track_stats(track_id: str, event_type: str, listen_pct: float, *, conn=None):
     """Обновить агрегированную глобальную статистику прослушиваний трека."""
-    conn = get_connection()
+    owned = conn is None
+    conn = conn or get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM track_stats WHERE track_id = ?", (track_id,))
@@ -196,15 +203,17 @@ def update_track_stats(track_id: str, event_type: str, listen_pct: float):
                 SET play_count = ?, skip_count = ?, like_count = ?, avg_listen_pct = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE track_id = ?
             """, (new_plays, new_skips, new_likes, float(new_avg), track_id))
-        conn.commit()
+        if owned:
+            conn.commit()
     finally:
-        conn.close()
+        if owned:
+            conn.close()
 
 def get_user_profile_stats(user_id: int) -> dict:
     """Получить статистику персонализации вкуса пользователя для фронтенд-индикатора."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT track_count, updated_at FROM user_embeddings WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT track_count, updated_at, source_revision FROM user_embeddings WHERE user_id = ?", (user_id,))
     meta = cursor.fetchone()
 
     cursor.execute("SELECT COUNT(*) as total_feedback FROM user_wave_feedback WHERE user_id = ?", (user_id,))
@@ -251,3 +260,76 @@ def get_wave_stats_summary() -> dict:
         "active_profiles": active_profiles,
         "breakdown": breakdown
     }
+
+
+def get_taste_revision(user_id):
+    conn = get_connection()
+    try:
+        row = conn.execute('SELECT revision FROM user_taste_revisions WHERE user_id=?', (user_id,)).fetchone()
+        return row['revision'] if row else 0
+    finally:
+        conn.close()
+
+
+def record_listening_event(user_id, track_id, event_type, listen_duration_ms=0,
+                           track_duration_ms=0, event_id=None, occurred_at=None,
+                           context=None, client=None, provenance='listening'):
+    """Event, like and counters commit together. Return False for an exact retry.
+
+    Reusing an ID for another payload is a conflict, never a silent new action.
+    Old clients without an ID retain their existing append behavior.
+    """
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            values = (track_id, event_type, listen_duration_ms, track_duration_ms,
+                      occurred_at, context, client, provenance)
+            if event_id:
+                old = conn.execute('SELECT track_id,event_type,listen_duration_ms,track_duration_ms,occurred_at,context,client,provenance FROM user_wave_feedback WHERE user_id=? AND event_id=?', (user_id,event_id)).fetchone()
+                if old:
+                    if tuple(old) != values:
+                        raise ValueError('event_id already used for a different event')
+                    return False
+            conn.execute("""INSERT INTO user_wave_feedback
+                (user_id,track_id,event_type,listen_duration_ms,track_duration_ms,event_id,occurred_at,context,client,provenance)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""", (user_id, track_id, event_type, listen_duration_ms,
+                         track_duration_ms, event_id, occurred_at, context, client, provenance))
+            if event_type == 'like':
+                conn.execute("INSERT OR IGNORE INTO user_favorites(user_id,track_id,provenance) VALUES (?,?,'manual')", (user_id,track_id))
+                conn.execute("UPDATE user_favorites SET provenance='manual' WHERE user_id=? AND track_id=? AND provenance='import'", (user_id,track_id))
+            update_track_stats(track_id, event_type,
+                min(1., max(0., listen_duration_ms / max(track_duration_ms, 1))), conn=conn)
+        return True
+    finally:
+        conn.close()
+
+
+def taste_snapshot(user_id, limit=2000):
+    """Bounded consistent snapshot. Unknown legacy history is a weak start signal.
+
+    Do not double count a history start when feedback already describes the same
+    play within ten minutes. Legacy rows have no session ID, so this is explicit
+    conservative deduplication rather than reconstructed event identity.
+    """
+    conn = get_connection()
+    try:
+        conn.execute('BEGIN')
+        revision = conn.execute('SELECT revision FROM user_taste_revisions WHERE user_id=?', (user_id,)).fetchone()
+        events = conn.execute("""SELECT track_id,event_type,listen_duration_ms,track_duration_ms,
+            COALESCE(occurred_at,created_at) AS ts,created_at AS received_at,context,provenance
+            FROM user_wave_feedback WHERE user_id=? ORDER BY id DESC LIMIT ?""", (user_id,limit)).fetchall()
+        history = conn.execute("""SELECT h.track_id,'start' AS event_type, h.played_at AS ts,
+            h.played_at AS received_at, NULL AS context, 'legacy' AS provenance,
+            0 AS listen_duration_ms, 0 AS track_duration_ms FROM user_history h
+            WHERE h.user_id=? AND NOT EXISTS (SELECT 1 FROM user_wave_feedback f
+                WHERE f.user_id=h.user_id AND f.track_id=h.track_id
+                AND ABS(julianday(COALESCE(f.occurred_at,f.created_at))-julianday(h.played_at))<10.0/1440)
+            ORDER BY h.played_at DESC LIMIT ?""", (user_id,limit)).fetchall()
+        likes = conn.execute("SELECT track_id FROM user_favorites WHERE user_id=? AND provenance!='import'", (user_id,)).fetchall()
+        dislikes = conn.execute('SELECT track_id FROM user_dislikes WHERE user_id=?', (user_id,)).fetchall()
+        return {'revision':revision['revision'] if revision else 0,
+                'events':[dict(r) for r in [*events,*history]],
+                'likes':{r['track_id'] for r in likes}, 'dislikes':{r['track_id'] for r in dislikes}}
+    finally:
+        conn.close()

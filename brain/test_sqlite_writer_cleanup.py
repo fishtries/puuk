@@ -28,7 +28,9 @@ def telemetry_db(tmp_path, monkeypatch):
             CREATE TABLE user_wave_feedback(
                 id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id),
                 track_id TEXT REFERENCES tracks(id), event_type TEXT,
-                listen_duration_ms INTEGER, track_duration_ms INTEGER);
+                listen_duration_ms INTEGER, track_duration_ms INTEGER,
+                event_id TEXT, occurred_at TEXT, context TEXT, client TEXT,
+                provenance TEXT DEFAULT 'listening');
             CREATE TABLE track_stats(
                 track_id TEXT PRIMARY KEY REFERENCES tracks(id),
                 play_count INTEGER, skip_count INTEGER, like_count INTEGER,
@@ -163,7 +165,7 @@ def test_unrelated_feedback_integrity_error_is_not_a_missing_track(feedback_clie
         exc = sqlite3.IntegrityError('unrelated constraint')
         exc.sqlite_errorcode = sqlite3.SQLITE_CONSTRAINT_UNIQUE
         raise exc
-    monkeypatch.setattr(wave_router.db, 'add_wave_feedback', reject)
+    monkeypatch.setattr(wave_router, 'record_listening_event', reject)
     with pytest.raises(sqlite3.IntegrityError, match='unrelated constraint'):
         client.post('/api/wave/feedback', json={'track_id': 'deleted', 'event_type': 'finish'})
 

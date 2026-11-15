@@ -251,7 +251,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const listenMs = Math.round(currentTime * 1000);
       const totalMs = Math.round((currentTrack.duration || duration || 0) * 1000);
       if (localStorage.getItem('puuk_token')) {
-        sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs).catch(() => {});
+        sendWaveFeedback(currentTrack.id, 'skip', listenMs, totalMs, isWaveActive ? 'wave' : 'manual').catch(() => {});
       }
     }
 
@@ -300,7 +300,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     const { repeatMode, currentTrack, duration } = get();
     if (currentTrack && localStorage.getItem('puuk_token')) {
       const trackDurationMs = Math.round((currentTrack.duration || duration || 0) * 1000);
-      sendWaveFeedback(currentTrack.id, 'finish', trackDurationMs, trackDurationMs).catch(() => {});
+      sendWaveFeedback(currentTrack.id, 'finish', trackDurationMs, trackDurationMs, get().isWaveActive ? 'wave' : 'manual').catch(() => {});
     }
 
     if (repeatMode === 'one' && currentTrack) {

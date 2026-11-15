@@ -7,14 +7,17 @@ from repositories.artist_credits import hydrate_track_credits
 
 # --- Избранное (Favorites) ---
 
-def add_favorite(user_id: int, track_id: str) -> bool:
+def add_favorite(user_id: int, track_id: str, *, provenance: str = 'manual') -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO user_favorites (user_id, track_id) VALUES (?, ?)", (user_id, track_id))
+        cursor.execute("INSERT INTO user_favorites (user_id, track_id, provenance) VALUES (?, ?, ?)", (user_id, track_id, provenance))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
+        if provenance == 'manual':
+            cursor.execute("UPDATE user_favorites SET provenance='manual' WHERE user_id=? AND track_id=? AND provenance='import'", (user_id,track_id))
+            conn.commit()
         success = False
     conn.close()
     return success

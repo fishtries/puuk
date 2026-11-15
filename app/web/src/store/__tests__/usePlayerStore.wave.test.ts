@@ -236,6 +236,10 @@ describe('Wave double-feedback guard', () => {
 
     assert.deepEqual(feedbackSummaries(), [{ track_id: 'B', event_type: 'skip' }]);
     assert.equal(firstFeedbackBody()?.listen_duration_ms, 45000);
+    assert.equal(firstFeedbackBody()?.context, 'wave');
+    assert.equal(firstFeedbackBody()?.client, 'web');
+    assert.equal(typeof firstFeedbackBody()?.event_id, 'string');
+    assert.ok(Date.parse(String(firstFeedbackBody()?.occurred_at)));
     assert.equal(usePlayerStore.getState().currentTrack?.id, 'C');
   });
 

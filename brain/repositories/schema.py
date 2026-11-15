@@ -92,6 +92,19 @@ def apply_migrations(conn):
                     elif version == 13:
                         from repositories.base import bump_catalog_version
                         bump_catalog_version(conn)
+                    if version == 15:
+                        # Trigger bodies contain semicolons, so install them as
+                        # complete statements inside the migration transaction.
+                        for table in ('user_history', 'user_favorites', 'user_dislikes', 'user_wave_feedback'):
+                            for operation, source in (('INSERT', 'NEW'), ('DELETE', 'OLD'), ('UPDATE', 'NEW')):
+                                invalidate = "UPDATE user_embeddings SET source_revision=NULL WHERE user_id=" + source + ".user_id;" if table in ('user_favorites', 'user_dislikes') else ''
+                                cursor.execute(f"""CREATE TRIGGER IF NOT EXISTS taste_{table}_{operation.lower()}
+                                    AFTER {operation} ON {table} BEGIN
+                                    INSERT INTO user_taste_revisions(user_id, revision)
+                                    SELECT {source}.user_id, 1 WHERE EXISTS (SELECT 1 FROM users WHERE id={source}.user_id)
+                                    ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+                                    {invalidate}
+                                    END""")
                     cursor.execute("INSERT INTO schema_migrations (version, filename) VALUES (?, ?)", (version, sql_file))
                     conn.commit()
                 except Exception as e:
