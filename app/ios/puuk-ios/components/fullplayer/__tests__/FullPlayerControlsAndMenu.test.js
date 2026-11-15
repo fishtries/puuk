@@ -1,6 +1,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import FullPlayerModal from '../../FullPlayerModal';
+import PlaybackSpeedControl from '../PlaybackSpeedControl';
 import TrackLoadingBadge from '../TrackLoadingBadge';
 import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
@@ -164,7 +165,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     await act(async () => renderer.unmount());
   });
 
-  it('renders TrackLoadingBadge before MenuView in topHeaderRight', async () => {
+  it('renders the speed control between the loading badge and menu', async () => {
     let renderer;
     await act(async () => {
       renderer = TestRenderer.create(
@@ -175,6 +176,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
           currentTime={15}
           duration={354}
           isLoading={true}
+          onPlaybackRateChange={jest.fn()}
         />,
       );
     });
@@ -189,8 +191,8 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     const children = React.Children.toArray(headerRight.props.children);
     // Child 0: TrackLoadingBadge (значок загрузки / kinda slow слева)
     expect(children[0].type).toBe(TrackLoadingBadge);
-    // Child 1: MenuView (нативный компонент поп ап кнопки справа)
-    expect(children[1].type).toBe(MenuView);
+    expect(children[1].type).toBe(PlaybackSpeedControl);
+    expect(children[2].type).toBe(MenuView);
   });
 
   it('hides the header spinner after startup while playback and background downloading continue', async () => {

@@ -78,6 +78,9 @@ function QueuePanel({
   onClose,
   menuActions,
   handleMenuAction,
+  playbackRate,
+  onPlaybackRateChange,
+  onSpeedControlVisibilityChange,
   onCoverLayout,
   controls = {},
 }) {
@@ -196,6 +199,10 @@ function QueuePanel({
                 displayTitle={currentTrack?.title}
                 menuActions={menuActions}
                 handleMenuAction={handleMenuAction}
+                playbackRate={playbackRate}
+                playbackTrackId={getTrackId(currentTrack)}
+                onPlaybackRateChange={onPlaybackRateChange}
+                onSpeedControlVisibilityChange={onSpeedControlVisibilityChange}
                 leadingActions={(
                   <TouchableOpacity
                     onPress={onToggleLike}
@@ -430,7 +437,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 14,
-    paddingRight: 84,
+    paddingRight: 140,
     gap: 12,
   },
   currentCover: {

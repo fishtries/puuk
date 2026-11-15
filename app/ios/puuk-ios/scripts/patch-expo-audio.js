@@ -2111,6 +2111,86 @@ function patchFavoriteCommand() {
   fs.writeFileSync(mediaFile, s);
 }
 
+// Keep the system button present while a request is in flight. Only isActive
+// changes on a tap; JS acknowledges the request separately from availability.
+function patchImmediateFavoriteFeedback() {
+  const moduleFile = path.join(iosDir, 'AudioModule.swift');
+  let s = fs.readFileSync(moduleFile, 'utf8');
+  s = replaceOnce(
+    s,
+    '      Function("setFavoriteState") { (player: AudioPlayer, selectionId: String, liked: Bool, enabled: Bool) in',
+    `      Function("setFavoritePending") { (player: AudioPlayer, selectionId: String, pending: Bool) in
+        MediaController.shared.setFavoritePending(for: player, selectionId: selectionId, pending: pending)
+      }
+
+      Function("setFavoriteState") { (player: AudioPlayer, selectionId: String, liked: Bool, enabled: Bool) in`,
+  );
+  fs.writeFileSync(moduleFile, s);
+
+  const mediaFile = path.join(iosDir, 'MediaController.swift');
+  s = fs.readFileSync(mediaFile, 'utf8');
+  s = replaceOnce(
+    s,
+    '  private var favoriteEnabled = false',
+    '  private var favoriteEnabled = false\n  private var favoritePending = false',
+  );
+  s = replaceOnce(
+    s,
+    `      if enabled || self.favoriteSelectionId != selectionId {
+        self.endFavoriteBackgroundTask()
+      }`,
+    `      if !enabled || self.favoriteSelectionId != selectionId || self.favoritePlayer?.id != player.id {
+        self.favoritePending = false
+        self.endFavoriteBackgroundTask()
+      }`,
+  );
+  s = replaceOnce(
+    s,
+    `  private func updateFavoriteCommand() {
+    let command = remoteCommandCenter.likeCommand
+    command.isEnabled = favoriteEnabled && !favoriteSelectionId.isEmpty &&
+      favoritePlayer != nil && favoritePlayer?.id == activePlayable?.id
+    command.isActive = favoriteLiked
+    command.localizedTitle = favoriteLiked ? "Remove from Favorites" : "Add to Favorites"
+  }`,
+    `  func setFavoritePending(for player: AudioPlayer, selectionId: String, pending: Bool) {
+    performOnMain {
+      guard self.favoritePlayer?.id == player.id, self.favoriteSelectionId == selectionId else { return }
+      self.favoritePending = pending
+      if !pending { self.endFavoriteBackgroundTask() }
+    }
+  }
+
+  private func updateFavoriteCommand() {
+    let command = remoteCommandCenter.likeCommand
+    let enabled = favoriteEnabled && !favoriteSelectionId.isEmpty &&
+      favoritePlayer != nil && favoritePlayer?.id == activePlayable?.id
+    if command.isEnabled != enabled { command.isEnabled = enabled }
+    if command.isActive != favoriteLiked { command.isActive = favoriteLiked }
+    let title = favoriteLiked ? "Remove from Favorites" : "Add to Favorites"
+    if command.localizedTitle != title { command.localizedTitle = title }
+  }`,
+  );
+  s = replaceOnce(
+    s,
+    `        // Disable until JS acknowledges success or restores the previous state.
+        self.favoriteEnabled = false
+        self.updateFavoriteCommand()`,
+    `        // Respond on the native thread before waking JS or starting network I/O.
+        // Coalesce duplicate commands without removing the system button.
+        if self.favoritePending { return .success }
+        self.favoritePending = true
+        self.favoriteLiked.toggle()
+        self.updateFavoriteCommand()`,
+  );
+  s = replaceOnce(
+    s,
+    '  private func disableRemoteCommands() {\n    endFavoriteBackgroundTask()',
+    '  private func disableRemoteCommands() {\n    favoritePending = false\n    endFavoriteBackgroundTask()',
+  );
+  fs.writeFileSync(mediaFile, s);
+}
+
 function patchPlaybackPitchMode() {
   const file = path.join(iosDir, 'AudioPlayer.swift');
   const source = fs.readFileSync(file, 'utf8');
@@ -2137,6 +2217,7 @@ const acceptedInputs = {
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '4c18573feeea3d01b5bf39fc064753c8f1244ea181ae0b2d3958780704faeec4',
+    '4c18573feeea3d01b5bf39fc064753c8f1244ea181ae0b2d3958780704faeec4',
   ],
   'AudioModule.swift': [
     '404d68b7be202ba8145667af50fd5ef0df3df4e802e660e30c6aad0e7acbbd59',
@@ -2148,6 +2229,7 @@ const acceptedInputs = {
     '81577fb10c88206da394daa548379c64b6bce4dc833287352b5bb8fd74f8e43e',
     '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
     '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
+    '00642d1f7e4c2abfe385d2e0565fb93c39b57d2d8b495587b2930a1ed3bd2400',
   ],
   'MediaController.swift': [
     '8e0b972ef7548b174ec5b1daff1dfb69f201095e61567111dc48298182e5d0ab',
@@ -2159,6 +2241,7 @@ const acceptedInputs = {
     'e270b82a708b56be4084ffd8dfa4e17dd16c3017f494aaccec793b3b254575b6',
     'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
     'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
+    '478bc0d260098577f1ed5d0f6196a2c9e8ed50964c850e78f1078475301ff167',
   ],
   'AudioComponentRegistry.swift': [
     '45af89001f159d392b991cfd2111050e31ea3c9a23f94600e142f9974732621f',
@@ -2170,9 +2253,11 @@ const acceptedInputs = {
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
+    '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
   ],
   'AudioUtils.swift': [
     'b78865fa35bcc5b3d91279a1d1399f832b283fd5b0c326128f0ce66933b8c537',
+    '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
@@ -2209,12 +2294,12 @@ function run() {
       .includes('private struct SourceContext')
   ) {
     console.log(
-      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2, remote pause corrections and pitch inheritance already patched (verified hashes).',
+      '[patch-expo-audio] Puuk source identity v1 with S1N/R1/R2, remote pause corrections, pitch inheritance and immediate favorite feedback already patched (verified hashes).',
     );
     return;
   }
   const supportedGeneration = Array.from(
-    { length: 9 },
+    { length: acceptedInputs['AudioPlayer.swift'].length },
     (_, index) => index,
   ).some((index) =>
     [...before].every(
@@ -2226,7 +2311,11 @@ function run() {
     throw new Error('Unsupported mixed SDK source generations');
   const hasFavoriteCommand = [...before].every(
     ([file, content]) =>
-      digest(content) === acceptedInputs[path.basename(file)][7],
+      [7, 8].some((index) => digest(content) === acceptedInputs[path.basename(file)][index]),
+  );
+  const hasPitchMode = [...before].every(
+    ([file, content]) =>
+      digest(content) === acceptedInputs[path.basename(file)][8],
   );
   if (!hasFavoriteCommand) {
     const isRemotePauseCorrected = [...before].every(
@@ -2271,7 +2360,8 @@ function run() {
     }
     patchFavoriteCommand();
   }
-  patchPlaybackPitchMode();
+  if (!hasPitchMode) patchPlaybackPitchMode();
+  patchImmediateFavoriteFeedback();
   // Verify complete outputs too: a missing legacy transform must not produce partial success.
   for (const name of Object.keys(acceptedInputs)) {
     const file = path.join(iosDir, name);
@@ -2287,7 +2377,7 @@ function run() {
   for (const [file, content] of staged)
     nodeFs.writeFileSync(file, content, 'utf8');
   console.log(
-    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2, remote pause corrections and pitch inheritance; rebuild the iOS binary.',
+    '[patch-expo-audio] Applied Puuk source identity v1 with S1N/R1/R2, remote pause corrections, pitch inheritance and immediate favorite feedback; rebuild the iOS binary.',
   );
 }
 

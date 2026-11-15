@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { View, StyleSheet, Dimensions, PixelRatio } from 'react-native';
 import { usePlaybackPosition } from '../../hooks/playbackStatus';
 import Svg, {
   Path,
@@ -49,12 +49,16 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
   }, [width]);
 
   const dashOffset = useMemo(() => {
-    return totalLength * (1 - displayProgress);
+    // Subpixel audio ticks need not rebuild the filtered SVG subtree. Keep
+    // physical-pixel precision, including exact start/end and backward seeks.
+    return PixelRatio.roundToNearestPixel(totalLength * (1 - displayProgress));
   }, [totalLength, displayProgress]);
+
+  const hasProgress = displayProgress > 0;
 
   const yBottom = CORNER_RADIUS + SVG_PAD_TOP;
 
-  return (
+  return useMemo(() => (
     <View style={styles.container} pointerEvents="none">
       <Svg
         width={width}
@@ -129,7 +133,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         />
 
         {/* СЛОЙ 1: Высокое атмосферное рассеянное свечение с истинным Gaussian Blur (яркий градиент вверх) */}
-        {displayProgress > 0 ? (
+        {hasProgress ? (
           <Path
             d={pathD}
             fill="none"
@@ -143,7 +147,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         ) : null}
 
         {/* СЛОЙ 2: Мягкий неоновый ореол средней дальности с Gaussian Blur (яркий насыщенный свет) */}
-        {displayProgress > 0 ? (
+        {hasProgress ? (
           <Path
             d={pathD}
             fill="none"
@@ -157,7 +161,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         ) : null}
 
         {/* СЛОЙ 3: Тело линии — мягкое и приглушенное, без резкого белого пересвета */}
-        {displayProgress > 0 ? (
+        {hasProgress ? (
           <Path
             d={pathD}
             fill="none"
@@ -171,7 +175,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         ) : null}
 
         {/* СЛОЙ 4: Деликатный мягкий акцентный блик по центру */}
-        {displayProgress > 0 ? (
+        {hasProgress ? (
           <Path
             d={pathD}
             fill="none"
@@ -185,7 +189,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         ) : null}
       </Svg>
     </View>
-  );
+  ), [width, yBottom, accentColor, pathD, totalLength, dashOffset, hasProgress]);
 });
 
 const styles = StyleSheet.create({

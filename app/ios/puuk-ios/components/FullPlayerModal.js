@@ -1326,6 +1326,10 @@ const FullPlayerModal = ({
                         displayTitle={displayTitle}
                         handleMenuAction={handleMenuAction}
                         menuActions={menuActions}
+                        playbackRate={playbackRate}
+                        playbackTrackId={getTrackId(activeTrack)}
+                        onPlaybackRateChange={onPlaybackRateChange}
+                        onSpeedControlVisibilityChange={setIsSpeedControlOpen}
                       />
                     </Animated.View>
 
@@ -1450,6 +1454,9 @@ const FullPlayerModal = ({
                 menuActions={menuActions}
                 handleMenuAction={handleMenuAction}
                 controls={queueControls}
+                playbackRate={playbackRate}
+                onPlaybackRateChange={onPlaybackRateChange}
+                onSpeedControlVisibilityChange={setIsSpeedControlOpen}
               />
             </View>
 
@@ -1470,9 +1477,6 @@ const FullPlayerModal = ({
                 onSkip={fetchNextTrack}
               />
               <PlayerControls
-                onSpeedControlVisibilityChange={setIsSpeedControlOpen}
-                playbackRate={playbackRate}
-                onPlaybackRateChange={onPlaybackRateChange}
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}
                 isPlaying={isPlaying}

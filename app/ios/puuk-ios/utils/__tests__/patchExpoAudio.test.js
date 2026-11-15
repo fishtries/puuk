@@ -1093,7 +1093,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     for (const name of names.filter((name) => !['MediaController.swift', 'AudioModule.swift'].includes(name)))
       expect(name === 'AudioPlayer.swift' ? withoutPitchInheritance(expected[name]) : expected[name]).toBe(before[name]);
     expect(hash(expected['MediaController.swift'])).toBe(
-      'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
+      '478bc0d260098577f1ed5d0f6196a2c9e8ed50964c850e78f1078475301ff167',
     );
     success(run(ios));
     expect(contents(ios)).toEqual(expected);
@@ -1175,7 +1175,7 @@ describe('S2 remote pause type correction (source-only, not Swift compilation)',
     const { root, ios } = r2();
     const source = fs.readFileSync(script, 'utf8');
     const changed = source.replaceAll(
-      'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
+      '478bc0d260098577f1ed5d0f6196a2c9e8ed50964c850e78f1078475301ff167',
       '2e90e151ddbbc9d696e7fade169d37c5ba5c12d9e7d0b9f7893302c619dcc3cd',
     );
     expect(changed).not.toBe(source);
@@ -1227,15 +1227,30 @@ describe('system favorite command boundary (source only)', () => {
     expect(media).toContain('command.isActive = favoriteLiked');
     expect(media).toContain('payload: ["favoriteSelectionId": self.favoriteSelectionId]');
     expect(media).toContain('player.id == self.activePlayable?.id');
-    expect(media).toContain('self.favoriteEnabled = false');
+    const handler = method(media, '    let favoriteTarget', '    let playTarget');
+    expect(handler).toContain('if self.favoritePending { return .success }');
+    expect(handler).not.toContain('self.favoriteEnabled = false');
+    expect(handler).not.toContain('isEnabled =');
+    expect(handler.indexOf('self.favoriteLiked.toggle()')).toBeLessThan(handler.indexOf('self.updateFavoriteCommand()'));
+    expect(handler.indexOf('self.updateFavoriteCommand()')).toBeLessThan(handler.indexOf('beginBackgroundTask'));
+    expect(handler.indexOf('self.updateFavoriteCommand()')).toBeLessThan(handler.indexOf('player.emit'));
+    expect(media).toContain('if command.isEnabled != enabled { command.isEnabled = enabled }');
+    expect(media).toContain('if command.isActive != favoriteLiked { command.isActive = favoriteLiked }');
     expect(media).toContain('remoteCommandTargets.append((remoteCommandCenter.likeCommand, favoriteTarget))');
     expect(media).toContain('remoteCommandCenter.likeCommand.isEnabled = false');
   });
 
   test('favorite requests have a separate background task with acknowledgment and expiration cleanup', () => {
     const media = expected['MediaController.swift'];
+    expect(expected['AudioModule.swift']).toContain('Function("setFavoritePending")');
     expect(media).toContain('beginBackgroundTask(withName: "PuukFavorite")');
-    expect(media).toContain('if enabled || self.favoriteSelectionId != selectionId');
+    const state = method(media, '  func setFavoriteState(', '  func setFavoritePending(');
+    expect(state).toContain('if !enabled || self.favoriteSelectionId != selectionId || self.favoritePlayer?.id != player.id');
+    expect(state).not.toContain('if enabled ||');
+    const pending = method(media, '  func setFavoritePending(', '  private func updateFavoriteCommand()');
+    expect(pending).toContain('guard self.favoritePlayer?.id == player.id, self.favoriteSelectionId == selectionId else { return }');
+    expect(pending).toContain('if !pending { self.endFavoriteBackgroundTask() }');
+    expect(pending).not.toContain('updateFavoriteCommand()');
     expect(media).toContain('self?.performOnMain { self?.endFavoriteBackgroundTask() }');
     expect(media).toContain('UIApplication.shared.endBackgroundTask(task)');
     expect(method(media, '  private func disableRemoteCommands()', '\n}')).toContain('endFavoriteBackgroundTask()');
@@ -1256,9 +1271,31 @@ function withoutPitchInheritance(source) {
   return source.replace('    // Preserve the selected pitch mode for every track, retry and restored source.\n    item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed\n', '');
 }
 
+function previousFavoriteGeneration(ios) {
+  const previousScript = path.join(path.dirname(ios), 'previous-favorite.cjs');
+  const source = fs.readFileSync(script, 'utf8')
+    .replace('  patchImmediateFavoriteFeedback();', '')
+    .replaceAll('.at(-1)', '[8]');
+  fs.writeFileSync(previousScript, source);
+  success(run(ios, previousScript));
+  expect(hash(contents(ios)['MediaController.swift'])).toBe('e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8');
+  expect(hash(contents(ios)['AudioModule.swift'])).toBe('86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393');
+}
+
 test('upgrades the previous favorite-command generation without replaying older patches', () => {
   const { ios } = pristine();
-  for (const name of names) fs.writeFileSync(path.join(ios, name), name === 'AudioPlayer.swift' ? withoutPitchInheritance(expected[name]) : expected[name]);
+  previousFavoriteGeneration(ios);
+  const playerFile = path.join(ios, 'AudioPlayer.swift');
+  fs.writeFileSync(playerFile, withoutPitchInheritance(fs.readFileSync(playerFile, 'utf8')));
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
+});
+
+test('upgrades the installed pitch generation to immediate favorite feedback and repeats safely', () => {
+  const { ios } = pristine();
+  previousFavoriteGeneration(ios);
   success(run(ios));
   expect(contents(ios)).toEqual(expected);
   success(run(ios));

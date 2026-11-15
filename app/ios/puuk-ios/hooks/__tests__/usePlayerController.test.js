@@ -64,6 +64,7 @@ const mockPlayerInstance = {
   seekTo: jest.fn(),
   setActiveForLockScreen: jest.fn(),
   setFavoriteState: jest.fn(),
+  setFavoritePending: jest.fn(),
   addListener: jest.fn(() => ({ remove: jest.fn() })),
 };
 
@@ -171,7 +172,7 @@ describe('usePlayerController', () => {
     expect(controller.queueControls.repeatMode).not.toBe(controls.repeatMode);
   });
 
-  test('speed changes live without restarting and survives track changes and pause', async () => {
+  test('speed changes live, survives pause and resets for another track', async () => {
     expect(controller.playbackRate).toBe(1);
     expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);
     await act(async () => controller.changePlaybackRate(0.85));
@@ -181,11 +182,13 @@ describe('usePlayerController', () => {
     expect(mockPlayerInstance.replace).not.toHaveBeenCalled();
     await act(async () => controller.playTrack({ id: 101, title: 'First' }));
     await act(async () => controller.togglePlayPause());
-    await act(async () => controller.playTrack({ id: 102, title: 'Next' }));
     expect(controller.playbackRate).toBe(0.85);
-    expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);
-    await act(async () => controller.changePlaybackRate(1));
+    await act(async () => controller.playTrack({ id: 101, title: 'First' }));
+    expect(controller.playbackRate).toBe(0.85);
+    await act(async () => controller.playTrack({ id: 102, title: 'Next' }));
+    expect(controller.playbackRate).toBe(1);
     expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(1);
+    expect(mockPlayerInstance.shouldCorrectPitch).toBe(false);
   });
 
   test('preview applies 0.005 steps immediately and commits without another native update', async () => {
@@ -226,6 +229,15 @@ describe('usePlayerController', () => {
       ),
     );
   };
+
+  test('advancing the queue resets an uncommitted speed preview', async () => {
+    await startQueue();
+    await act(async () => controller.changePlaybackRate(0.855, { commit: false }));
+    await act(async () => { await controller.fetchNextTrack({ finished: true }); });
+    expect(controller.currentTrack.id).toBe(2);
+    expect(controller.playbackRate).toBe(1);
+    expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(1);
+  });
 
   test('queue edits address occurrences, update preloading and undo without restarting audio', async () => {
     await startQueue();
@@ -417,11 +429,12 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.is_liked).toBe(false);
   });
 
-  test('duplicate commands issue one request and failure restores favorite state', async () => {
+  test('a slow favorite request keeps the command enabled and failure restores state', async () => {
     await act(async () => { controller.playTrackList([{ id: 41, is_liked: false }], 0); });
     const token = selection();
     let finish;
     authFetch.mockClear();
+    mockPlayerInstance.setFavoriteState.mockClear();
     authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     await act(async () => {
       remoteFavorite()({ favoriteSelectionId: token });
@@ -429,10 +442,46 @@ describe('usePlayerController', () => {
     });
     expect(authFetch).toHaveBeenCalledTimes(1);
     expect(controller.currentTrack.is_liked).toBe(true);
-    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, false);
+    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
+    expect(mockPlayerInstance.setFavoriteState.mock.calls.every(([, , enabled]) => enabled)).toBe(true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, true);
     await act(async () => { finish({ ok: false, status: 500 }); });
     expect(controller.currentTrack.is_liked).toBe(false);
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, false);
+  });
+
+  test('an app favorite change stays enabled until the server confirms it', async () => {
+    await act(async () => { controller.playTrackList([{ id: 41, is_liked: true }], 0); });
+    const token = selection();
+    let finish;
+    authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    mockPlayerInstance.setFavoriteState.mockClear();
+    await act(async () => { controller.handleToggleLike(controller.currentTrack); });
+    expect(controller.currentTrack.is_liked).toBe(false);
+    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
+    expect(mockPlayerInstance.setFavoriteState.mock.calls.every(([, , enabled]) => enabled)).toBe(true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, true);
+    await act(async () => { finish({ ok: true }); });
+    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, false);
+  });
+
+  test('an older binary retains its pending acknowledgment until completion', async () => {
+    const setFavoritePending = mockPlayerInstance.setFavoritePending;
+    delete mockPlayerInstance.setFavoritePending;
+    try {
+      await act(async () => { controller.playTrackList([{ id: 41 }], 0); });
+      const token = selection();
+      let finish;
+      authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+      await act(async () => { remoteFavorite()({ favoriteSelectionId: token }); });
+      expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, false);
+      await act(async () => { finish({ ok: true }); });
+      expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
+    } finally {
+      mockPlayerInstance.setFavoritePending = setFavoritePending;
+    }
   });
 
   test('a failed favorite request for the previous track leaves the new track unchanged', async () => {
@@ -446,6 +495,7 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.id).toBe(42);
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(nextToken, true, true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(nextToken, false);
   });
 
   test('reselecting the same track gets a new token and rejects its earlier command', async () => {
@@ -477,9 +527,11 @@ describe('usePlayerController', () => {
     await act(async () => { remoteFavorite()({ favoriteSelectionId: selection() }); });
     await act(async () => { renderer.unmount(); });
     mockPlayerInstance.setFavoriteState.mockClear();
+    mockPlayerInstance.setFavoritePending.mockClear();
     setTracksMock.mockClear();
     await act(async () => { finish({ ok, status: ok ? 200 : 500 }); });
     expect(mockPlayerInstance.setFavoriteState).not.toHaveBeenCalled();
+    expect(mockPlayerInstance.setFavoritePending).not.toHaveBeenCalled();
     expect(setTracksMock).not.toHaveBeenCalled();
   });
 
@@ -1396,6 +1448,10 @@ describe('usePlayerController', () => {
         flushPromise = Promise.resolve();
       });
       expect(feedbackAttempts).toBe(2);
+      const feedbackCalls = authFetch.mock.calls.filter(([url]) => url.includes('/api/wave/feedback'));
+      expect(feedbackCalls[0][1].body.event_id).toBeTruthy();
+      expect(feedbackCalls[1][1].body.event_id).toBe(feedbackCalls[0][1].body.event_id);
+      expect(feedbackCalls[1][1].body.occurred_at).toBe(feedbackCalls[0][1].body.occurred_at);
 
       await act(async () => {
         for (const listener of mockAuthListeners) {

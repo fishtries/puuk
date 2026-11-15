@@ -12,6 +12,7 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { MenuView } from '@react-native-menu/menu';
 import TrackLoadingBadge from './TrackLoadingBadge';
+import PlaybackSpeedControl from './PlaybackSpeedControl';
 
 export function isNativeMenuAvailable() {
   if (process.env.NODE_ENV === 'test') {
@@ -47,6 +48,10 @@ export default function PlayerHeader({
   menuActions,
   menuOnly = false,
   leadingActions,
+  playbackRate,
+  playbackTrackId,
+  onPlaybackRateChange,
+  onSpeedControlVisibilityChange,
 }) {
   const hasNativeMenu = useMemo(() => isNativeMenuAvailable(), []);
 
@@ -100,6 +105,14 @@ export default function PlayerHeader({
         networkStatus={networkStatus}
       />
 
+      {onPlaybackRateChange && (
+        <PlaybackSpeedControl
+          key={playbackTrackId}
+          rate={playbackRate}
+          onChange={onPlaybackRateChange}
+          onVisibilityChange={onSpeedControlVisibilityChange}
+        />
+      )}
       {hasNativeMenu ? (
         <MenuView
           onPressAction={handleMenuAction}

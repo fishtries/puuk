@@ -1078,10 +1078,18 @@ export default function usePlayerController({ setTracks }) {
     [player],
   );
 
+  const lastPlayedTrackIdRef = useRef(null);
+
   /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback(
     (track) => {
       if (!mountedRef.current) return Promise.resolve({ superseded: true });
+      const trackId = getTrackId(track);
+      if (lastPlayedTrackIdRef.current !== null && trackId !== null &&
+          !areTrackIdsEqual(lastPlayedTrackIdRef.current, trackId)) {
+        changePlaybackRate(1);
+      }
+      lastPlayedTrackIdRef.current = trackId;
       const request = ++playbackRequestRef.current;
       const requestId = `selection_${++selectionSequence}`;
       const authEpoch = authEpochRef.current;
@@ -1145,7 +1153,7 @@ export default function usePlayerController({ setTracks }) {
           return { isLocal: false, uri: null, error };
         });
     },
-    [player, refreshTrackLoudness],
+    [player, refreshTrackLoudness, changePlaybackRate],
   );
 
   const fetchQueue = useCallback((trackId, signal, exclusions = {}) => {
@@ -1347,6 +1355,10 @@ export default function usePlayerController({ setTracks }) {
               : 'skip';
           if (currentTrackId !== null) {
             sendBackgroundEvent('/api/wave/feedback', {
+              event_id: `ios-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
+              occurred_at: new Date().toISOString(),
+              context: isWaveSessionRef.current ? 'wave' : 'manual',
+              client: 'ios',
               track_id: currentTrackId,
               event_type: eventType,
               listen_duration_ms: listenedMs,
@@ -1633,6 +1645,8 @@ export default function usePlayerController({ setTracks }) {
   );
 
   const pendingLikesRef = useRef(new Set());
+  const supportsImmediateFavorite =
+    typeof player?.setFavoritePending === 'function';
   const handleToggleLike = useCallback(
     async (track) => {
       if (!mountedRef.current || !track) return;
@@ -1647,6 +1661,9 @@ export default function usePlayerController({ setTracks }) {
         areTrackIdsEqual(active, trackId) ? active : track
       ).is_liked;
       const newLiked = !currentLiked;
+      if (areTrackIdsEqual(active, trackId)) {
+        player?.setFavoritePending?.(currentRequestIdRef.current || '', true);
+      }
       const applyLiked = (liked) => {
         const patch = (item) =>
           areTrackIdsEqual(item, trackId) ? { ...item, is_liked: liked } : item;
@@ -1658,7 +1675,7 @@ export default function usePlayerController({ setTracks }) {
           player?.setFavoriteState?.(
             currentRequestIdRef.current || '',
             liked,
-            false,
+            !!currentUserIdRef.current && supportsImmediateFavorite,
           );
         }
       };
@@ -1680,6 +1697,7 @@ export default function usePlayerController({ setTracks }) {
           epoch === authEpochRef.current &&
           areTrackIdsEqual(currentTrackRef.current, trackId)
         ) {
+          player?.setFavoritePending?.(currentRequestIdRef.current || '', false);
           player?.setFavoriteState?.(
             currentRequestIdRef.current || '',
             !!currentTrackRef.current.is_liked,
@@ -1688,7 +1706,14 @@ export default function usePlayerController({ setTracks }) {
         }
       }
     },
-    [setTracks, player, setCurrentTrack, setUpNextQueue, setHistory],
+    [
+      setTracks,
+      player,
+      supportsImmediateFavorite,
+      setCurrentTrack,
+      setUpNextQueue,
+      setHistory,
+    ],
   );
 
   // The selection token belongs to the track shown when the remote command fired.
@@ -1715,9 +1740,14 @@ export default function usePlayerController({ setTracks }) {
       !!currentTrack?.is_liked,
       !!currentTrack &&
         !!currentUserIdRef.current &&
-        !pendingLikesRef.current.has(String(getTrackId(currentTrack))),
+        (supportsImmediateFavorite ||
+          !pendingLikesRef.current.has(String(getTrackId(currentTrack)))),
     );
-  }, [player, currentTrack, favoriteSelectionId]);
+    player?.setFavoritePending?.(
+      favoriteSelectionId,
+      pendingLikesRef.current.has(String(getTrackId(currentTrack))),
+    );
+  }, [player, currentTrack, favoriteSelectionId, supportsImmediateFavorite]);
 
   const startWave = useCallback(async () => {
     if (!mountedRef.current) return;

@@ -24,7 +24,7 @@ npx expo-modules-autolinking resolve --platform ios
 из текущего проекта. Для запуска Metro отдельно используйте:
 
 ```sh
-npx expo start --clear
+REACT_NATIVE_PACKAGER_HOSTNAME=192.168.1.111 npx expo start --clear
 ```
 
 Ошибка `main has not been registered` после ошибки ExpoAsset вторична: загрузка

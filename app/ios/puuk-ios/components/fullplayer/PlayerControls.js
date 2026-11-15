@@ -18,16 +18,12 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ChasingArrowsIcon from './ChasingArrowsIcon';
 import ProgressBar from './ProgressBar';
-import PlaybackSpeedControl from './PlaybackSpeedControl';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const AnimatedTouchableOpacity =
   Animated.createAnimatedComponent(TouchableOpacity);
 
 const PlayerControls = ({
-  playbackRate = 1,
-  onPlaybackRateChange,
-  onSpeedControlVisibilityChange,
   styles,
   isEffectivelyCompact,
   isPlaying,
@@ -554,15 +550,6 @@ const PlayerControls = ({
                   </Animated.View>
                 </AnimatedTouchableOpacity>
               </Animated.View>
-
-              {!isEffectivelyCompact && onPlaybackRateChange && (
-                <PlaybackSpeedControl
-                  rate={playbackRate}
-                  onChange={onPlaybackRateChange}
-                  onOpen={notifyUserInteraction}
-                  onVisibilityChange={onSpeedControlVisibilityChange}
-                />
-              )}
 
               {!isEffectivelyCompact && (
                 <Animated.View
