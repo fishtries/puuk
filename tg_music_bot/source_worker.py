@@ -1,7 +1,7 @@
 """One isolated Spotify recording download. Parent owns deadline and process group.
 
-Spotify metadata is input only. Audio comes from checked YouTube Music song
-results, never a fallback search across arbitrary videos. JSON result is written
+Spotify metadata is input only. Audio comes from checked SoundCloud recordings, with YouTube Music song
+results as a fallback. JSON result is written
 atomically after the downloaded bytes pass the duration check.
 """
 import argparse
@@ -178,28 +178,25 @@ def download_candidate(song, candidate, directory):
     return {**metadata, 'filepath': str(path), 'verified_metadata': metadata, 'source': receipt}
 
 
-def download_song(song, directory, *, client=None, download=None, fallback=None):
+def download_song(song, directory, *, client=None, download=None, primary=None):
     download = download or download_candidate
-    try:
-        if client is None:
-            from ytmusicapi import YTMusic
-            client = YTMusic()  # finite HTTP timeout; parent enforces wall time
-        candidates, reasons = find_candidates(song, client)
-    except Exception as exc:
-        logging.warning('YouTube Music unavailable: %s', type(exc).__name__)
-        candidates, reasons = [], ['Каталог YouTube Music недоступен']
-    errors = []
-    primary_reasons = list(reasons)
-    # Search the independent provider only after primary candidates fail.
+    errors, reasons = [], []
+    # Query the reserve catalog only after SoundCloud candidates fail.
     for provider_round in range(2):
-        if provider_round:
-            try:
-                candidates, fallback_reasons = (fallback or find_soundcloud_candidates)(song)
-                reasons.extend(fallback_reasons)
-            except Exception as exc:
-                logging.warning('SoundCloud unavailable: %s', type(exc).__name__)
-                candidates = []
-                reasons.append('Каталог SoundCloud недоступен')
+        try:
+            if provider_round == 0:
+                candidates, provider_reasons = (primary or find_soundcloud_candidates)(song)
+            else:
+                if client is None:
+                    from ytmusicapi import YTMusic
+                    client = YTMusic()
+                candidates, provider_reasons = find_candidates(song, client)
+            reasons.extend(provider_reasons)
+        except Exception as exc:
+            provider = 'SoundCloud' if provider_round == 0 else 'YouTube Music'
+            logging.warning('%s unavailable: %s', provider, type(exc).__name__)
+            candidates = []
+            reasons.append(f'Каталог {provider} недоступен')
         for candidate in candidates[:3]:
             if assess(song, candidate)[1]:
                 continue
@@ -211,8 +208,6 @@ def download_song(song, directory, *, client=None, download=None, fallback=None)
                     if partial.is_file():
                         partial.unlink()
                 errors.append('Подходящая запись недоступна или не прошла проверку файла')
-    if not errors and any('не найдена в YouTube Music' in r for r in primary_reasons):
-        reasons = ['Доступная оригинальная запись не найдена в подключённых источниках; найденные версии не подходят']
     return {'error': '; '.join(dict.fromkeys(errors + reasons))[:500]
             or 'Подтверждённая запись не найдена в музыкальных каталогах'}
 

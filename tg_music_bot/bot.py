@@ -24,7 +24,7 @@ if brain_dir not in sys.path:
 import db
 from repositories.artist_credits import CreditSource
 from services.media_locations import resolve_import_album
-from downloader import download_audio, download_spotify, search_youtube
+from downloader import download_audio, download_spotify, search_soundcloud
 from download_queue import DownloadQueue
 
 # Load environment variables
@@ -172,7 +172,7 @@ async def cmd_help(message: Message):
         "• Отправьте команду <code>/code</code> или напишите слово <b>код</b>, чтобы получить 6-значный одноразовый код (OTP) для авторизации.\n\n"
         "🎵 <b>Поиск и скачивание музыки:</b>\n"
         "• Отправьте ссылку на трек или плейлист (YouTube, Spotify, VK, SoundCloud)\n"
-        "• Или отправьте название песни текстом для поиска по YouTube\n\n"
+        "• Или отправьте название песни текстом для поиска по SoundCloud\n\n"
         "⚙️ <b>Режим работы:</b>\n"
         "• Команда <code>/start</code> открывает главное меню:\n"
         "  1. <i>Сохранять на сервер</i> (трек добавляется в медиатеку Puuk и в ваши Лайки)\n"
@@ -449,6 +449,24 @@ async def process_download(user_id: int, chat_id: int, url: str, status_msg: Mes
             raise
 
 
+# Bound callback storage; old buttons ask the user to repeat the search.
+_soundcloud_selections = {}
+
+
+@dp.callback_query(F.data.startswith('dl_sc_'))
+async def process_sc_selection(callback: types.CallbackQuery):
+    if not is_user_allowed(callback.from_user.id):
+        await callback.answer("У вас нет доступа.", show_alert=True)
+        return
+    selection = _soundcloud_selections.get(callback.data[6:])
+    if not selection or selection[0] != callback.from_user.id:
+        await callback.answer("Поиск устарел. Отправьте название трека ещё раз.", show_alert=True)
+        return
+    await callback.message.edit_text("⏳ Начинаю обработку...", reply_markup=None)
+    await callback.answer()
+    await process_download(callback.from_user.id, callback.message.chat.id, selection[1], callback.message)
+
+
 @dp.callback_query(F.data.startswith('dl_yt_'))
 async def process_yt_selection(callback: types.CallbackQuery):
     if not is_user_allowed(callback.from_user.id):
@@ -551,7 +569,7 @@ async def handle_message(message: Message):
         
         loop = asyncio.get_running_loop()
         try:
-            results = await loop.run_in_executor(None, search_youtube, query_or_url, 5)
+            results = await loop.run_in_executor(None, search_soundcloud, query_or_url, 5)
         except Exception as e:
             import html
             await status_msg.edit_text(f"❌ Ошибка поиска:\n<code>{html.escape(str(e))}</code>", parse_mode='HTML')
@@ -571,7 +589,11 @@ async def handle_message(message: Message):
             label = f"{title} - {artist} ({mins}:{secs:02d})"
             if len(label) > 64:
                 label = label[:61] + "..."
-            builder.append([InlineKeyboardButton(text=label, callback_data=f"dl_yt_{res['id']}")])
+            token = uuid.uuid4().hex
+            if len(_soundcloud_selections) >= 1000:
+                del _soundcloud_selections[next(iter(_soundcloud_selections))]
+            _soundcloud_selections[token] = (message.from_user.id, res['url'])
+            builder.append([InlineKeyboardButton(text=label, callback_data=f"dl_sc_{token}")])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=builder)
         await status_msg.edit_text("Выберите трек для скачивания:", reply_markup=keyboard)

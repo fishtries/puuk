@@ -114,7 +114,7 @@ def test_download_tries_next_checked_candidate_after_failure(tmp_path):
         if len(calls) == 1:
             raise RuntimeError('unavailable')
         return {'filepath': 'checked.mp3'}
-    result = download_song(song(), tmp_path, client=Client(), download=fetch)
+    result = download_song(song(), tmp_path, client=Client(), primary=lambda s: ([], []), download=fetch)
     assert result['track']['filepath'] == 'checked.mp3'
     assert calls == ['aaaaaaaaaaa', 'bbbbbbbbbbb']
 
@@ -124,14 +124,14 @@ def test_unknown_explicit_does_not_block_matching_recording(tmp_path):
         def search(self, query, **kwargs):
             return [{**rows()[0], 'isExplicit': None}]
     result = download_song(song(), tmp_path, client=Client(),
-        download=lambda *args: {'filepath': 'accepted.mp3'}, fallback=lambda s: ([], []))
+        download=lambda *args: {'filepath': 'accepted.mp3'}, primary=lambda s: ([], []))
     assert result['track']['filepath'] == 'accepted.mp3'
 
 
-def test_independent_provider_fallback_keeps_identity_gates(tmp_path):
+def test_soundcloud_primary_keeps_identity_gates(tmp_path):
     class Client:
         def search(self, *args, **kwargs):
-            return []
+            raise AssertionError('Reserve catalog must not be queried')
     good = Candidate('12345', 'завтра', ('тёмный принц',), 91, 'MILITANTUM', True,
                      'soundcloud', 'https://soundcloud.com/artist/track')
     assert assess(song(), good)[1] is None
@@ -139,7 +139,7 @@ def test_independent_provider_fallback_keeps_identity_gates(tmp_path):
     assert assess(song(), replace(good, title='завтра live'))[1]
     assert assess(song(), replace(good, source_url='https://evil.test/a/b'))[1]
     result = download_song(song(), tmp_path, client=Client(),
-        fallback=lambda s: ([good], []), download=lambda s, c, d: {'url': c.url})
+        primary=lambda s: ([good], []), download=lambda s, c, d: {'url': c.url})
     assert result['track']['url'] == good.url
 
 
@@ -181,3 +181,18 @@ def test_explicit_is_preferred_without_blocking_other_candidates():
     unknown = replace(candidate(),video_id='bbbbbbbbbbb',explicit=None)
     ranked,_ = rank_candidates(song(),[unknown,candidate()])
     assert ranked == [candidate(),unknown]
+
+
+def test_soundcloud_failure_uses_youtube_music(tmp_path):
+    calls = []
+    def primary(s):
+        calls.append('soundcloud')
+        raise RuntimeError('unavailable')
+    class Client:
+        def search(self, *args, **kwargs):
+            calls.append('youtube')
+            return rows()
+    result = download_song(song(), tmp_path, primary=primary, client=Client(),
+                           download=lambda s, c, d: {'provider': c.provider})
+    assert result['track']['provider'] == 'youtube'
+    assert calls == ['soundcloud', 'youtube']

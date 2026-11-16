@@ -484,6 +484,23 @@ def search_youtube(query: str, max_results: int = 5) -> list:
         logging.error(f"Search failed: {e}")
         return []
 
+def search_soundcloud(query: str, max_results: int = 5) -> list:
+    import yt_dlp
+    from soundcloud_source import register
+    options = {'extract_flat': True, 'quiet': True, 'no_warnings': True,
+               'ignoreerrors': True, 'socket_timeout': 10, 'retries': 1,
+               'extractor_retries': 1, 'playlistend': max_results}
+    with yt_dlp.YoutubeDL(options) as ydl:
+        register(ydl)
+        result = ydl.extract_info(f'scsearch{max_results}:{query}', download=False)
+    return [{'id': row['id'], 'url': row['webpage_url'],
+             'title': row.get('title') or 'Unknown',
+             'uploader': row.get('uploader') or row.get('artist') or 'Unknown',
+             'duration': row.get('duration') or 0}
+            for row in (result or {}).get('entries', [])
+            if row and row.get('id') and row.get('webpage_url')]
+
+
 async def _run_download_process(cmd: list[str], log_path: str, timeout: float) -> None:
     """Bound the entire child process tree, including ffmpeg, and disk-backed logs."""
     process = None
