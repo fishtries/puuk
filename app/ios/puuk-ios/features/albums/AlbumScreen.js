@@ -1,3 +1,4 @@
+import { SHARE_LINKS_ENABLED, presentShareEntity } from '../../utils/shareLinks';
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
@@ -120,6 +121,11 @@ export default function AlbumScreen({
         >
           <Ionicons name="create-outline" size={22} color="#fff" />
         </TouchableOpacity>
+        {SHARE_LINKS_ENABLED && album && !isLoading && !errorMessage && (
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Поделиться альбомом" onPress={() => presentShareEntity(album, 'album')} style={{ padding: 12 }}>
+            <Ionicons name="share-outline" size={22} color="#fff" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {isLoading ? (

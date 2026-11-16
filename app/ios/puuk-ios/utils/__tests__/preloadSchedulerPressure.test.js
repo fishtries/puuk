@@ -1,3 +1,7 @@
+function mockResolveMedia(track) {
+  return Promise.resolve({ uri: this.getStreamUrl(track), headers: {}, delivery: 'direct', cacheable: true });
+}
+async function flushTickets() { for (let i=0; i<12; i++) await Promise.resolve(); }
 import {
   PreloadScheduler,
   TRACK_STATUS,
@@ -94,6 +98,7 @@ describe('PreloadScheduler playback pressure contract', () => {
     mockNetworkPolicy = { type: 'wifi', maxConcurrent: 2, lookahead: 2 };
     ({ cache: mockCache, activeFetches } = createMockCache());
     scheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
       maxConcurrent: 2,
       lookahead: 2,
       cache: mockCache,
@@ -108,11 +113,13 @@ describe('PreloadScheduler playback pressure contract', () => {
   describe('setPlaybackPressure', () => {
     test('startup edge cancels active background jobs once and repeated ticks do not restart', async () => {
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
       const cancelCalls = mockCache.cancel.mock.calls.length;
 
       scheduler.setPlaybackPressure({ requestId: 'req-1', phase: 'startup' });
+    await flushTickets();
       expect(mockCache.cancel).toHaveBeenCalledWith('20');
       expect(mockCache.cancel).toHaveBeenCalledWith('30');
       expect(mockCache.cancel.mock.calls.length).toBe(cancelCalls + 2);
@@ -121,11 +128,14 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Repeated ticks of the same edge do nothing.
       scheduler.setPlaybackPressure({ requestId: 'req-1', phase: 'startup' });
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'req-1', phase: 'startup' });
+    await flushTickets();
       expect(mockCache.cancel.mock.calls.length).toBe(cancelCalls + 2);
 
       // No new speculative work starts while pressure persists.
       scheduler.syncQueue({ id: 10 }, [{ id: 40 }, { id: 50 }]);
+    await flushTickets();
       scheduler.preloadImmediate({ id: 60 }).catch(() => {});
       expect(mockCache.getOrFetch).not.toHaveBeenCalledWith(
         '40',
@@ -139,50 +149,64 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('stalled/recovering/suspended edges each cancel active work exactly once', async () => {
       for (const phase of ['stalled', 'recovering', 'suspended']) {
         scheduler.setPlaybackPressure(null);
+    await flushTickets();
         scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
         expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
         const before = mockCache.cancel.mock.calls.length;
 
         scheduler.setPlaybackPressure({ requestId: `r-${phase}`, phase });
+    await flushTickets();
         expect(mockCache.cancel.mock.calls.length).toBe(before + 1);
 
         // Idempotent: repeated tick does not cancel again
         scheduler.setPlaybackPressure({ requestId: `r-${phase}`, phase });
+    await flushTickets();
         expect(mockCache.cancel.mock.calls.length).toBe(before + 1);
 
-        await Promise.resolve();
+        await flushTickets();
       }
     });
 
-    test('a repeated identical edge is idempotent; a new requestId re-applies the cancellation rule', () => {
+    test('a repeated identical edge is idempotent; a new requestId re-applies the cancellation rule', async () => {
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'a', phase: 'startup' });
+    await flushTickets();
       const afterFirst = mockCache.cancel.mock.calls.length;
       expect(afterFirst).toBe(1);
 
       scheduler.setPlaybackPressure({ requestId: 'a', phase: 'startup' });
+    await flushTickets();
       expect(mockCache.cancel.mock.calls.length).toBe(afterFirst);
 
       scheduler.syncQueue({ id: 10 }, [{ id: 30 }]);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
 
       scheduler.setPlaybackPressure({ requestId: 'a', phase: 'startup' });
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
       expect(mockCache.cancel.mock.calls.length).toBe(afterFirst);
     });
 
-    test('idle after cancellation leaves no retained jobs and starts nothing', () => {
+    test('idle after cancellation leaves no retained jobs and starts nothing', async () => {
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'idle' });
+    await flushTickets();
       expect(scheduler.queue).toHaveLength(0);
       expect(scheduler.activeTasks.size).toBe(0);
       jest.advanceTimersByTime(10000);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
     });
 
-    test('null pressure then syncQueue behaves like the existing baseline', () => {
+    test('null pressure then syncQueue behaves like the existing baseline', async () => {
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     });
   });
@@ -191,6 +215,7 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('cancelled task holds slot until underlying cache promise settles; urgent queue waits', async () => {
       const { cache, activeFetches: fetches } = createMockCache();
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache,
@@ -198,6 +223,7 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Track 20 starts downloading (takes the 1 available slot)
       s.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(s.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(s.activeTasks.size).toBe(1);
 
@@ -210,6 +236,7 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Stale sync cancels track 20 immediately
       s.syncQueue({ id: 10 }, [], { force: true });
+    await flushTickets();
       expect(cache.cancel).toHaveBeenCalledWith('20');
       expect(s.getStatus(20)).toBe(TRACK_STATUS.CANCELLED);
       // Active tasks map is cleared, but occupied slots still counts the unsettled task
@@ -218,6 +245,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Urgent preload requested while slot is held
       const urgentPromise = s.preloadImmediate({ id: 77 });
+    urgentPromise.catch(() => {});
+    await flushTickets();
       urgentPromise.catch(() => {});
       // Urgent job cannot exceed active cap: stays QUEUED until slot settles!
       expect(s.getStatus(77)).toBe(TRACK_STATUS.QUEUED);
@@ -225,8 +254,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Now the underlying cache promise settles
       fetch20.reject(abortError());
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
 
       // Slot is freed and urgent job starts downloading immediately
       expect(s._occupiedSlots()).toBe(1);
@@ -246,6 +275,7 @@ describe('PreloadScheduler playback pressure contract', () => {
       });
 
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
       const fetch20 = activeFetches.get('20');
@@ -258,12 +288,15 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Pressure edge cancels active work
       scheduler.setPlaybackPressure({ requestId: 'r1', phase: 'startup' });
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
       expect(scheduler._occupiedSlots()).toBe(1);
 
       // Stable edge arrives, but old teardown has not settled yet
       scheduler.syncQueue({ id: 10 }, [{ id: 99 }]);
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'r1', phase: 'stable' });
+    await flushTickets();
 
       // Ramp allows at most 1 slot; since 1 slot is occupied by settling task, job 99 stays queued!
       expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
@@ -271,9 +304,9 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Teardown completes
       resolveTeardown();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
+      await flushTickets();
 
       // Now job 99 starts downloading in the freed slot
       expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -283,12 +316,14 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('urgent preemption with deferred concrete cache promise holds slot until settlement', async () => {
       const { cache, activeFetches: fetches } = createMockCache();
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache,
       });
 
       s.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(s.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       const activeTask20 = s.activeTasks.get('20');
       const originalPromise20 = activeTask20.promise;
@@ -299,6 +334,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Urgent task arrives
       const urgentPromise = s.preloadImmediate({ id: 99 });
+    urgentPromise.catch(() => {});
+    await flushTickets();
       urgentPromise.catch(() => {});
 
       expect(cache.cancel).toHaveBeenCalledWith('20');
@@ -310,8 +347,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Now concrete cache cancellation promise settles
       fetch20.reject(abortError());
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
 
       // Urgent task 99 takes the freed slot
       expect(s.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -332,16 +369,19 @@ describe('PreloadScheduler playback pressure contract', () => {
 
     test('rapid urgent requests under pressure bound queue to MAX_DESIRED_JOBS and reject obsolete requests with AbortError', async () => {
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       const errors = [];
       const promises = [];
       for (let id = 1; id <= 10; id += 1) {
         const p = scheduler.preloadImmediate({ id }, { currentTrackId: id });
+    p.catch(() => {});
+    await flushTickets();
         p.catch((err) => errors.push({ id, name: err?.name }));
         promises.push(p);
       }
 
       for (let i = 0; i < 5; i += 1) {
-        await Promise.resolve();
+        await flushTickets();
       }
       // Exactly 7 older urgent requests were cancelled with AbortError
       expect(errors).toHaveLength(7);
@@ -358,6 +398,7 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('rapid skips with active cancel-ignoring promise hold slot and bound queue until settlement', async () => {
       const { cache, activeFetches: fetches } = createMockCache();
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache,
@@ -365,6 +406,7 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Track 1 starts downloading
       s.syncQueue({ id: 0 }, [{ id: 1 }]);
+    await flushTickets();
       expect(s.getStatus(1)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Cancel-ignoring: cache.cancel does NOT resolve or reject fetch 1
@@ -375,11 +417,13 @@ describe('PreloadScheduler playback pressure contract', () => {
       const errors = [];
       for (let id = 2; id <= 11; id += 1) {
         const p = s.preloadImmediate({ id }, { currentTrackId: id });
+    p.catch(() => {});
+    await flushTickets();
         p.catch((err) => errors.push({ id, name: err?.name }));
       }
 
       for (let i = 0; i < 5; i += 1) {
-        await Promise.resolve();
+        await flushTickets();
       }
       // Older urgent requests 2..8 are cancelled with AbortError
       expect(errors).toHaveLength(7);
@@ -397,14 +441,14 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Track 1 finally settles on network
       fetch1.resolve('file:///mock/1.audio');
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
 
       // Freed slot is now taken by the latest urgent request (track 11)
       expect(s.getStatus(11)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(s.activeTasks.size).toBe(1);
       fetches.get('11').resolve();
-      await Promise.resolve();
+      await flushTickets();
       expect(s.getStatus(11)).toBe(TRACK_STATUS.READY);
       s.destroy();
     });
@@ -412,12 +456,14 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('cancelAll holds slot until old concrete cache promise settles before new request starts', async () => {
       const { cache, activeFetches: fetches } = createMockCache();
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache,
       });
 
       s.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(s.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
       const fetch20 = fetches.get('20');
@@ -431,6 +477,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // New request arrives before old task settles
       const newPromise = s.preloadImmediate({ id: 88 });
+    newPromise.catch(() => {});
+    await flushTickets();
       newPromise.catch(() => {});
 
       // New request cannot start: slot still occupied by settling task 20
@@ -439,8 +487,8 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Old task settles
       fetch20.reject(abortError());
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
 
       // Now new request starts downloading
       expect(s.getStatus(88)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -456,10 +504,13 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('stable edge starts one slot immediately and ramps second slot after 1000ms', async () => {
       // Clean start on Wi-Fi with 2 queued jobs
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
 
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stable' });
+    await flushTickets();
       // Exactly ONE slot starts immediately on stable edge
       expect(scheduler.activeTasks.size).toBe(1);
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -467,28 +518,34 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // Ramp is active: after 999ms, second slot is still blocked
       jest.advanceTimersByTime(999);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(1);
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
 
       // At 1000ms, second slot opens and track 30 starts downloading
       jest.advanceTimersByTime(1);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(2);
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
     });
 
     test('stable ramp allows only one start before 1000ms even if first job completes early', async () => {
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stable' });
+    await flushTickets();
 
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
 
       // Job 20 resolves at 300ms (before 1s ramp ends)
       jest.advanceTimersByTime(300);
+    await flushTickets();
       activeFetches.get('20').resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushTickets();
+      await flushTickets();
 
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
       // Under section 4.4 ramp rule, only one start is permitted before 1000ms;
@@ -498,21 +555,27 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // At 1000ms, ramp ends and job 30 starts downloading
       jest.advanceTimersByTime(700);
+    await flushTickets();
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(scheduler.activeTasks.size).toBe(1);
     });
 
     test('a new pressure edge during stable invalidates the ramp without restarting work', async () => {
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stable' });
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(1);
 
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stalled' });
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
 
       // Ramp timer from the old stable edge must not start anything.
       jest.advanceTimersByTime(2000);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(0);
     });
   });
@@ -521,7 +584,9 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('enters the unified priority queue (priority 0.5) and observes 5s stable eligibility', async () => {
       // Enter stable phase
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stable' });
+    await flushTickets();
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // cacheCurrent called for current track 10
@@ -539,6 +604,7 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // After 5000ms, eligibility delay expires and current-cache starts downloading
       jest.advanceTimersByTime(5000);
+    await flushTickets();
       expect(scheduler.getStatus(10)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(scheduler.activeTasks.has('10')).toBe(true);
 
@@ -561,11 +627,13 @@ describe('PreloadScheduler playback pressure contract', () => {
 
     test('pressure aborts a pending cacheCurrent with AbortError', async () => {
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'stable' });
+    await flushTickets();
       const promise = scheduler.cacheCurrent({ id: 12 });
       promise.catch(() => {});
       expect(scheduler.getStatus(12)).toBe(TRACK_STATUS.QUEUED);
 
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
       expect(mockCache.cancel).toHaveBeenCalledWith('12');
       expect(scheduler.getStatus(12)).toBe(TRACK_STATUS.CANCELLED);
@@ -574,6 +642,7 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('combined budget: cacheCurrent plus preload never exceed configured active cap', async () => {
       const { cache, activeFetches: fetches } = createMockCache();
       const budget = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache,
@@ -590,10 +659,12 @@ describe('PreloadScheduler playback pressure contract', () => {
       budget.destroy();
     });
 
-    test('pressure cancellation prevents a scheduled cacheCurrent from starting', () => {
+    test('pressure cancellation prevents a scheduled cacheCurrent from starting', async () => {
       scheduler.cacheCurrent({ id: 13 }).catch(() => {});
       scheduler.setPlaybackPressure({ requestId: 'r', phase: 'startup' });
+    await flushTickets();
       jest.advanceTimersByTime(5000);
+    await flushTickets();
       expect(mockCache.getOrFetch).not.toHaveBeenCalledWith(
         '13',
         expect.anything(),
@@ -603,9 +674,10 @@ describe('PreloadScheduler playback pressure contract', () => {
   });
 
   describe('network constraints', () => {
-    test('unknown/cellular never expand limits and offline starts zero jobs', () => {
+    test('unknown/cellular never expand limits and offline starts zero jobs', async () => {
       mockNetworkPolicy = { type: 'cellular', maxConcurrent: 1, lookahead: 1 };
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       expect(scheduler.activeTasks.size).toBe(1);
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.IDLE);
 
@@ -618,20 +690,23 @@ describe('PreloadScheduler playback pressure contract', () => {
         isConnected: false,
       };
       const offlineScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache: offlineCache,
       });
       offlineScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       expect(offlineFetches.size).toBe(0);
       expect(offlineScheduler.activeTasks.size).toBe(0);
       offlineScheduler.destroy();
     });
 
-    test('reconnect pumps exactly once subject to pressure', () => {
+    test('reconnect pumps exactly once subject to pressure', async () => {
       let notify;
       mockNetworkPolicy = { type: 'wifi', maxConcurrent: 2, lookahead: 2 };
       const reconnectScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache: mockCache,
@@ -641,6 +716,7 @@ describe('PreloadScheduler playback pressure contract', () => {
         },
       });
       reconnectScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       const startsBefore = mockCache.getOrFetch.mock.calls.length;
 
       mockNetworkPolicy = {
@@ -654,6 +730,7 @@ describe('PreloadScheduler playback pressure contract', () => {
         requestId: 'r',
         phase: 'startup',
       });
+    await flushTickets();
       const cancelCount = mockCache.cancel.mock.calls.length;
       const startsOffline = mockCache.getOrFetch.mock.calls.length;
 
@@ -666,13 +743,15 @@ describe('PreloadScheduler playback pressure contract', () => {
       reconnectScheduler.destroy();
     });
 
-    test('fast skips bound obsolete tasks: no unbounded queue growth', () => {
+    test('fast skips bound obsolete tasks: no unbounded queue growth', async () => {
       for (let i = 0; i < 10; i += 1) {
         scheduler.syncQueue({ id: 100 + i }, [
           { id: 200 + i },
           { id: 300 + i },
         ]);
+    await flushTickets();
         jest.advanceTimersByTime(100);
+    await flushTickets();
       }
       expect(scheduler.queue.length).toBeLessThanOrEqual(4);
       expect(scheduler.activeTasks.size).toBeLessThanOrEqual(2);
@@ -681,27 +760,30 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('grace cancellation, dedup and urgent priority are retained under limit 1', async () => {
       const { cache: c2, activeFetches: f2 } = createMockCache();
       const s2 = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache: c2,
       });
       s2.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
       expect(s2.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
+      await flushTickets(); // native transfer must be active before testing cancellation
 
       s2.syncQueue({ id: 10 }, [{ id: 99 }]);
       expect(c2.cancel).not.toHaveBeenCalledWith('20');
       jest.advanceTimersByTime(3000);
+
       expect(c2.cancel).toHaveBeenCalledWith('20');
       // The slot is held until the cancelled task settles
       expect(s2.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
-      await Promise.resolve();
+      await flushTickets();
       expect(s2.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
 
       const urgent = s2.preloadImmediate({ id: 77 });
       // Urgent preempts track 99; slot is held until track 99 settles
       expect(s2.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
       expect(s2.getStatus(77)).toBe(TRACK_STATUS.QUEUED);
-      await Promise.resolve();
+      await flushTickets();
       expect(s2.getStatus(77)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(s2.activeTasks.size).toBe(1);
       f2.get('77').resolve();
@@ -715,22 +797,26 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('retained next queue reschedules and starts on transition to stable after pressure cancellation', async () => {
       // 1. Startup pressure active
       scheduler.setPlaybackPressure({ requestId: 'r1', phase: 'startup' });
+    await flushTickets();
       // 2. Queue synced with next track while pressure is active
       scheduler.syncQueue({ id: 'current' }, [{ id: 'next' }]);
+    await flushTickets();
       expect(scheduler.queue.length).toBe(1);
       expect(mockCache.getOrFetch).not.toHaveBeenCalled();
 
       // 3. Stalled pressure cancels queued/active background jobs
       scheduler.setPlaybackPressure({ requestId: 'r1', phase: 'stalled' });
+    await flushTickets();
       expect(scheduler.queue.length).toBe(0);
       expect(scheduler.activeTasks.size).toBe(0);
 
       // 4. Stable transition reschedules retained desired metadata and starts downloading next track under ramp
       scheduler.setPlaybackPressure({ requestId: 'r1', phase: 'stable' });
+    await flushTickets();
       expect(scheduler.getStatus('next')).toBe(TRACK_STATUS.DOWNLOADING);
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         'next',
-        expect.any(String),
+        expect.objectContaining({ uri: expect.any(String) }),
         expect.any(Object),
       );
     });
@@ -738,6 +824,7 @@ describe('PreloadScheduler playback pressure contract', () => {
     test('cacheCurrent requested during pressure observes 5s eligibility delay after entering stable', async () => {
       // 1. Startup pressure active
       scheduler.setPlaybackPressure({ requestId: 'r2', phase: 'startup' });
+    await flushTickets();
       // 2. cacheCurrent called during startup
       const p = scheduler.cacheCurrent({ id: 'current-track' });
       p.catch(() => {});
@@ -746,26 +833,29 @@ describe('PreloadScheduler playback pressure contract', () => {
 
       // 3. Transition to stable
       scheduler.setPlaybackPressure({ requestId: 'r2', phase: 'stable' });
+    await flushTickets();
       // Must NOT start immediately: must wait for 5s eligibility delay
       expect(scheduler.getStatus('current-track')).toBe(TRACK_STATUS.QUEUED);
       expect(mockCache.getOrFetch).not.toHaveBeenCalledWith(
         'current-track',
-        expect.any(String),
+        expect.objectContaining({ uri: expect.any(String) }),
         expect.any(Object),
       );
 
       // 4. After 4999ms, still queued
       jest.advanceTimersByTime(4999);
+    await flushTickets();
       expect(scheduler.getStatus('current-track')).toBe(TRACK_STATUS.QUEUED);
 
       // 5. At 5000ms after stable, eligibility delay elapses and download starts
       jest.advanceTimersByTime(1);
+    await flushTickets();
       expect(scheduler.getStatus('current-track')).toBe(
         TRACK_STATUS.DOWNLOADING,
       );
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         'current-track',
-        expect.any(String),
+        expect.objectContaining({ uri: expect.any(String) }),
         expect.any(Object),
       );
     });

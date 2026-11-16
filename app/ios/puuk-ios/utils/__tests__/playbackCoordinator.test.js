@@ -1,3 +1,8 @@
+async function flushRemote() { for (let i=0; i<24; i++) await Promise.resolve(); }
+async function mockResolveMedia(track) {
+  const headers = this._getHeadersAsyncFn ? await this._getHeadersAsyncFn() : this._fixtureHeaders || {};
+  return { uri: this._resolveServerUrl() + '/api/stream/' + String(track.id ?? track.track_id), headers: headers || {}, delivery: 'direct', usableUntil: Infinity, reuseUntil: Infinity };
+}
 import {
   PlaybackCoordinator,
   normalizeStreamUrl,
@@ -51,12 +56,16 @@ describe('PlaybackCoordinator', () => {
     mockPreloadNative = jest.fn();
 
     coordinator = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
       cache: mockCache,
       scheduler: mockScheduler,
       preloadNative: mockPreloadNative,
       serverUrl: 'https://puuk.app',
       bypassCache: false,
     });
+    const originalPlay = coordinator.play.bind(coordinator);
+    coordinator.play = (player, track, options = {}) => { coordinator._fixtureHeaders = options.headers || {}; return originalPlay(player, track, options); };
+
   });
 
   afterEach(() => {
@@ -103,11 +112,13 @@ describe('PlaybackCoordinator', () => {
     // Streaming starts immediately; disk caching waits until the delay expires.
     expect(mockCache.getOrFetch).not.toHaveBeenCalled();
     jest.advanceTimersByTime(4999);
+      await flushRemote();
     expect(mockCache.getOrFetch).not.toHaveBeenCalled();
     jest.advanceTimersByTime(1);
+      await flushRemote();
     expect(mockCache.getOrFetch).toHaveBeenCalledWith(
       '2',
-      'https://puuk.app/api/stream/2',
+      expect.objectContaining({ uri: 'https://puuk.app/api/stream/2', headers }),
       { headers },
     );
   });
@@ -173,7 +184,7 @@ describe('PlaybackCoordinator', () => {
     );
   });
 
-  test('updateQueue() handles next track with id: 0 and track_id', () => {
+  test('updateQueue() handles next track with id: 0 and track_id', async () => {
     mockScheduler.getStatus.mockReturnValue(TRACK_STATUS.DOWNLOADING);
 
     // Track with id: 0
@@ -188,7 +199,7 @@ describe('PlaybackCoordinator', () => {
     expect(mockScheduler.getStatus).toHaveBeenCalledWith('99');
   });
 
-  test('updateQueue protects currentTrack and queue IDs including legacy track_id and ID 0', () => {
+  test('updateQueue protects currentTrack and queue IDs including legacy track_id and ID 0', async () => {
     coordinator.updateQueue({ track_id: 'legacy-cur' }, [
       { track_id: 'legacy-q1' },
       { id: 0 },
@@ -201,7 +212,7 @@ describe('PlaybackCoordinator', () => {
     ]);
   });
 
-  test('scheduler events match next track canonical identity across id and track_id forms', () => {
+  test('scheduler events match next track canonical identity across id and track_id forms', async () => {
     coordinator.updateQueue({ id: 1 }, [
       { track_id: 'q-status-1', title: 'Next' },
     ]);
@@ -216,7 +227,7 @@ describe('PlaybackCoordinator', () => {
     expect(coordinator.getState().networkStatus).toBe('good');
   });
 
-  test('updateQueue() syncs scheduler without calling native preload', () => {
+  test('updateQueue() syncs scheduler without calling native preload', async () => {
     const currentTrack = { id: 1 };
     const upNext = [
       { id: 2, title: 'Next' },
@@ -233,7 +244,7 @@ describe('PlaybackCoordinator', () => {
     expect(mockPreloadNative).not.toHaveBeenCalled();
   });
 
-  test('detects slow network when player buffers for longer than 3.5s', () => {
+  test('detects slow network when player buffers for longer than 3.5s', async () => {
     const states = [];
     coordinator.subscribe((s) => states.push(s.networkStatus));
 
@@ -243,6 +254,7 @@ describe('PlaybackCoordinator', () => {
 
     // Advance 3.5 seconds
     jest.advanceTimersByTime(3600);
+      await flushRemote();
     expect(coordinator.getState().networkStatus).toBe('slow');
     expect(coordinator.getState().isBufferingSlow).toBe(true);
 
@@ -252,7 +264,7 @@ describe('PlaybackCoordinator', () => {
     expect(coordinator.getState().isBufferingSlow).toBe(false);
   });
 
-  test('updates networkStatus to error when next track fails to preload', () => {
+  test('updates networkStatus to error when next track fails to preload', async () => {
     const currentTrack = { id: 1 };
     const upNext = [{ id: 2, title: 'Next' }];
     coordinator.updateQueue(currentTrack, upNext);
@@ -271,7 +283,7 @@ describe('PlaybackCoordinator', () => {
     expect(coordinator.getState().networkError).toBe('Network timeout');
   });
 
-  test('updateQueue() skips native preload if next track is already cached locally', () => {
+  test('updateQueue() skips native preload if next track is already cached locally', async () => {
     mockCache.cached.set('2', 'file:///mock/2.mp3');
     const currentTrack = { id: 1 };
     const upNext = [{ id: 2, title: 'Next' }];
@@ -316,6 +328,7 @@ describe('PlaybackCoordinator', () => {
     expect(res.uri).toBe('https://puuk.app/api/stream/1');
     expect(mockPlayer.replace).toHaveBeenCalledWith({
       uri: 'https://puuk.app/api/stream/1',
+        headers: {},
     });
     expect(mockCache.getCachedUri).not.toHaveBeenCalled();
   });
@@ -493,7 +506,9 @@ describe('PlaybackCoordinator', () => {
       };
 
       const playPromiseA = coordinator.play(mockPlayer, trackA);
+      await flushRemote();
       const playPromiseB = coordinator.play(mockPlayer, trackB);
+      await flushRemote();
 
       const resB = await playPromiseB;
       expect(resB.superseded).toBeUndefined();
@@ -532,7 +547,9 @@ describe('PlaybackCoordinator', () => {
       };
 
       const playPromiseA = coordinator.play(mockPlayer, trackA);
+      await flushRemote();
       const playPromiseB = coordinator.play(mockPlayer, trackB);
+      await flushRemote();
 
       // Track B finishes playing
       const resB = await playPromiseB;
@@ -575,7 +592,9 @@ describe('PlaybackCoordinator', () => {
       stateListener.mockClear();
 
       const playPromiseA = coordinator.play(mockPlayer, trackA);
+      await flushRemote();
       const playPromiseB = coordinator.play(mockPlayer, trackB);
+      await flushRemote();
 
       await playPromiseB;
 
@@ -605,6 +624,7 @@ describe('PlaybackCoordinator', () => {
         stream_url: 'https://puuk.app/api/stream/100',
       };
       const playPromiseA = coordinator.play(mockPlayer, trackA);
+      await flushRemote();
 
       coordinator.destroy();
       resolveA();
@@ -617,7 +637,7 @@ describe('PlaybackCoordinator', () => {
   });
 
   describe('Error classification (classifyPlaybackError & PlaybackError)', () => {
-    test('returns existing PlaybackError unchanged', () => {
+    test('returns existing PlaybackError unchanged', async () => {
       const existing = new PlaybackError('Original', {
         type: 'local_cache_error',
         trackId: '5',
@@ -625,7 +645,7 @@ describe('PlaybackCoordinator', () => {
       expect(classifyPlaybackError(existing)).toBe(existing);
     });
 
-    test('classifies structured 401 and 403 status as auth_error', () => {
+    test('classifies structured 401 and 403 status as auth_error', async () => {
       const err1 = classifyPlaybackError(
         { status: 401, message: 'Forbidden' },
         '1',
@@ -644,7 +664,7 @@ describe('PlaybackCoordinator', () => {
       expect(err3.type).toBe('auth_error');
     });
 
-    test('classifies 408 and timeouts as network_timeout', () => {
+    test('classifies 408 and timeouts as network_timeout', async () => {
       const err1 = classifyPlaybackError({ status: 408 }, '1');
       expect(err1.type).toBe('network_timeout');
 
@@ -660,7 +680,7 @@ describe('PlaybackCoordinator', () => {
       expect(err3.type).toBe('network_timeout');
     });
 
-    test('classifies play/playback failures as play_error', () => {
+    test('classifies play/playback failures as play_error', async () => {
       const err1 = classifyPlaybackError(new Error('Failed to play sound'));
       expect(err1.type).toBe('play_error');
 
@@ -670,7 +690,7 @@ describe('PlaybackCoordinator', () => {
       expect(err2.type).toBe('play_error');
     });
 
-    test('classifies cache/local issues as local_cache_error', () => {
+    test('classifies cache/local issues as local_cache_error', async () => {
       const err1 = classifyPlaybackError(
         new Error('Local file does not exist'),
       );
@@ -680,7 +700,7 @@ describe('PlaybackCoordinator', () => {
       expect(err2.type).toBe('local_cache_error');
     });
 
-    test('classifies unhandled errors as remote_replace_error by default', () => {
+    test('classifies unhandled errors as remote_replace_error by default', async () => {
       const err = classifyPlaybackError(
         new Error('HTTP 500 Internal Server Error'),
         '7',
@@ -706,7 +726,7 @@ describe('PlaybackCoordinator', () => {
       );
       expect(coordinator.getState().networkStatus).toBe('error');
       expect(coordinator.getState().lastErrorType).toBe('remote_replace_error');
-      expect(coordinator.getState().networkError).toContain('HTTP 503');
+      expect(coordinator.getState().networkError).toBe('Unable to unload audio');
     });
 
     test('play() throws classified PlaybackError on player.play failure and updates state', async () => {
@@ -834,6 +854,7 @@ describe('PlaybackCoordinator', () => {
       };
 
       const playPromise = coordinator.play(mockPlayer, track);
+      await flushRemote();
 
       // Metadata MUST already be applied even while replace is still pending!
       expect(mockPlayer.setActiveForLockScreen).toHaveBeenCalledWith(
@@ -854,7 +875,7 @@ describe('PlaybackCoordinator', () => {
       expect(mockPlayer.play).toHaveBeenCalled();
     });
 
-    test('updateQueue() prefetches cover art for the upcoming track in queue', () => {
+    test('updateQueue() prefetches cover art for the upcoming track in queue', async () => {
       const CoverImage = require('../../shared/media/CoverImage');
       const prefetchSpy = jest
         .spyOn(CoverImage, 'prefetchCover')
@@ -877,17 +898,17 @@ describe('PlaybackCoordinator', () => {
   });
 
   describe('normalizeStreamUrl', () => {
-    test('builds standard url when stream_url is missing', () => {
+    test('builds standard url when stream_url is missing', async () => {
       const url = normalizeStreamUrl({ id: 42 }, 'https://web.puuk.fun');
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('strips trailing slashes from serverUrl to prevent double slashes', () => {
+    test('strips trailing slashes from serverUrl to prevent double slashes', async () => {
       const url = normalizeStreamUrl({ id: 42 }, 'https://web.puuk.fun/');
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('normalizes relative /api/stream path', () => {
+    test('normalizes relative /api/stream path', async () => {
       const url = normalizeStreamUrl(
         { id: 42, stream_url: '/api/stream/42' },
         'https://web.puuk.fun',
@@ -895,7 +916,7 @@ describe('PlaybackCoordinator', () => {
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('replaces host with active serverUrl if stream_url contains different host', () => {
+    test('replaces host with active serverUrl if stream_url contains different host', async () => {
       const url = normalizeStreamUrl(
         { id: 42, stream_url: 'http://127.0.0.1:8000/api/stream/42' },
         'https://web.puuk.fun',
@@ -903,7 +924,7 @@ describe('PlaybackCoordinator', () => {
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('trims quotes and whitespace', () => {
+    test('trims quotes and whitespace', async () => {
       const url = normalizeStreamUrl(
         { id: ' 42 ', stream_url: ' "/api/stream/42" ' },
         ' https://web.puuk.fun ',
@@ -911,7 +932,7 @@ describe('PlaybackCoordinator', () => {
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('cleans double slashes in path', () => {
+    test('cleans double slashes in path', async () => {
       const url = normalizeStreamUrl(
         { id: 42, stream_url: '/api/stream//42' },
         'https://web.puuk.fun//',
@@ -919,7 +940,7 @@ describe('PlaybackCoordinator', () => {
       expect(url).toBe('https://web.puuk.fun/api/stream/42');
     });
 
-    test('strictly preserves https:// and http:// protocol double slashes', () => {
+    test('strictly preserves https:// and http:// protocol double slashes', async () => {
       const httpsUrl = normalizeStreamUrl({ id: 123 }, 'https://web.puuk.fun');
       expect(httpsUrl).toBe('https://web.puuk.fun/api/stream/123');
       expect(httpsUrl.startsWith('https://')).toBe(true);
@@ -1015,6 +1036,7 @@ describe('PlaybackCoordinator', () => {
 
     test('explicit serverUrl option stays fixed for dependency injection even if global SERVER_URL changes', async () => {
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         serverUrl: 'https://fixed.server.org',
         cache: mockCache,
         scheduler: mockScheduler,
@@ -1028,6 +1050,7 @@ describe('PlaybackCoordinator', () => {
 
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://fixed.server.org/api/stream/701',
+        headers: {},
       });
       expect(coord.serverUrl).toBe('https://fixed.server.org');
     });
@@ -1035,6 +1058,7 @@ describe('PlaybackCoordinator', () => {
     test('getServerUrl option is called dynamically at play() time', async () => {
       let currentBackend = 'https://backend-a.org';
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         getServerUrl: () => currentBackend,
         cache: mockCache,
         scheduler: mockScheduler,
@@ -1043,17 +1067,20 @@ describe('PlaybackCoordinator', () => {
       await coord.play(mockPlayer, { id: 702 });
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://backend-a.org/api/stream/702',
+        headers: {},
       });
 
       currentBackend = 'https://backend-b.org';
       await coord.play(mockPlayer, { id: 703 });
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://backend-b.org/api/stream/703',
+        headers: {},
       });
     });
 
     test('default coordinator instance resolves updated SERVER_URL loaded after singleton import', async () => {
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
       });
@@ -1066,6 +1093,7 @@ describe('PlaybackCoordinator', () => {
 
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://settings-loaded.puuk.fun/api/stream/704',
+        headers: {},
       });
       expect(coord.serverUrl).toBe('https://settings-loaded.puuk.fun');
     });
@@ -1081,6 +1109,7 @@ describe('PlaybackCoordinator', () => {
       api.setServerUrl('https://first-origin.puuk.fun');
 
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: customScheduler,
         backgroundCacheDelayMs: 5000,
@@ -1098,14 +1127,16 @@ describe('PlaybackCoordinator', () => {
       expect(cancelAllMock).toHaveBeenCalled();
       expect(mockPlayer.replace).toHaveBeenCalledWith({
         uri: 'https://second-origin.puuk.fun/api/stream/802',
+        headers: {},
       });
     });
 
-    test('already-playing healthy source is preserved across rerender without audio replacement, while new selection uses new server', async () => {
+    test('server switch fences healthy old namespace and the new selection uses new server', async () => {
       const api = require('../../shared/api/api');
       api.setServerUrl('https://server-initial.puuk.fun');
 
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
       });
@@ -1124,12 +1155,12 @@ describe('PlaybackCoordinator', () => {
 
       // A component rerender calls play() without force or isUserSelection
       const rerenderRes = await coord.play(mockPlayer, track1);
-      expect(rerenderRes.reused).toBe(true);
+      expect(rerenderRes.reused).toBeUndefined();
       expect(rerenderRes.uri).toBe(
-        'https://server-initial.puuk.fun/api/stream/901',
+        'https://server-updated.puuk.fun/api/stream/901',
       );
-      // replace must NOT have been called again!
-      expect(mockPlayer.replace).toHaveBeenCalledTimes(1);
+      // New namespace requires a new source.
+      expect(mockPlayer.replace).toHaveBeenCalledTimes(2);
 
       // Explicit retry on track 1 with force: true DOES install from new server
       const retryRes = await coord.play(mockPlayer, track1, { force: true });
@@ -1137,7 +1168,7 @@ describe('PlaybackCoordinator', () => {
       expect(retryRes.uri).toBe(
         'https://server-updated.puuk.fun/api/stream/901',
       );
-      expect(mockPlayer.replace).toHaveBeenCalledTimes(2);
+      expect(mockPlayer.replace).toHaveBeenCalledTimes(3);
 
       // Genuine selection of another track DOES install from new server
       const track2 = { id: 902, title: 'Next Track' };
@@ -1145,7 +1176,7 @@ describe('PlaybackCoordinator', () => {
         isUserSelection: true,
       });
       expect(res2.uri).toBe('https://server-updated.puuk.fun/api/stream/902');
-      expect(mockPlayer.replace).toHaveBeenCalledTimes(3);
+      expect(mockPlayer.replace).toHaveBeenCalledTimes(4);
     });
 
     test('deferred replace completing after server switch cannot install or alter new source state', async () => {
@@ -1153,6 +1184,7 @@ describe('PlaybackCoordinator', () => {
       api.setServerUrl('https://server-slow.puuk.fun');
 
       const coord = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
       });
@@ -1166,7 +1198,7 @@ describe('PlaybackCoordinator', () => {
       mockPlayer.replace.mockImplementationOnce(() => slowReplacePromise);
 
       const p1 = coord.play(mockPlayer, { id: 950 }, { isUserSelection: true });
-      await Promise.resolve();
+      await flushRemote();
 
       // Before slow replace resolves, server changes in settings and user starts track 2 on server-fast
       api.setServerUrl('https://server-fast.puuk.fun');
@@ -1194,6 +1226,7 @@ describe('PlaybackCoordinator', () => {
     function createIdentifiedPlayer(overrides = {}) {
       return {
         puukSourceIdentityVersion: 1,
+        currentStatus: { sourceIdentityVersion: 1, sourceAttemptId: null, nativeIntent: 'play', intentRevision: 1 },
         replaceWithAttempt: jest.fn(() => true),
         playForAttempt: jest.fn(() => true),
         seekForAttempt: jest.fn(() => true),
@@ -1216,14 +1249,14 @@ describe('PlaybackCoordinator', () => {
         currentTime: 0,
       };
       coord.handleNativeStatus(player, { ...event, nativeEvent: 'loaded' });
-      for (let i = 0; i < 20; i++) await Promise.resolve();
+      for (let i = 0; i < 20; i++) await flushRemote();
       coord.handleNativeStatus(player, {
         ...event,
         nativeEvent: 'seek',
         seekOrigin: 'recovery',
         seekCompleted: true,
       });
-      for (let i = 0; i < 20; i++) await Promise.resolve();
+      for (let i = 0; i < 20; i++) await flushRemote();
     }
 
     test('fails closed on legacy binary missing native identity capability', async () => {
@@ -1319,6 +1352,7 @@ describe('PlaybackCoordinator', () => {
       const identifiedPlayer = createIdentifiedPlayer();
       let fakeTime = 1000;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -1383,10 +1417,12 @@ describe('PlaybackCoordinator', () => {
       // Before 800ms: recovery has not replaced source yet
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
       jest.advanceTimersByTime(799);
+      await flushRemote();
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
 
       // At 800ms: recovery runs with fresh attempt ID
       jest.advanceTimersByTime(1);
+      await flushRemote();
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);
       const newAttemptId = identifiedPlayer.replaceWithAttempt.mock.calls[1][1];
       expect(newAttemptId).not.toBe(res.sourceAttemptId);
@@ -1438,6 +1474,7 @@ describe('PlaybackCoordinator', () => {
 
       // Advance 800ms recovery delay
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       // Recovery should fall back to remote stream
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledWith(
@@ -1451,6 +1488,7 @@ describe('PlaybackCoordinator', () => {
     test('startup watchdog (15s) and stall watchdog (10s) respect total 30s episode budget', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -1473,12 +1511,14 @@ describe('PlaybackCoordinator', () => {
       // Advance 15,000ms without progress: startup watchdog fires
       fakeTime = 15000;
       jest.advanceTimersByTime(15000);
+      await flushRemote();
 
       expect(coordWithClock.getState().current.status).toBe('recovering');
 
       // Advance 800ms recovery delay
       fakeTime = 15800;
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       const recoveredAttempt =
         coordWithClock.getState().current.sourceAttemptId;
@@ -1504,6 +1544,7 @@ describe('PlaybackCoordinator', () => {
       // Stall for 10,000ms
       fakeTime += 10000;
       jest.advanceTimersByTime(10000);
+      await flushRemote();
 
       // Since recoveryCount is already 1, stall watchdog terminates with timeout error
       expect(coordWithClock.getState().current.status).toBe('error');
@@ -1590,7 +1631,8 @@ describe('PlaybackCoordinator', () => {
         nativeEvent: 'error',
         error: new Error('Test error'),
       });
-      jest.advanceTimersByTime(800); // let auto-recovery fire
+      jest.advanceTimersByTime(800);
+      await flushRemote(); // let auto-recovery fire
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
         sourceAttemptId: coordinator.getState().current.sourceAttemptId,
@@ -1605,7 +1647,7 @@ describe('PlaybackCoordinator', () => {
 
       expect(p1).toBe(p2); // Exactly same promise
 
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
       const attempt = coordinator.current.sourceAttemptId;
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
@@ -1615,7 +1657,7 @@ describe('PlaybackCoordinator', () => {
         nativeIntent: 'play',
         isLoaded: true,
       });
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
         sourceAttemptId: attempt,
@@ -1652,6 +1694,7 @@ describe('PlaybackCoordinator', () => {
 
       // Advance timers: recovery timer was cancelled, player.playForAttempt is NOT called
       jest.advanceTimersByTime(1000);
+      await flushRemote();
       expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(1); // Only initial play call
       expect(coordinator.getState().current.status).toBe('paused');
     });
@@ -1671,6 +1714,7 @@ describe('PlaybackCoordinator', () => {
         error: new Error('Current track broken'),
       });
       jest.advanceTimersByTime(800);
+      await flushRemote();
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
         sourceAttemptId: coordinator.getState().current.sourceAttemptId,
@@ -1821,6 +1865,7 @@ describe('PlaybackCoordinator', () => {
       );
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
 
+      coordinator.handleNativeStatus(identifiedPlayer, { sourceIdentityVersion: 1, sourceAttemptId: res.sourceAttemptId, nativeEvent: 'intent', nativeIntent: 'play', intentRevision: 1 });
       // Native error triggers recovery
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
@@ -1832,6 +1877,7 @@ describe('PlaybackCoordinator', () => {
 
       // Advance 800ms backoff: recovery begins, but getHeadersAsync is deferred
       jest.advanceTimersByTime(800);
+      await flushRemote();
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1); // not replaced yet
 
       // Old installed native attempt receives pause while headers are pending
@@ -1848,8 +1894,8 @@ describe('PlaybackCoordinator', () => {
 
       // Now headers finish resolving
       resolveHeaders({ Authorization: 'Bearer refreshed_token' });
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushRemote();
+      await flushRemote();
 
       // Zero additional replacement commands and zero autoplay!
       expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
@@ -1884,6 +1930,7 @@ describe('PlaybackCoordinator', () => {
         error: new Error('Stall in middle of track'),
       });
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       // Recovery replaces stream; wait for loaded arrives
       expect(playerSeekReject.replaceWithAttempt).toHaveBeenCalledTimes(2);
@@ -1897,7 +1944,7 @@ describe('PlaybackCoordinator', () => {
         intentRevision: 1,
         isLoaded: true,
       });
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
 
       // seekForAttempt was reached and returned false
       expect(playerSeekReject.seekForAttempt).toHaveBeenCalledTimes(1);
@@ -1930,6 +1977,7 @@ describe('PlaybackCoordinator', () => {
         error: new Error('Stall'),
       });
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       const attemptB2 = playerSeekTimeout.replaceWithAttempt.mock.calls[1][1];
       coordinator.handleNativeStatus(playerSeekTimeout, {
@@ -1939,13 +1987,14 @@ describe('PlaybackCoordinator', () => {
         intentRevision: 1,
         isLoaded: true,
       });
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
 
       expect(playerSeekTimeout.seekForAttempt).toHaveBeenCalledTimes(1);
 
       // Advance 5000ms seek completion timeout without seekCompleted event
       jest.advanceTimersByTime(5000);
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      await flushRemote();
+      for (let i = 0; i < 30; i++) await flushRemote();
 
       // playForAttempt was NEVER called on attemptB2
       expect(playerSeekTimeout.playForAttempt).toHaveBeenCalledTimes(1);
@@ -2014,9 +2063,12 @@ describe('PlaybackCoordinator', () => {
     test('root repro 4: hard 30s global episode deadline terminates at exact 30000ms', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
+        startupTimeoutMs: 15000,
+        stallTimeoutMs: 10000,
       });
 
       const identifiedPlayer = createIdentifiedPlayer();
@@ -2032,16 +2084,19 @@ describe('PlaybackCoordinator', () => {
       // Startup watchdog fires at 15000ms
       fakeTime = 15000;
       jest.advanceTimersByTime(15000);
+      await flushRemote();
       expect(coordWithClock.getState().current.status).toBe('recovering');
 
       // Recovery replacement at 15800ms
       fakeTime = 15800;
       jest.advanceTimersByTime(800);
+      await flushRemote();
       expect(coordWithClock.getState().current.status).toBe('recovering');
 
       // Advance to exact 30,000ms from original selection
       fakeTime = 30000;
       jest.advanceTimersByTime(14200);
+      await flushRemote();
 
       // At exact 30,000ms, hard episode timeout fires
       expect(coordWithClock.getState().current.status).toBe('error');
@@ -2053,6 +2108,7 @@ describe('PlaybackCoordinator', () => {
     test('single progress blip does not clear 30s startup episode; only sustainable proof does', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -2064,6 +2120,7 @@ describe('PlaybackCoordinator', () => {
       // A single progress blip at t = 5000ms
       fakeTime = 5000;
       jest.advanceTimersByTime(5000);
+      await flushRemote();
       const blip = coordWithClock.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
         sourceAttemptId: res.sourceAttemptId,
@@ -2078,6 +2135,7 @@ describe('PlaybackCoordinator', () => {
       // No second progress event arrives. At t = 30000ms, startup episode expires!
       fakeTime = 30000;
       jest.advanceTimersByTime(25000);
+      await flushRemote();
 
       expect(coordWithClock.getState().current.status).toBe('error');
       expect(coordWithClock.getState().current.error.kind).toBe('timeout');
@@ -2088,9 +2146,12 @@ describe('PlaybackCoordinator', () => {
     test('later stall episode deadline is anchored to last accepted progress before stall', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
+        startupTimeoutMs: 15000,
+        stallTimeoutMs: 10000,
       });
 
       const identifiedPlayer = createIdentifiedPlayer();
@@ -2135,6 +2196,7 @@ describe('PlaybackCoordinator', () => {
       // 10s stall watchdog fires at t = 30000ms
       fakeTime = 30000;
       jest.advanceTimersByTime(10000);
+      await flushRemote();
       expect(coordWithClock.getState().current.status).toBe('stalled');
 
       // Stall episode deadline is 20000 + 30000 = 50000ms (NOT 30000 + 30000 = 60000ms!)
@@ -2146,6 +2208,7 @@ describe('PlaybackCoordinator', () => {
     test('legacy player has no attributed watchdogs and plays past 30s without false error', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -2164,6 +2227,7 @@ describe('PlaybackCoordinator', () => {
       // Advance to 35,000ms without any native events
       fakeTime = 35000;
       jest.advanceTimersByTime(35000);
+      await flushRemote();
 
       // Must NOT terminate with false error
       expect(coordWithClock.getState().current.status).toBe('starting');
@@ -2176,6 +2240,7 @@ describe('PlaybackCoordinator', () => {
     test('hanging headers during recovery times out within remaining episode budget', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -2211,11 +2276,13 @@ describe('PlaybackCoordinator', () => {
       // 800ms backoff
       fakeTime = 800;
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       // Advance 5000ms: header timeout fires
       fakeTime += 5000;
       jest.advanceTimersByTime(5000);
-      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await flushRemote();
+      for (let i = 0; i < 10; i++) await flushRemote();
 
       expect(coordWithClock.getState().current.status).toBe('error');
       expect(coordWithClock.getState().current.error.kind).toBe('timeout');
@@ -2261,9 +2328,14 @@ describe('PlaybackCoordinator', () => {
       const playCountBefore = identifiedPlayer.playForAttempt.mock.calls.length;
       const seekCountBefore = identifiedPlayer.seekForAttempt.mock.calls.length;
 
+      identifiedPlayer.puukExpectedIntentVersion = 1;
+      identifiedPlayer.currentStatus = { sourceIdentityVersion: 1,
+        sourceAttemptId: res.sourceAttemptId, nativeIntent: 'pause', intentRevision: 3 };
+      identifiedPlayer.replaceWithExpectedIntent = jest.fn((source, attempt) =>
+        identifiedPlayer.replaceWithAttempt(source, attempt, null, null));
       // Retry acknowledges the newly installed source and its technical seek.
       const retry = coordinator.retryCurrent(identifiedPlayer);
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
       const retryAttempt = coordinator.current.sourceAttemptId;
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
@@ -2274,7 +2346,7 @@ describe('PlaybackCoordinator', () => {
         isLoaded: true,
         currentTime: 0,
       });
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      for (let i = 0; i < 30; i++) await flushRemote();
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
         sourceAttemptId: retryAttempt,
@@ -2386,7 +2458,7 @@ describe('PlaybackCoordinator', () => {
       expect(new Set(ids).size).toBe(3);
     });
 
-    test('native error classification does not misclassify words containing auth substring like author', () => {
+    test('native error classification does not misclassify words containing auth substring like author', async () => {
       const classified = classifyPlaybackError(
         new Error('synthetic author codec failure'),
         'track-1',
@@ -2395,7 +2467,7 @@ describe('PlaybackCoordinator', () => {
       expect(classified.type).toBe('remote_replace_error');
     });
 
-    test('native text stays generic without numeric HTTP status', () => {
+    test('native text stays generic without numeric HTTP status', async () => {
       for (const text of [
         'author codec failure',
         'unauthorized codec failure',
@@ -2430,6 +2502,7 @@ describe('PlaybackCoordinator', () => {
         error: new Error('Transport stream failed'),
       });
       jest.advanceTimersByTime(800);
+      await flushRemote();
 
       // Now user selects track B
       await coordinator.play(
@@ -2440,7 +2513,7 @@ describe('PlaybackCoordinator', () => {
 
       // Old A headers reject late
       rejectHeaders(new Error('Synthetic cancelled header error'));
-      for (let i = 0; i < 10; i++) await Promise.resolve();
+      for (let i = 0; i < 10; i++) await flushRemote();
 
       // B must remain unaffected and healthy
       expect(coordinator.getState().current.trackId).toBe('B');
@@ -2473,7 +2546,7 @@ describe('PlaybackCoordinator', () => {
       const retryPromise = coordinator.retryCurrent(identifiedPlayer, {
         getHeaders: () => deferredHeaders,
       });
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      for (let i = 0; i < 5; i++) await flushRemote();
 
       // User selects track B while retry is pending
       await coordinator.play(
@@ -2487,7 +2560,7 @@ describe('PlaybackCoordinator', () => {
       // Old headers resolve late
       resolveHeaders({});
       await retryPromise;
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      for (let i = 0; i < 5; i++) await flushRemote();
 
       // Obsolete retry must NOT seek track B!
       expect(identifiedPlayer.seekForAttempt.mock.calls.length).toBe(
@@ -2534,6 +2607,7 @@ describe('PlaybackCoordinator', () => {
     test('healthy confirmed resume does not expire at original 30s episode', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         scheduler: mockScheduler,
         clock: () => fakeTime,
@@ -2570,6 +2644,7 @@ describe('PlaybackCoordinator', () => {
       await coordWithClock.setIntent(identifiedPlayer, { type: 'pause' });
       fakeTime += 1000;
       jest.advanceTimersByTime(1000);
+      await flushRemote();
       await coordWithClock.setIntent(identifiedPlayer, { type: 'play' });
 
       // Progress 3 & 4 post-resume -> sustainable proof post-resume!
@@ -2598,6 +2673,7 @@ describe('PlaybackCoordinator', () => {
       for (let i = 0; i < 6; i++) {
         fakeTime += 5000;
         jest.advanceTimersByTime(5000);
+      await flushRemote();
         coordWithClock.handleNativeStatus(identifiedPlayer, {
           sourceIdentityVersion: 1,
           sourceAttemptId: res.sourceAttemptId,
@@ -2620,7 +2696,7 @@ describe('PlaybackCoordinator', () => {
 describe('public Retry with native source and revision guards', () => {
   let c, player, installed, revision, intent, position, listeners, results;
   const flush = async () => {
-    for (let i = 0; i < 40; i++) await Promise.resolve();
+    for (let i = 0; i < 40; i++) await flushRemote();
   };
   const deferred = () => {
     let resolve, reject;
@@ -2654,16 +2730,20 @@ describe('public Retry with native source and revision guards', () => {
     results = [];
     player = {
       puukSourceIdentityVersion: 1,
+      puukExpectedIntentVersion: 1,
+      get currentStatus() { return { sourceIdentityVersion: 1, sourceAttemptId: installed, nativeIntent: intent, intentRevision: revision }; },
+      replaceWithExpectedIntent: jest.fn((source, attempt, rev, expected, nativeIntent) =>
+        player.replaceWithAttempt(source, attempt, rev, expected, nativeIntent)),
       addListener: jest.fn((name, listener) => {
         listeners.add(listener);
         return { remove: () => listeners.delete(listener) };
       }),
       replaceWithAttempt: jest.fn(
-        (source, attempt, expectedRevision, expectedAttempt) => {
+        (source, attempt, expectedRevision, expectedAttempt, expectedIntent = 'play') => {
           if (
             expectedRevision !== null &&
             (revision !== expectedRevision ||
-              intent !== 'play' ||
+              intent !== expectedIntent ||
               installed !== expectedAttempt)
           )
             return false;
@@ -2701,12 +2781,13 @@ describe('public Retry with native source and revision guards', () => {
         revision++;
         emit('intent');
       }),
-      replace: jest.fn(),
+      replace: jest.fn(source => { if (!source) installed = null; }),
       play: jest.fn(),
       seekTo: jest.fn(),
       setActiveForLockScreen: jest.fn(),
     };
     c = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
       cache: { getCachedUri: () => null, isCached: () => false },
       scheduler: {
         addListener: () => () => {},

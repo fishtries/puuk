@@ -1,3 +1,7 @@
+function mockResolveMedia(track) {
+  return Promise.resolve({ uri: this.getStreamUrl(track), headers: {}, delivery: 'direct', cacheable: true });
+}
+async function flushTickets() { for (let i=0; i<12; i++) await Promise.resolve(); }
 import { PreloadScheduler, TRACK_STATUS } from '../preloadScheduler';
 
 let mockNetworkPolicy = { type: 'wifi', maxConcurrent: 2, lookahead: 2 };
@@ -83,6 +87,7 @@ describe('PreloadScheduler', () => {
     };
 
     scheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
       maxConcurrent: 1, // Concurrency limit 1 for precise step-by-step testing
       lookahead: 2,
       cache: mockCache,
@@ -105,6 +110,7 @@ describe('PreloadScheduler', () => {
     ];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
 
     // Track 20 should be downloading immediately (concurrency 1)
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -115,7 +121,7 @@ describe('PreloadScheduler', () => {
 
     // Complete track 20
     activeFetches.get('20').resolve();
-    await Promise.resolve(); // flush microtasks
+    await flushTickets(); // flush microtasks
 
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
     // Track 30 should now start downloading
@@ -123,7 +129,7 @@ describe('PreloadScheduler', () => {
 
     // Complete track 30
     activeFetches.get('30').resolve();
-    await Promise.resolve();
+    await flushTickets();
 
     expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.READY);
   });
@@ -137,6 +143,7 @@ describe('PreloadScheduler', () => {
     ];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
     // User skips or rearranges queue completely
@@ -146,6 +153,7 @@ describe('PreloadScheduler', () => {
     ];
 
     scheduler.syncQueue(currentTrack, newQueue);
+    await flushTickets();
 
     // Old track 20 remains active during the grace period.
     expect(mockCache.cancel).not.toHaveBeenCalledWith('20');
@@ -155,48 +163,58 @@ describe('PreloadScheduler', () => {
     expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
 
     jest.advanceTimersByTime(3000);
+
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.CANCELLED);
     // The slot is held until the cancelled cache promise settles.
     expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
-    await Promise.resolve();
+    await flushTickets();
     expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
     jest.useRealTimers();
   });
 
-  test('restores a stale task when it returns before the grace period expires', () => {
+  test('restores a stale task when it returns before the grace period expires', async () => {
     jest.useFakeTimers();
     const currentTrack = { id: 10 };
 
     scheduler.syncQueue(currentTrack, [{ id: 20 }]);
+    await flushTickets();
     scheduler.syncQueue(currentTrack, [{ id: 99 }]);
+    await flushTickets();
     expect(mockCache.cancel).not.toHaveBeenCalledWith('20');
 
     scheduler.syncQueue(currentTrack, [{ id: 20 }]);
+    await flushTickets();
     jest.advanceTimersByTime(3000);
+    await flushTickets();
 
     expect(mockCache.cancel).not.toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     jest.useRealTimers();
   });
 
-  test('cancels a task immediately after repeated queue changes', () => {
+  test('cancels a task immediately after repeated queue changes', async () => {
     const currentTrack = { id: 10 };
 
     scheduler.syncQueue(currentTrack, [{ id: 20 }]);
+    await flushTickets();
     scheduler.syncQueue(currentTrack, []);
+    await flushTickets();
     expect(mockCache.cancel).not.toHaveBeenCalledWith('20');
 
     scheduler.syncQueue(currentTrack, []);
+    await flushTickets();
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.CANCELLED);
   });
 
-  test('force cancels stale tasks immediately', () => {
+  test('force cancels stale tasks immediately', async () => {
     const currentTrack = { id: 10 };
 
     scheduler.syncQueue(currentTrack, [{ id: 20 }]);
+    await flushTickets();
     scheduler.syncQueue(currentTrack, [{ id: 99 }], { force: true });
+    await flushTickets();
 
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.CANCELLED);
@@ -206,22 +224,28 @@ describe('PreloadScheduler', () => {
     const currentTrack = { id: 10 };
 
     scheduler.syncQueue(currentTrack, [{ id: 20 }]);
+    await flushTickets();
     scheduler.syncQueue(currentTrack, []);
+    await flushTickets();
     const urgentPromise = scheduler.preloadImmediate({ id: 77 });
+    urgentPromise.catch(() => {});
+
 
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
     // The slot is occupied until the cancelled cache promise settles.
     expect(scheduler.getStatus(77)).toBe(TRACK_STATUS.QUEUED);
-    await Promise.resolve();
+    await flushTickets();
     expect(scheduler.getStatus(77)).toBe(TRACK_STATUS.DOWNLOADING);
 
     activeFetches.get('77').resolve();
     await urgentPromise;
   });
 
-  test('never cancels the current track through syncQueue', () => {
+  test('never cancels the current track through syncQueue', async () => {
     scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
     scheduler.syncQueue({ id: 20 }, [{ id: 30 }], { force: true });
+    await flushTickets();
 
     expect(mockCache.cancel).not.toHaveBeenCalledWith('20');
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -237,6 +261,7 @@ describe('PreloadScheduler', () => {
     ];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
 
     // Track 50 was already cached
     expect(scheduler.getStatus(50)).toBe(TRACK_STATUS.READY);
@@ -247,6 +272,8 @@ describe('PreloadScheduler', () => {
   test('preloadImmediate immediately starts download and returns URI', async () => {
     const track = { id: 77, title: 'Urgent' };
     const promise = scheduler.preloadImmediate(track);
+    promise.catch(() => {});
+    await flushTickets();
 
     expect(scheduler.getStatus(77)).toBe(TRACK_STATUS.DOWNLOADING);
     activeFetches.get('77').resolve();
@@ -261,10 +288,11 @@ describe('PreloadScheduler', () => {
     const queue = [{ id: 88 }];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
     expect(scheduler.getStatus(88)).toBe(TRACK_STATUS.DOWNLOADING);
 
     activeFetches.get('88').reject(new Error('Network failure'));
-    await Promise.resolve();
+    await flushTickets();
 
     expect(scheduler.getStatus(88)).toBe(TRACK_STATUS.FAILED);
     expect(scheduler.getError(88)?.message).toBe('Network failure');
@@ -278,6 +306,7 @@ describe('PreloadScheduler', () => {
     ];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
     // Track 20 is downloading (concurrency 1), track 30 is queued with priority 2
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
@@ -287,6 +316,8 @@ describe('PreloadScheduler', () => {
       id: 30,
       title: 'NextNext',
     });
+    urgentPromise.catch(() => {});
+
 
     // Track 30 was promoted to priority 0 and preempted track 20
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
@@ -294,7 +325,7 @@ describe('PreloadScheduler', () => {
     expect(scheduler.queue.find((q) => q.trackId === '20')).toBeDefined();
     // Slot is held until cancelled task settles
     expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
-    await Promise.resolve();
+    await flushTickets();
     expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
     expect(scheduler.activeTasks.has('30')).toBe(true);
 
@@ -307,18 +338,22 @@ describe('PreloadScheduler', () => {
     // Track 20 resumes downloading automatically after track 30 finishes
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     activeFetches.get('20').resolve();
-    await Promise.resolve();
+    await flushTickets();
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
   });
 
   test('preloadImmediate waits in queue at priority 0 when active tasks are already priority 0', async () => {
     // Start first urgent task
     const p1 = scheduler.preloadImmediate({ id: 101, title: 'Urgent 1' });
+    p1.catch(() => {});
+    await flushTickets();
     expect(scheduler.getStatus(101)).toBe(TRACK_STATUS.DOWNLOADING);
     expect(scheduler.activeTasks.get('101').priority).toBe(0);
 
     // Start second urgent task (concurrency 1 is full with priority 0)
     const p2 = scheduler.preloadImmediate({ id: 102, title: 'Urgent 2' });
+    p2.catch(() => {});
+    await flushTickets();
 
     // Task 102 must NOT preempt task 101 because task 101 is already priority 0
     expect(scheduler.getStatus(101)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -343,6 +378,7 @@ describe('PreloadScheduler', () => {
     const queue = [{ id: 20, title: 'Next' }];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
     const callCountBefore = mockCache.getOrFetch.mock.calls.length;
@@ -352,6 +388,8 @@ describe('PreloadScheduler', () => {
       id: 20,
       title: 'Next',
     });
+    immediatePromise.catch(() => {});
+    await flushTickets();
 
     // It must NOT call getOrFetch a second time!
     expect(mockCache.getOrFetch.mock.calls.length).toBe(callCountBefore);
@@ -367,6 +405,7 @@ describe('PreloadScheduler', () => {
     const queue = [{ id: 20, title: 'Next' }];
 
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     expect(scheduler.activeTasks.size).toBe(1);
 
@@ -375,6 +414,8 @@ describe('PreloadScheduler', () => {
       id: 99,
       title: 'UrgentNow',
     });
+    urgentPromise.catch(() => {});
+
 
     // Track 20 was preempted and returned to queue
     expect(mockCache.cancel).toHaveBeenCalledWith('20');
@@ -382,7 +423,7 @@ describe('PreloadScheduler', () => {
 
     // Slot is held until cancelled task settles
     expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.QUEUED);
-    await Promise.resolve();
+    await flushTickets();
 
     // Track 99 took over the single active slot (concurrency limit 1 is NOT exceeded!)
     expect(scheduler.activeTasks.size).toBe(1);
@@ -397,7 +438,7 @@ describe('PreloadScheduler', () => {
     // Track 20 resumes downloading automatically
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
     activeFetches.get('20').resolve();
-    await Promise.resolve();
+    await flushTickets();
     expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
   });
 
@@ -413,6 +454,7 @@ describe('PreloadScheduler', () => {
 
     // syncQueue should notice AudioCache is already downloading track 55
     scheduler.syncQueue(currentTrack, queue);
+    await flushTickets();
 
     expect(scheduler.getStatus(55)).toBe(TRACK_STATUS.DOWNLOADING);
     // It did NOT add a duplicate fetch to the queue
@@ -421,7 +463,7 @@ describe('PreloadScheduler', () => {
     // Resolving the external download updates scheduler's status to READY
     activeFetches.get('55').resolve();
     await externalPromise;
-    await Promise.resolve();
+    await flushTickets();
 
     expect(scheduler.getStatus(55)).toBe(TRACK_STATUS.READY);
   });
@@ -433,8 +475,9 @@ describe('PreloadScheduler', () => {
       ['wifi', 2, 2],
     ])(
       '%s applies maxConcurrent=%i and lookahead=%i',
-      (type, maxConcurrent, lookahead) => {
+      async (type, maxConcurrent, lookahead) => {
         const policyScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
           maxConcurrent: 2,
           lookahead: 2,
           cache: mockCache,
@@ -446,6 +489,7 @@ describe('PreloadScheduler', () => {
           { id: 30 },
           { id: 40 },
         ]);
+    await flushTickets();
 
         expect(policyScheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
         expect(policyScheduler.getStatus(30)).toBe(
@@ -459,8 +503,9 @@ describe('PreloadScheduler', () => {
       },
     );
 
-    test('null/unknown policy clamps scheduler to safe baseline (maxConcurrent=1, lookahead=1)', () => {
+    test('null/unknown policy clamps scheduler to safe baseline (maxConcurrent=1, lookahead=1)', async () => {
       const unknownScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache: mockCache,
@@ -471,13 +516,14 @@ describe('PreloadScheduler', () => {
       expect(limits.lookahead).toBe(1);
 
       unknownScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       // On safe baseline, lookahead is 1, so only track 20 is queued/downloading, track 30 is idle
       expect(unknownScheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(unknownScheduler.getStatus(30)).toBe(TRACK_STATUS.IDLE);
       unknownScheduler.destroy();
     });
 
-    test('transition from wifi to cellular resyncs queue and limits lookahead to 1', () => {
+    test('transition from wifi to cellular resyncs queue and limits lookahead to 1', async () => {
       let currentPolicy = { type: 'wifi', maxConcurrent: 2, lookahead: 2 };
       let notifyPolicyChange;
       const subscribeMock = (cb) => {
@@ -486,6 +532,7 @@ describe('PreloadScheduler', () => {
       };
 
       const dynamicScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache: mockCache,
@@ -494,6 +541,7 @@ describe('PreloadScheduler', () => {
       });
 
       dynamicScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       // On Wi-Fi: both 20 and 30 are downloading (concurrency 2)
       expect(dynamicScheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(dynamicScheduler.getStatus(30)).toBe(TRACK_STATUS.DOWNLOADING);
@@ -513,6 +561,7 @@ describe('PreloadScheduler', () => {
       let currentPolicy = { type: 'wifi', maxConcurrent: 1, lookahead: 2 };
 
       const dynamicScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 1,
         lookahead: 2,
         cache: mockCache,
@@ -520,6 +569,7 @@ describe('PreloadScheduler', () => {
       });
 
       dynamicScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       // Concurrency 1: track 20 downloading, track 30 queued
       expect(dynamicScheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(dynamicScheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
@@ -529,7 +579,7 @@ describe('PreloadScheduler', () => {
 
       // Track 20 finishes
       activeFetches.get('20').resolve();
-      await Promise.resolve();
+      await flushTickets();
 
       expect(dynamicScheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
       // Track 30 has priority 2 > lookahead 1, so _pump() must NOT start it!
@@ -540,6 +590,7 @@ describe('PreloadScheduler', () => {
     test('preempted background task promise resolves when task is restarted and completed', async () => {
       // Track 20 starts downloading
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // External caller holds original promise for track 20
@@ -551,8 +602,10 @@ describe('PreloadScheduler', () => {
         id: 99,
         title: 'Urgent',
       });
+    urgentPromise.catch(() => {});
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
-      await Promise.resolve();
+      await flushTickets();
       expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Urgent task completes
@@ -572,14 +625,16 @@ describe('PreloadScheduler', () => {
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.READY);
     });
 
-    test('grace period applies to queued tasks and cancels them after grace timeout', () => {
+    test('grace period applies to queued tasks and cancels them after grace timeout', async () => {
       jest.useFakeTimers();
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
       // 20 is downloading, 30 is queued
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
 
       // New queue drops track 30 completely
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
 
       // Track 30 is NOT cancelled immediately, it has grace timer
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.QUEUED);
@@ -587,6 +642,7 @@ describe('PreloadScheduler', () => {
 
       // Advance by 3000ms
       jest.advanceTimersByTime(3000);
+    await flushTickets();
 
       // Now track 30 is cancelled
       expect(scheduler.getStatus(30)).toBe(TRACK_STATUS.CANCELLED);
@@ -617,18 +673,21 @@ describe('PreloadScheduler', () => {
       });
 
       scheduler.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
       const activeTask20 = scheduler.activeTasks.get('20');
       const originalPromise = activeTask20.promise;
 
       // Urgent preload preempts track 20
       const urgentPromise = scheduler.preloadImmediate({ id: 99 });
+    urgentPromise.catch(() => {});
+    await flushTickets();
       expect(scheduler.getStatus(20)).toBe(TRACK_STATUS.QUEUED);
       // Attempt 1 cancellation settles
       if (attempt1Reject) {
         attempt1Reject(new Error('Download cancelled'));
       }
-      await Promise.resolve();
+      await flushTickets();
       expect(scheduler.getStatus(99)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Urgent preload finishes
@@ -641,7 +700,7 @@ describe('PreloadScheduler', () => {
 
       // Attempt 2 completes
       attempt2Resolve('file:///mock/20.audio');
-      await Promise.resolve();
+      await flushTickets();
 
       // The original promise MUST resolve successfully with the uri of attempt 2!
       const uri = await originalPromise;
@@ -653,7 +712,9 @@ describe('PreloadScheduler', () => {
       jest.useFakeTimers();
       // Track 10 was queued and fell into grace period
       scheduler.syncQueue({ id: 5 }, [{ id: 10 }, { id: 20 }]);
-      scheduler.syncQueue({ id: 5 }, [{ id: 20 }]); // track 10 falls into grace
+    await flushTickets();
+      scheduler.syncQueue({ id: 5 }, [{ id: 20 }]);
+    await flushTickets(); // track 10 falls into grace
 
       expect(scheduler.graceTimers.has('10')).toBe(true);
 
@@ -662,6 +723,8 @@ describe('PreloadScheduler', () => {
         { id: 99 },
         { currentTrackId: 10 },
       );
+    urgentPromise.catch(() => {});
+    await flushTickets();
       urgentPromise.catch(() => {});
 
       // The grace timer for track 10 must be cleared immediately
@@ -669,18 +732,19 @@ describe('PreloadScheduler', () => {
 
       // Even after 3000ms grace period expires, track 10 is NOT cancelled
       jest.advanceTimersByTime(3000);
+    await flushTickets();
       expect(scheduler.getStatus(10)).not.toBe(TRACK_STATUS.CANCELLED);
 
       // Track 10 is current track, so it remains downloading in concurrency 1 slot
       activeFetches.get('10')?.resolve('file:///mock/10.audio');
-      await Promise.resolve();
+      await flushTickets();
       // Track 99 now starts downloading in the freed slot
       activeFetches.get('99')?.resolve('file:///mock/99.audio');
       await urgentPromise;
       jest.useRealTimers();
     });
 
-    test('network policy change does not inherit force: true from previous syncQueue call', () => {
+    test('network policy change does not inherit force: true from previous syncQueue call', async () => {
       let currentPolicy = { type: 'wifi', maxConcurrent: 2, lookahead: 2 };
       let notifyPolicyChange;
       const subscribeMock = (cb) => {
@@ -689,6 +753,7 @@ describe('PreloadScheduler', () => {
       };
 
       const dynamicScheduler = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         maxConcurrent: 2,
         lookahead: 2,
         cache: mockCache,
@@ -698,10 +763,12 @@ describe('PreloadScheduler', () => {
 
       // Previous sync had force: true
       dynamicScheduler.syncQueue({ id: 10 }, [{ id: 20 }], { force: true });
+    await flushTickets();
       expect(dynamicScheduler.getStatus(20)).toBe(TRACK_STATUS.DOWNLOADING);
 
       // Add another track to queue
       dynamicScheduler.syncQueue({ id: 10 }, [{ id: 20 }, { id: 30 }]);
+    await flushTickets();
 
       // Simulate network policy change (e.g. Wi-Fi -> cellular)
       currentPolicy = { type: 'cellular', maxConcurrent: 1, lookahead: 1 };
@@ -718,6 +785,7 @@ describe('PreloadScheduler', () => {
         { track_id: 'next-legacy' },
         { id: 0 },
       ]);
+    await flushTickets();
 
       expect(scheduler.currentTrackId).toBe('current-legacy');
       expect(scheduler.getStatus('next-legacy')).toBe(TRACK_STATUS.DOWNLOADING);
@@ -727,20 +795,23 @@ describe('PreloadScheduler', () => {
       activeFetches
         .get('next-legacy')
         ?.resolve('file:///mock/next-legacy.audio');
-      await Promise.resolve();
+      await flushTickets();
 
       expect(scheduler.getStatus(0)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(scheduler.getStatus('0')).toBe(TRACK_STATUS.DOWNLOADING);
 
       // 2. setCurrentTrack accepts numeric ID 0 and protects it
       scheduler.setCurrentTrack({ id: 0 });
+    await flushTickets();
       expect(scheduler.currentTrackId).toBe('0');
 
       // 3. preloadImmediate accepts track_id-only and numeric 0
       const promiseLegacy = scheduler.preloadImmediate({
         track_id: 'immediate-legacy',
       });
-      await Promise.resolve();
+    promiseLegacy.catch(() => {});
+    await flushTickets();
+      await flushTickets();
       activeFetches
         .get('immediate-legacy')
         ?.resolve('file:///mock/immediate-legacy.audio');
@@ -749,7 +820,9 @@ describe('PreloadScheduler', () => {
       );
 
       const promiseZero = scheduler.preloadImmediate({ id: 0 });
-      await Promise.resolve();
+    promiseZero.catch(() => {});
+    await flushTickets();
+      await flushTickets();
       activeFetches.get('0')?.resolve('file:///mock/0.audio');
       await expect(promiseZero).resolves.toBe('file:///mock/0.audio');
     });
@@ -768,8 +841,9 @@ describe('PreloadScheduler', () => {
       api.setServerUrl(originalServerUrl);
     });
 
-    test('explicit serverUrl option stays fixed for dependency injection even if global SERVER_URL changes', () => {
+    test('explicit serverUrl option stays fixed for dependency injection even if global SERVER_URL changes', async () => {
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         serverUrl: 'https://fixed.scheduler.org',
         cache: mockCache,
       });
@@ -778,31 +852,34 @@ describe('PreloadScheduler', () => {
       api.setServerUrl('https://global-mutated.scheduler.org');
 
       s.syncQueue({ id: 10 }, [{ id: 20 }]);
+    await flushTickets();
 
       expect(s.serverUrl).toBe('https://fixed.scheduler.org');
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '20',
-        'https://fixed.scheduler.org/api/stream/20',
+        expect.objectContaining({ uri: 'https://fixed.scheduler.org/api/stream/20' }),
         expect.any(Object),
       );
     });
 
-    test('explicit getStreamUrl remains authoritative in scheduler tests', () => {
+    test('explicit getStreamUrl remains authoritative in scheduler tests', async () => {
       const customGetStreamUrl = jest.fn(
         (track) => `https://authoritative.cdn/tracks/${track.id}`,
       );
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         serverUrl: 'https://ignored.scheduler.org',
         getStreamUrl: customGetStreamUrl,
         cache: mockCache,
       });
 
       s.syncQueue({ id: 10 }, [{ id: 30 }]);
+    await flushTickets();
 
       expect(customGetStreamUrl).toHaveBeenCalledWith({ id: 30 });
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '30',
-        'https://authoritative.cdn/tracks/30',
+        expect.objectContaining({ uri: 'https://authoritative.cdn/tracks/30' }),
         expect.any(Object),
       );
     });
@@ -810,33 +887,37 @@ describe('PreloadScheduler', () => {
     test('getServerUrl option is called dynamically at background task start', async () => {
       let dynamicHost = 'https://dynamic-a.org';
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         getServerUrl: () => dynamicHost,
         cache: mockCache,
         maxConcurrent: 1,
       });
 
       s.syncQueue({ id: 1 }, [{ id: 2 }]);
+    await flushTickets();
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '2',
-        'https://dynamic-a.org/api/stream/2',
+        expect.objectContaining({ uri: 'https://dynamic-a.org/api/stream/2' }),
         expect.any(Object),
       );
 
       dynamicHost = 'https://dynamic-b.org';
       // Next task starts after host change
       activeFetches.get('2')?.resolve();
-      await Promise.resolve();
+      await flushTickets();
 
-      s.preloadImmediate({ id: 3 });
+      s.preloadImmediate({ id: 3 }).catch(() => {});
+      await flushTickets();
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '3',
-        'https://dynamic-b.org/api/stream/3',
+        expect.objectContaining({ uri: 'https://dynamic-b.org/api/stream/3' }),
         expect.any(Object),
       );
     });
 
-    test('default scheduler instance resolves updated SERVER_URL loaded after singleton import', () => {
+    test('default scheduler instance resolves updated SERVER_URL loaded after singleton import', async () => {
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
       });
 
@@ -844,11 +925,12 @@ describe('PreloadScheduler', () => {
       api.setServerUrl('https://settings-cold-start.puuk.fun');
 
       s.syncQueue({ id: 10 }, [{ id: 40 }]);
+    await flushTickets();
 
       expect(s.serverUrl).toBe('https://settings-cold-start.puuk.fun');
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '40',
-        'https://settings-cold-start.puuk.fun/api/stream/40',
+        expect.objectContaining({ uri: 'https://settings-cold-start.puuk.fun/api/stream/40' }),
         expect.any(Object),
       );
     });
@@ -858,6 +940,7 @@ describe('PreloadScheduler', () => {
       api.setServerUrl('https://server-one.puuk.fun');
 
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
         maxConcurrent: 1,
         lookahead: 2,
@@ -865,6 +948,7 @@ describe('PreloadScheduler', () => {
 
       // Start queue on server one: task 50 downloads, task 60 is queued
       s.syncQueue({ id: 10 }, [{ id: 50 }, { id: 60 }]);
+    await flushTickets();
       expect(s.getStatus(50)).toBe(TRACK_STATUS.DOWNLOADING);
       expect(s.getStatus(60)).toBe(TRACK_STATUS.QUEUED);
       const initialEpoch = s.epoch;
@@ -874,6 +958,7 @@ describe('PreloadScheduler', () => {
 
       // syncQueue called on server two with new track list
       s.syncQueue({ id: 10 }, [{ id: 70 }]);
+    await flushTickets();
 
       // Epoch was invalidated
       expect(s.epoch).toBeGreaterThan(initialEpoch);
@@ -884,23 +969,24 @@ describe('PreloadScheduler', () => {
 
       // Late resolution of old task 50 cannot publish or alter state
       activeFetches.get('50')?.resolve('file:///mock/50.audio');
-      await Promise.resolve();
+      await flushTickets();
       // Status must not be set to READY by late old-origin result
       expect(s.getStatus(50)).not.toBe(TRACK_STATUS.READY);
 
       // New task on server two starts with the new URL
       expect(mockCache.getOrFetch).toHaveBeenCalledWith(
         '70',
-        'https://server-two.puuk.fun/api/stream/70',
+        expect.objectContaining({ uri: 'https://server-two.puuk.fun/api/stream/70' }),
         expect.any(Object),
       );
     });
 
-    test('persistent cache keys retain content-ID semantics across server change', () => {
+    test('persistent cache keys retain content-ID semantics across server change', async () => {
       const api = require('../../shared/api/api');
       api.setServerUrl('https://server-alpha.puuk.fun');
 
       const s = new PreloadScheduler({
+      resolveMedia: mockResolveMedia,
         cache: mockCache,
       });
 
@@ -912,12 +998,13 @@ describe('PreloadScheduler', () => {
 
       // Sync queue with track 80 on new server
       s.syncQueue({ id: 10 }, [{ id: 80 }]);
+    await flushTickets();
 
       // Immediately ready from local cache without downloading from server-beta
       expect(s.getStatus(80)).toBe(TRACK_STATUS.READY);
       expect(mockCache.getOrFetch).not.toHaveBeenCalledWith(
         '80',
-        expect.any(String),
+        expect.objectContaining({ uri: expect.any(String) }),
         expect.any(Object),
       );
     });

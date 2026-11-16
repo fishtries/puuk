@@ -6,11 +6,14 @@
  * fine-grained error classification, and debug-gated diagnostics.
  */
 
+import { mediaDelivery, boundedMediaOperation } from '../shared/api/media';
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
 import { resolveCoverUri, prefetchCover } from '../shared/media/CoverImage';
 import {
   SERVER_URL,
+  addSessionListener,
+  getAuthSessionGeneration,
   getCachedAuthToken,
   getAuthToken,
 } from '../shared/api/api';
@@ -68,7 +71,8 @@ export function classifyPlaybackError(err, trackId) {
     return err;
   }
 
-  const msg = err?.message || String(err || '');
+  const msg = err?.message || '';
+  const safeMessage = 'Playback error';
   const status =
     typeof err?.status === 'number'
       ? err.status
@@ -97,7 +101,7 @@ export function classifyPlaybackError(err, trackId) {
     type = 'remote_replace_error';
   }
 
-  return new PlaybackError(msg, { type, cause: err, trackId });
+  return new PlaybackError(safeMessage, { type, trackId });
 }
 
 /**
@@ -137,6 +141,12 @@ export {
 
 export class PlaybackCoordinator {
   constructor(options = {}) {
+    this.resolveMedia = options.resolveMedia || ((track, opts) => mediaDelivery.resolve(track, opts));
+    this._mediaController = null;
+    this._mediaDescriptor = null;
+    this._mediaRefreshUsed = false;
+    this._mediaDirectUsed = false;
+    this._mediaWake = false;
     this.cache = options.cache || defaultAudioCache;
     this.scheduler = options.scheduler || defaultPreloadScheduler;
     this.preloadNative = options.preloadNative || null;
@@ -208,14 +218,15 @@ export class PlaybackCoordinator {
     this.backgroundCacheDelayMs = options.backgroundCacheDelayMs ?? 5000;
 
     // Watchdogs and budgets (§4.2)
-    this.startupTimeoutMs = options.startupTimeoutMs ?? 15000;
-    this.stallTimeoutMs = options.stallTimeoutMs ?? 10000;
+    this.startupTimeoutMs = options.startupTimeoutMs ?? 7000;
+    this.stallTimeoutMs = options.stallTimeoutMs ?? 7000;
     this.episodeTotalMs = options.episodeTotalMs ?? 30000;
     this.recoveryDelayMs = options.recoveryDelayMs ?? 800;
-    this.headerTimeoutMs = options.headerTimeoutMs ?? 5000;
+    this.headerTimeoutMs = options.headerTimeoutMs ?? 3000;
     this.seekTimeoutMs = options.seekTimeoutMs ?? 5000;
 
     // Episode & confirmation tracking
+    this._sourceDeadline = 0;
     this._episodeStartTime = 0;
     this._episodeDeadline = 0;
     this._activeEpisodeType = null; // 'startup' | 'stall' | null
@@ -240,6 +251,7 @@ export class PlaybackCoordinator {
     this._stallTimer = null;
     this._recoveryTimer = null;
     this._activeRetryPromise = null;
+    this._manualRetryToken = null;
 
     // Stable proof tracking (§4.2: >=2 advancing progress spanning 1,000 ms, net advance >= 0.25 s)
     this._progressEvents = [];
@@ -350,10 +362,7 @@ export class PlaybackCoordinator {
       0,
       this._getActiveEpisodeDeadline() - this.clock(),
     );
-    const delay = Math.min(this.startupTimeoutMs, remainingEpisode);
-    if (delay <= 0) {
-      return;
-    }
+    const delay = Math.min(this.startupTimeoutMs, remainingEpisode, this._sourceDeadline ? Math.max(0, this._sourceDeadline - this.clock()) : Infinity);
     this._startupTimer = setTimeout(() => {
       this._startupTimer = null;
       if (
@@ -363,7 +372,7 @@ export class PlaybackCoordinator {
         this.current.intent === 'play'
       ) {
         this._recordDiagnostic('startup_timeout_fired');
-        if (this.identityAvailable && this.current.recoveryCount === 0) {
+        if (this.identityAvailable) {
           this._scheduleAutoRecovery(this._player, 'startup_timeout');
         } else {
           this._terminateWithError(
@@ -410,6 +419,8 @@ export class PlaybackCoordinator {
         // Later stall episode deadline is anchored to last accepted advancing progress
         // only after sustainable proof has completed the startup episode.
         if (this._hasStableProof) {
+          this._mediaRefreshUsed = false;
+          this._mediaDirectUsed = this._mediaDescriptor?.delivery === 'direct';
           this._activeEpisodeType = 'stall';
           this._stallEpisodeDeadline =
             (this._lastProgressTime || this.clock()) + this.episodeTotalMs;
@@ -419,7 +430,7 @@ export class PlaybackCoordinator {
         const activeDeadline = this._getActiveEpisodeDeadline();
         if (
           this.identityAvailable &&
-          this.current.recoveryCount === 0 &&
+          this.current.recoveryCount < 2 &&
           this.clock() + this.recoveryDelayMs < activeDeadline
         ) {
           this._scheduleAutoRecovery(this._player, 'stall_timeout');
@@ -460,12 +471,44 @@ export class PlaybackCoordinator {
     }
   }
 
+  async _resolveRemote(track, { recovery = false, force = false } = {}) {
+    const selection = this.playbackGeneration;
+    const intentGeneration = this._recoveryGeneration;
+    const auth = getAuthSessionGeneration();
+    const server = this._resolveServerUrl();
+    const controller = this._mediaController;
+    let mode;
+    if (recovery) {
+      if (!this._mediaRefreshUsed) this._mediaRefreshUsed = true;
+      else if (this._mediaDescriptor?.delivery === 'cdn' && !this._mediaDirectUsed) { this._mediaDirectUsed = true; mode = 'direct'; }
+      else throw new PlaybackError('Recovery exhausted', { type: 'play_error' });
+      force = true;
+    }
+    const remaining = this._getActiveEpisodeDeadline() - this.clock();
+    if (remaining <= 0) throw new PlaybackError('Playback timed out', { type: 'network_timeout' });
+    const descriptor = await boundedMediaOperation(signal => this.resolveMedia(track, { mode, force, priority: 'current',
+      timeout: Math.min(3000, remaining), signal,
+      consumeNegotiation: () => { if (this._mediaRefreshUsed) return false; this._mediaRefreshUsed = true; return true; } }), { timeout: Math.min(3000, remaining), signal: controller?.signal });
+    if (selection !== this.playbackGeneration || (recovery && intentGeneration !== this._recoveryGeneration) || auth !== getAuthSessionGeneration() || server !== this._resolveServerUrl() || controller?.signal.aborted) throw new PlaybackError('Superseded', { type: 'abort' });
+    if (descriptor.delivery === 'direct') this._mediaDirectUsed = true;
+    this._mediaDescriptor = descriptor;
+    this._mediaWake = false;
+    return descriptor;
+  }
+
+  foreground() {
+    this._mediaWake = true;
+    this._mediaController?.abort();
+    this._mediaController = new AbortController();
+    mediaDelivery.invalidate();
+    this.cache.setForeground?.(true);
+  }
+
   _scheduleAutoRecovery(player, trigger, causeError = null) {
-    if (this.current.recoveryCount >= 1 || !this.identityAvailable) {
-      const classified = classifyPlaybackError(
-        causeError,
-        this.current.trackId,
-      );
+    const terminal = causeError?.terminal || [401, 403, 404, 410, 416].includes(causeError?.status) || /decode|format/.test(causeError?.code || '');
+    const exhausted = this._mediaRefreshUsed && (this._mediaDirectUsed || this._mediaDescriptor?.delivery !== 'cdn');
+    if (terminal || exhausted || !this.identityAvailable) {
+      const classified = trigger.includes('timeout') ? new PlaybackError('Playback timed out', { type: 'network_timeout' }) : classifyPlaybackError(causeError, this.current.trackId);
       this._terminateWithError(classified);
       return;
     }
@@ -482,7 +525,8 @@ export class PlaybackCoordinator {
       return;
     }
 
-    this.current.recoveryCount = 1;
+    this.current.recoveryCount += 1;
+    this._confirmedPlaybackStarted = false;
     this.current.status =
       trigger === 'stall_timeout' ? 'stalled' : 'recovering';
     this._hasStableProof = false;
@@ -535,101 +579,30 @@ export class PlaybackCoordinator {
     const currentTrack = this.currentTrack;
     const currentTrackId = this.current.trackId;
     const previousAttempt = this.current.sourceAttemptId;
-    const previousRevision = this._acceptedIntentRevision;
     const targetPosition = this._lastSeekTarget ?? this.current.positionSeconds;
 
     if (!currentTrack || !currentReq || !previousAttempt) return;
+    const isStale = () => this._recoveryGeneration !== recoveryGen || this.playbackGeneration !== currentGen ||
+      this.current.requestId !== currentReq || this._authEpoch !== currentAuth || this.current.intent !== 'play';
+    let descriptor;
+    try { descriptor = await this._resolveRemote(currentTrack, { recovery: true }); }
+    catch (e) { if (!isStale()) this._terminateWithError(e); return; }
+    if (isStale()) return;
+    const previousRevision = this._acceptedIntentRevision;
     if (!Number.isInteger(previousRevision) || previousRevision < 0) {
-      this._terminateWithError(
-        new PlaybackError('Missing native revision', { type: 'play_error' }),
-      );
+      this._terminateWithError(new PlaybackError('Missing native revision', { type: 'play_error' }));
       return;
     }
-
-    // DO NOT change this.current.sourceAttemptId here! It remains previousAttempt during header acquisition!
-    let cleanHeaders = {};
-    if (typeof this._getHeadersAsyncFn === 'function') {
-      const headerTimeout = Math.min(
-        this.headerTimeoutMs,
-        Math.max(0, remainingBudget),
-      );
-      let headerTimer;
-      try {
-        const headerPromise = this._getHeadersAsyncFn();
-        const timeoutPromise = new Promise(
-          (_, reject) =>
-            (headerTimer = setTimeout(
-              () => reject(new Error('Header timeout')),
-              headerTimeout,
-            )),
-        );
-        const asyncHeaders = await Promise.race([
-          headerPromise,
-          timeoutPromise,
-        ]);
-        if (asyncHeaders && typeof asyncHeaders === 'object') {
-          for (const [k, v] of Object.entries(asyncHeaders)) {
-            if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
-          }
-        }
-      } catch (hErr) {
-        if (
-          this._recoveryGeneration !== recoveryGen ||
-          this.playbackGeneration !== currentGen ||
-          this.current.requestId !== currentReq ||
-          this._authEpoch !== currentAuth ||
-          this.current.intent !== 'play'
-        ) {
-          return;
-        }
-        this._warn('[Coordinator] Header acquisition failed during recovery');
-        this._terminateWithError(
-          new PlaybackError('Header acquisition failed during recovery', {
-            type: 'network_timeout',
-            cause: hErr,
-            trackId: currentTrackId,
-          }),
-        );
-        return;
-      } finally {
-        clearTimeout(headerTimer);
-      }
-    } else if (this._currentSourceHeaders) {
-      cleanHeaders = { ...this._currentSourceHeaders };
-    }
-
-    // Guard check after async headers
-    if (
-      this._recoveryGeneration !== recoveryGen ||
-      this.playbackGeneration !== currentGen ||
-      this.current.requestId !== currentReq ||
-      this._authEpoch !== currentAuth ||
-      this.current.intent !== 'play'
-    ) {
-      return;
-    }
-
-    const currentServerUrl = this._resolveServerUrl();
-    if (this._lastServerUrl && this._lastServerUrl !== currentServerUrl) {
-      this._lastServerUrl = currentServerUrl;
-      this.serverEpoch += 1;
-      if (this.scheduler && typeof this.scheduler.cancelAll === 'function') {
-        this.scheduler.cancelAll();
-      }
-    }
-    const normalizedStreamUrl = normalizeStreamUrl(
-      currentTrack,
-      currentServerUrl,
-    );
-    const source =
-      Object.keys(cleanHeaders).length > 0
-        ? { uri: normalizedStreamUrl, headers: cleanHeaders }
-        : { uri: normalizedStreamUrl };
+    const cleanHeaders = { ...descriptor.headers };
+    const normalizedStreamUrl = descriptor.uri;
+    const source = { uri: normalizedStreamUrl, headers: cleanHeaders };
 
     const newAttemptId = `att_${++this._attemptIdCounter}_${Date.now()}`;
     const previousSource = this.current.source;
     this.current.sourceAttemptId = newAttemptId;
     this.current.source = 'remote';
+    this._sourceDeadline = Math.min(activeDeadline, this.clock() + this.startupTimeoutMs);
+    this._armStartupWatchdog(newAttemptId, currentReq);
     this._seekPending = true;
     this._loadedAttemptId = null;
     if (
@@ -719,7 +692,7 @@ export class PlaybackCoordinator {
         if (this._loadedAttemptId !== newAttemptId) {
           const loadedTimeout = Math.min(
             5000,
-            Math.max(0, this._getActiveEpisodeDeadline() - this.clock()),
+            Math.max(0, Math.min(this._getActiveEpisodeDeadline(), this._sourceDeadline || Infinity) - this.clock()),
           );
           let loadedArrived = false;
           await new Promise((resolve) => {
@@ -756,7 +729,7 @@ export class PlaybackCoordinator {
         // Wait matching seekCompleted: true
         const seekTimeout = Math.min(
           this.seekTimeoutMs,
-          Math.max(0, this._getActiveEpisodeDeadline() - this.clock()),
+          Math.max(0, Math.min(this._getActiveEpisodeDeadline(), this._sourceDeadline || Infinity) - this.clock()),
         );
         let seekEventRevision = null;
         const revision = this._acceptedIntentRevision;
@@ -903,8 +876,23 @@ export class PlaybackCoordinator {
     this._cancelRecovery('error');
     this._activeEpisodeType = null;
     this.current.status = 'error';
+    this._mediaController?.abort();
+    this._terminating = true;
+    this._terminalUnloaded = false;
+    this._terminalUnloadFailed = false;
+    try {
+      if (typeof this._player?.replace !== 'function') throw new Error('unload unavailable');
+      this._player.replace(null);
+      this._terminalUnloaded = true;
+    } catch {
+      this._terminalUnloadFailed = true;
+      // Best effort stop when unload is unavailable. Never infer that it succeeded.
+      try { this._player?.pause?.(); } catch {}
+      this.current.intent = 'pause';
+    }    this._terminating = false;
+    this.current.status = 'error';
     const isAuth = error.type === 'auth_error' || error.type === 'auth';
-    const isNotFound = error.type === 'not_found';
+    const isNotFound = error.type === 'not_found' || [403, 404, 410].includes(error.status) || error.type === 'security';
     const isTimeout =
       error.type === 'network_timeout' || error.type === 'timeout';
 
@@ -939,11 +927,11 @@ export class PlaybackCoordinator {
     this.current.error = {
       kind,
       retryable,
-      message: safeMessage,
+      message: this._terminalUnloadFailed ? 'Unable to unload audio' : safeMessage,
     };
     this.networkStatus = 'error';
-    this.networkError = safeMessage;
-    this.lastErrorType = kind;
+    this.networkError = this.current.error.message;
+    this.lastErrorType = error.type || kind;
     if (
       this.scheduler &&
       typeof this.scheduler.setPlaybackPressure === 'function'
@@ -1029,6 +1017,8 @@ export class PlaybackCoordinator {
   }
 
   cancelCurrent(reason = 'superseded', player = null) {
+    this._mediaController?.abort();
+    this._mediaDescriptor = null;
     this.playbackGeneration += 1;
     this._clearWatchdogs();
     if (this._episodeDeadlineTimer) {
@@ -1067,7 +1057,7 @@ export class PlaybackCoordinator {
       reason === 'unmount' ||
       reason === 'logout' ||
       reason === 'auth-change' ||
-      reason === 'dismiss'
+      reason === 'dismiss' || reason === 'server' || reason === 'token'
     ) {
       if (this.scheduler && typeof this.scheduler.cancelAll === 'function') {
         this.scheduler.cancelAll();
@@ -1081,6 +1071,7 @@ export class PlaybackCoordinator {
       } catch (e) {}
     }
 
+    try { p?.setActiveForLockScreen?.(false); p?.replace?.(null); } catch {}
     this._recordDiagnostic('cancelled');
     this._notifyState();
   }
@@ -1098,6 +1089,11 @@ export class PlaybackCoordinator {
       (this.current.status === 'idle' && type !== 'pause')
     ) {
       return;
+    }
+
+    if (type === 'play' && (this._terminalUnloadFailed || (this._terminalUnloaded && this.current.error))) {
+      this._notifyState();
+      return; // Retry must first prepare a valid source.
     }
 
     if (type === 'pause') {
@@ -1127,6 +1123,12 @@ export class PlaybackCoordinator {
       return;
     }
 
+    if ((type === 'play' || type === 'seek') && !this.currentIsLocal && this._mediaDescriptor &&
+      (this._mediaWake || this.clock() >= this._mediaDescriptor.usableUntil)) {
+      if (type === 'seek') this.current.positionSeconds = positionSeconds;
+      if (type === 'play') this.current.intent = 'play';
+      return this.retryCurrent(player, { requestId: this.current.requestId });
+    }
     if (type === 'play') {
       if (this._manualRetryToken && this.current.intent !== 'play')
         this._cancelRecovery('user_play');
@@ -1278,6 +1280,41 @@ export class PlaybackCoordinator {
       return { isLocal: false, uri: null };
     }
 
+    // Resolve terminal state before creating a retry token or mutating generations.
+    if (this._terminalUnloadFailed) {
+      try {
+        if (typeof player?.replace !== 'function') throw new Error('unload unavailable');
+        player.replace(null);
+        this._terminalUnloadFailed = false;
+        this._terminalUnloaded = true;
+      } catch {
+        this._notifyState();
+        return { isLocal: false, uri: null, requestId };
+      }
+    }
+    // Snapshot native intent before any awaited ticket operation. Every installation
+    // compares it under the native source lock, including paused preparation.
+    let retrySnapshot = null;
+    if (this.identityAvailable) {
+      try { retrySnapshot = player.currentStatus; } catch {}
+      const expectedAttempt = this._terminalUnloaded ? null : this.current.sourceAttemptId;
+      const atomicIntent = player.puukExpectedIntentVersion === 1 &&
+        typeof player.replaceWithExpectedIntent === 'function';
+      if (retrySnapshot?.sourceIdentityVersion !== 1 ||
+          retrySnapshot.sourceAttemptId !== expectedAttempt ||
+          !['play', 'pause'].includes(retrySnapshot.nativeIntent) ||
+          !Number.isInteger(retrySnapshot.intentRevision) || retrySnapshot.intentRevision < 0 ||
+          (retrySnapshot.nativeIntent === 'pause' && !atomicIntent)) {
+        // Older binaries cannot prepare paused sources atomically. Keep the error
+        // visible and require a rebuilt binary rather than install without a guard.
+        this.current.intent = 'pause';
+        this._notifyState();
+        return { isLocal: false, uri: null, requestId };
+      }
+      this.current.intent = retrySnapshot.nativeIntent;
+      this._acceptedIntentRevision = retrySnapshot.intentRevision;
+    }
+
     this._clearWatchdogs();
     this._cancelRecovery('manual_retry');
     const retryGen = ++this._retryGeneration;
@@ -1314,6 +1351,8 @@ export class PlaybackCoordinator {
     this._activeEpisodeType = 'startup';
     this._stallEpisodeDeadline = 0;
     this.current.recoveryCount = 0;
+    this._mediaRefreshUsed = false; this._mediaDirectUsed = false;
+    this._mediaController?.abort(); this._mediaController = new AbortController();
     this.current.error = null;
     this.current.status = intent === 'play' ? 'recovering' : 'paused';
     this.networkError = null;
@@ -1331,42 +1370,21 @@ export class PlaybackCoordinator {
 
     let seekCallback = null;
     try {
-      const getHeaders =
-        options.getHeaders ||
-        options.getHeadersAsync ||
-        this._getHeadersAsyncFn;
+      const getHeaders = options.getHeaders || options.getHeadersAsync;
       if (getHeaders) this._getHeadersAsyncFn = getHeaders;
-      const headers = await this._retryWait(
-        () =>
-          getHeaders
-            ? getHeaders()
-            : options.headers || this._currentSourceHeaders || {},
-        remaining(this.headerTimeoutMs),
-        isStale,
-      );
+      const descriptor = await this._retryWait(() => this._resolveRemote(track, { force: true }), remaining(3000), isStale);
       if (isStale()) return result;
-      const cleanHeaders = {};
-      for (const [key, value] of Object.entries(headers || {})) {
-        if (typeof value === 'string' && value.trim())
-          cleanHeaders[key] = value.trim();
-      }
-      const server = this._resolveServerUrl();
-      if (server !== this._lastServerUrl) {
-        this._lastServerUrl = server;
-        this.serverEpoch += 1;
-        this.scheduler?.cancelAll?.();
-      }
-      const uri = normalizeStreamUrl(track, server);
-      const source = {
-        uri,
-        ...(Object.keys(cleanHeaders).length ? { headers: cleanHeaders } : {}),
-      };
+      const uri = descriptor.uri;
+      const cleanHeaders = { ...descriptor.headers };
+      const source = { uri, headers: cleanHeaders };
       const oldAttempt = attempt;
       const oldSource = this.current.source;
       const oldUri = this.currentPlayUri;
       const oldIsLocal = this.currentIsLocal;
       const oldHeaders = this._currentSourceHeaders;
       const newAttempt = `att_${++this._attemptIdCounter}_${Date.now()}`;
+      this._sourceDeadline = Math.min(deadline, this.clock() + this.startupTimeoutMs);
+      const sourceRemaining = limit => Math.min(remaining(limit), Math.max(0, this._sourceDeadline - this.clock()));
       const accepted = await this._retryWait(
         () => {
           // Identity changes in the same synchronous turn as installation;
@@ -1379,11 +1397,18 @@ export class PlaybackCoordinator {
           this.currentIsLocal = false;
           this._currentSourceHeaders = cleanHeaders;
           this._loadedAttemptId = null;
-          return this.identityAvailable
-            ? player.replaceWithAttempt(source, attempt, null, null)
-            : player.replace(source);
+          if (!this.identityAvailable) return player.replace(source);
+          if (player.puukExpectedIntentVersion === 1 &&
+              typeof player.replaceWithExpectedIntent === 'function') {
+            return player.replaceWithExpectedIntent(source, attempt,
+              retrySnapshot.intentRevision, retrySnapshot.sourceAttemptId,
+              retrySnapshot.nativeIntent);
+          }
+          // Legacy guarded API supports play intent only; paused path was rejected above.
+          return player.replaceWithAttempt(source, attempt,
+            retrySnapshot.intentRevision, retrySnapshot.sourceAttemptId);
         },
-        remaining(this.headerTimeoutMs),
+        sourceRemaining(this.headerTimeoutMs),
         isStale,
       );
       if (isStale()) return result;
@@ -1398,6 +1423,7 @@ export class PlaybackCoordinator {
           type: 'play_error',
         });
       }
+      this._terminalUnloaded = false;
       result.uri = uri;
       result.confirmation = this.identityAvailable ? 'pending' : 'unavailable';
 
@@ -1412,7 +1438,7 @@ export class PlaybackCoordinator {
                   loadedCallback = (event) => resolve(event);
                   this._loadedCompletionCallback = loadedCallback;
                 }),
-              remaining(this.seekTimeoutMs),
+              sourceRemaining(this.seekTimeoutMs),
               isStale,
             );
           } finally {
@@ -1456,13 +1482,13 @@ export class PlaybackCoordinator {
                 );
               }
             }),
-          remaining(this.seekTimeoutMs),
+          sourceRemaining(this.seekTimeoutMs),
           isStale,
         );
       } else if (target > 0 && typeof player.seekTo === 'function') {
         await this._retryWait(
           () => player.seekTo(target),
-          remaining(this.seekTimeoutMs),
+          sourceRemaining(this.seekTimeoutMs),
           isStale,
         );
       }
@@ -1476,7 +1502,7 @@ export class PlaybackCoordinator {
             this.identityAvailable
               ? player.playForAttempt(attempt, this._acceptedIntentRevision)
               : player.play(),
-          remaining(this.seekTimeoutMs),
+          sourceRemaining(this.seekTimeoutMs),
           isStale,
         );
         if (isStale()) return result;
@@ -1507,6 +1533,7 @@ export class PlaybackCoordinator {
   }
 
   handleNativeStatus(player, event) {
+    if (this._terminating || this.current.error) return { accepted: false, didStart: false, didFinish: false };
     if (
       !this.identityAvailable ||
       !event ||
@@ -1549,7 +1576,7 @@ export class PlaybackCoordinator {
     ) {
       this._explicitInstallAttempt = null;
     }
-    const sourceError = event.nativeEvent === 'error' || Boolean(event.error);
+    const sourceError = event.nativeEvent === 'error' || Boolean(event.error) || (!this.currentIsLocal && (event.nativeEvent === 'reset' || event.mediaServicesDidReset === true));
     const intentEvent =
       event.nativeEvent === 'intent' || event.nativeEvent === 'seekIntent';
     const pausedPresentation =
@@ -1587,6 +1614,14 @@ export class PlaybackCoordinator {
         });
       }
       this._notifyState();
+      return { accepted: true, didStart: false, didFinish: false };
+    }
+
+    if (event.nativeIntent === 'play' && this.current.intent === 'pause' && incomingRevision > this._acceptedIntentRevision &&
+      !this.currentIsLocal && this._mediaDescriptor && (this._mediaWake || this.clock() >= this._mediaDescriptor.usableUntil)) {
+      this._acceptedIntentRevision = incomingRevision;
+      this.current.intent = 'play';
+      this.retryCurrent(player).catch(() => {});
       return { accepted: true, didStart: false, didFinish: false };
     }
 
@@ -1709,6 +1744,7 @@ export class PlaybackCoordinator {
           reqId && !this._startedRequestIds.has(reqId);
         if (isFirstForLogicalRequest) {
           this._startedRequestIds.add(reqId);
+          while (this._startedRequestIds.size > 200) this._startedRequestIds.delete(this._startedRequestIds.values().next().value);
           didStart = true;
         } else if (!reqId) {
           didStart = true;
@@ -1789,6 +1825,13 @@ export class PlaybackCoordinator {
     }
 
     if (sourceError) {
+      if (this._hasStableProof && this._activeEpisodeType === null) {
+        this._activeEpisodeType = 'stall';
+        this._stallEpisodeDeadline = this.clock() + this.episodeTotalMs;
+        this._mediaRefreshUsed = false;
+        this._mediaDirectUsed = this._mediaDescriptor?.delivery === 'direct';
+        this._armEpisodeDeadlineTimer(this._stallEpisodeDeadline);
+      }
       const errorPayload =
         event.error && typeof event.error === 'object'
           ? event.error
@@ -1830,7 +1873,7 @@ export class PlaybackCoordinator {
 
         const activeDeadline = this._getActiveEpisodeDeadline();
         if (
-          this.current.recoveryCount === 0 &&
+          this.current.recoveryCount < 2 &&
           this.clock() + this.recoveryDelayMs < activeDeadline
         ) {
           this._scheduleAutoRecovery(player, 'local_error', errorPayload);
@@ -1845,7 +1888,7 @@ export class PlaybackCoordinator {
       } else {
         const activeDeadline = this._getActiveEpisodeDeadline();
         if (
-          this.current.recoveryCount === 0 &&
+          this.current.recoveryCount < 2 &&
           this.clock() + this.recoveryDelayMs < activeDeadline
         ) {
           this._scheduleAutoRecovery(player, 'remote_error', errorPayload);
@@ -2033,20 +2076,13 @@ export class PlaybackCoordinator {
       `${currentServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
     const normalizedStreamUrl = normalizeStreamUrl(track, currentServerUrl);
 
-    this._log('[Coordinator][Stage 1: normalize_url]', {
-      trackId: trackIdStr,
-      rawStreamUrl,
-      normalizedStreamUrl,
-      serverUrl: currentServerUrl,
-    });
-
     if (
       !normalizedStreamUrl ||
       (!normalizedStreamUrl.startsWith('http://') &&
         !normalizedStreamUrl.startsWith('https://'))
     ) {
       const urlErr = new PlaybackError(
-        `[Coordinator] Invalid stream URL: "${normalizedStreamUrl}" for track ${trackIdStr}`,
+        'Invalid stream URL',
         {
           type: 'remote_replace_error',
           trackId: trackIdStr,
@@ -2113,8 +2149,8 @@ export class PlaybackCoordinator {
       (!options.force &&
         this.currentTrackId === trackIdStr &&
         this.currentPlayUri === expectedUri &&
-        sameHeaders) ||
-      (isRerenderOfCurrent && serverChanged && sameHeaders)
+        !serverChanged && !this._mediaWake && sameHeaders) ||
+      (isRerenderOfCurrent && expectedIsLocal === this.currentIsLocal && !serverChanged && sameHeaders && !this._mediaWake && (!this._mediaDescriptor || this.clock() < this._mediaDescriptor.usableUntil))
     ) {
       this._log(
         '[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback',
@@ -2162,12 +2198,17 @@ export class PlaybackCoordinator {
     }
 
     // 4. Generation token защиты от race condition при быстрых переключениях
+    this._mediaController?.abort();
+    this._mediaController = new AbortController();
+    this._mediaRefreshUsed = false; this._mediaDirectUsed = false;
     this.playbackGeneration += 1;
     const currentGeneration = this.playbackGeneration;
     const requestServerEpoch = this.serverEpoch;
+    const apiGeneration = getAuthSessionGeneration();
     const isCurrent = () =>
       this.playbackGeneration === currentGeneration &&
-      this.serverEpoch === requestServerEpoch;
+      this.serverEpoch === requestServerEpoch &&
+      getAuthSessionGeneration() === apiGeneration && this._resolveServerUrl() === currentServerUrl;
 
     let sourceAttemptId = `att_${++this._attemptIdCounter}_${Date.now()}`;
 
@@ -2178,9 +2219,12 @@ export class PlaybackCoordinator {
 
     this.currentTrack = track;
     this.currentTrackId = trackIdStr;
+    this._terminalUnloaded = false;
+    this._terminalUnloadFailed = false;
 
     this._activeRetryPromise = null;
 
+    this._sourceDeadline = 0;
     // Reset episode state and watchdogs
     this._episodeStartTime = this.clock();
     this._episodeDeadline = this._episodeStartTime + this.episodeTotalMs;
@@ -2235,6 +2279,13 @@ export class PlaybackCoordinator {
     let isLocal = false;
     let playUri = null;
 
+    if (!this.bypassCache && !options.bypassLocal && this.cache.prepareTrack) {
+      await this.cache.prepareTrack(track, { signal: this._mediaController.signal });
+      if (!isCurrent()) return { superseded: true, uri: null, isLocal: false };
+      localUri = this.cache.getCachedUri(trackIdStr);
+    }
+
+    this._sourceDeadline = Math.min(this._episodeDeadline, this.clock() + this.startupTimeoutMs);
     // СТАДИЯ 3: Native replace
     if (localUri) {
       isLocal = true;
@@ -2316,56 +2367,16 @@ export class PlaybackCoordinator {
         normalizedStreamUrl,
       });
 
-      // При отсутствии синхронных заголовков резолвим асинхронный геттер (например, SecureStore)
-      if (!hasHeaders && typeof headersGetter === 'function') {
-        try {
-          const asyncHeaders = await headersGetter();
-          if (asyncHeaders && typeof asyncHeaders === 'object') {
-            for (const [k, v] of Object.entries(asyncHeaders)) {
-              if (typeof v === 'string' && v.trim()) cleanHeaders[k] = v.trim();
-            }
-            hasHeaders = Object.keys(cleanHeaders).length > 0;
-          }
-        } catch (hdrErr) {
-          this._warn(
-            '[Coordinator] Failed to resolve auth headers asynchronously:',
-            hdrErr?.message,
-          );
-        }
-      }
-
-      if (!isCurrent()) {
-        return {
-          isLocal: false,
-          uri: null,
-          requestId,
-          sourceAttemptId,
-          confirmation: this.identityAvailable ? 'pending' : 'unavailable',
-          superseded: true,
-        };
-      }
-
-      const currentServerUrlAfterHeaders = this._resolveServerUrl();
-      if (
-        this._lastServerUrl &&
-        this._lastServerUrl !== currentServerUrlAfterHeaders
-      ) {
-        this._lastServerUrl = currentServerUrlAfterHeaders;
-        this.serverEpoch += 1;
-        requestServerEpoch = this.serverEpoch;
-        if (this.scheduler && typeof this.scheduler.cancelAll === 'function') {
-          this.scheduler.cancelAll();
-        }
-      }
-      const finalStreamUrl = normalizeStreamUrl(
-        track,
-        currentServerUrlAfterHeaders,
-      );
-      playUri = finalStreamUrl;
-
-      const source = hasHeaders
-        ? { uri: finalStreamUrl, headers: cleanHeaders }
-        : { uri: finalStreamUrl };
+      let descriptor;
+      try { descriptor = await this._resolveRemote(track); }
+      catch (e) { if (!isCurrent()) return { superseded: true, uri: null, isLocal: false }; this._terminateWithError(e); throw e; }
+      if (!isCurrent()) return { superseded: true, uri: null, isLocal: false };
+      playUri = descriptor.uri;
+      cleanHeaders = { ...descriptor.headers };
+      hasHeaders = Object.keys(cleanHeaders).length > 0;
+      this._sourceDeadline = Math.min(this._episodeDeadline, this.clock() + this.startupTimeoutMs);
+      const source = { uri: playUri, headers: cleanHeaders };
+      if (this.identityAvailable) this._armStartupWatchdog(sourceAttemptId, requestId);
 
       try {
         const replaceRes = await this._performReplace(
@@ -2395,57 +2406,9 @@ export class PlaybackCoordinator {
             confirmation: this.identityAvailable ? 'pending' : 'unavailable',
             superseded: true,
           };
-        this._log(
-          '[Coordinator][Stage 3: remote_replace retrying once via replaceCurrentSource...]',
-        );
-
-        try {
-          const retryRes = await this._performReplace(
-            player,
-            source,
-            isCurrent,
-            currentGeneration,
-            requestServerEpoch,
-            sourceAttemptId,
-          );
-          if (retryRes.superseded)
-            return {
-              isLocal: false,
-              uri: null,
-              requestId,
-              sourceAttemptId,
-              confirmation: this.identityAvailable ? 'pending' : 'unavailable',
-              superseded: true,
-            };
-        } catch (retryErr) {
-          if (!isCurrent())
-            return {
-              isLocal: false,
-              uri: null,
-              requestId,
-              sourceAttemptId,
-              confirmation: this.identityAvailable ? 'pending' : 'unavailable',
-              superseded: true,
-            };
-
-          this.currentPlayUri = null;
-          this.currentIsLocal = false;
-          const classified = classifyPlaybackError(
-            retryErr || remoteErr,
-            trackIdStr,
-          );
-          this.current.error = {
-            kind: classified.type,
-            retryable: true,
-            message: classified.message,
-          };
-          this.current.status = 'error';
-          this.networkError = classified.message;
-          this.networkStatus = 'error';
-          this.lastErrorType = classified.type;
-          this._notifyState();
-          throw classified;
-        }
+        if (!this.identityAvailable) { const classified = classifyPlaybackError(remoteErr, trackIdStr); this._terminateWithError(classified); throw classified; }
+        this._scheduleAutoRecovery(player, 'source_error', remoteErr);
+        return { isLocal: false, uri: null, requestId, sourceAttemptId, confirmation: 'pending' };
       }
 
       if (!isCurrent()) {
@@ -2483,7 +2446,7 @@ export class PlaybackCoordinator {
             if (!isCurrent()) return;
             if (this.cache && typeof this.cache.getOrFetch === 'function') {
               this.cache
-                .getOrFetch(trackIdStr, normalizedStreamUrl, {
+                .getOrFetch(trackIdStr, this._mediaDescriptor, {
                   headers: cleanHeaders,
                 })
                 .catch((cacheErr) => {
@@ -2995,4 +2958,5 @@ export class PlaybackCoordinator {
 }
 
 const defaultPlaybackCoordinator = new PlaybackCoordinator();
+if (typeof addSessionListener === 'function') addSessionListener(reason => defaultPlaybackCoordinator.cancelCurrent(reason === 'server' ? 'server' : 'logout'));
 export default defaultPlaybackCoordinator;

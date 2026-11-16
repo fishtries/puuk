@@ -1,3 +1,4 @@
+import { mediaDelivery } from '../shared/api/media';
 /**
  * Preload scheduler for audio tracks.
  * Manages priority queue (current 0.5, urgent 0, next 1, next-next 2),
@@ -17,7 +18,7 @@ import {
   isPolicyOnline,
   SAFE_NETWORK_POLICY,
 } from './networkPolicy';
-import { SERVER_URL } from '../shared/api/api';
+import { SERVER_URL, addSessionListener } from '../shared/api/api';
 import { normalizeStreamUrl } from './streamUrl';
 import { getTrackId } from '../shared/domain/trackAdapter';
 
@@ -81,7 +82,8 @@ export class PreloadScheduler {
         ? options.getServerUrl
         : () => this._explicitServerUrl || SERVER_URL;
     this._lastServerUrl = this._resolveServerUrl();
-    this.maxConcurrent = options.maxConcurrent ?? 2;
+    this.resolveMedia = options.resolveMedia || ((track, opts) => mediaDelivery.resolve(track, opts));
+    this.maxConcurrent = Math.min(options.maxConcurrent ?? 2, 2);
     this.lookahead = options.lookahead ?? 2;
     this.cache = options.cache || defaultAudioCache;
     this.getStreamUrl =
@@ -1084,6 +1086,7 @@ export class PreloadScheduler {
       this.currentCacheTrackId = null;
       this._clearCurrentCacheTimer();
     }
+    task?.controller?.abort();
     this.cache.cancel(id);
     if (task) {
       task.attemptToken = (task.attemptToken || 0) + 1;
@@ -1115,7 +1118,7 @@ export class PreloadScheduler {
   _holdSlotUntilSettled(id, task) {
     if (this.settlingTasks.has(id)) return;
 
-    const underlying = task?.downloadPromise || task?.promise;
+    const underlying = task?.downloadPromise?.settled || task?.downloadPromise || task?.promise;
     if (!underlying || typeof underlying.then !== 'function') {
       // Нечего ждать: слот освобождается синхронно.
       return;
@@ -1258,6 +1261,7 @@ export class PreloadScheduler {
         // Сохраняем исходный promise / resolve / reject, чтобы внешний код не остался с зависшим промисом!
         // Инкрементируем attemptToken, чтобы старая отменённая попытка не могла сбросить или перетереть новую попытку!
         lowestPriTask.attemptToken = (lowestPriTask.attemptToken || 0) + 1;
+        lowestPriTask.controller?.abort();
         this.cache.cancel(lowestPriTask.trackId);
         this.activeTasks.delete(lowestPriTask.trackId);
         this._holdSlotUntilSettled(lowestPriTask.trackId, lowestPriTask);
@@ -1328,19 +1332,23 @@ export class PreloadScheduler {
       purpose: item.purpose,
     });
 
-    const streamUrl = this.getStreamUrl(item.track);
-
+    item.controller = new AbortController();
+    const stillCurrent = () => item.attemptToken === attemptId && item.epoch === this.epoch && !item.controller.signal.aborted;
     try {
+      item.downloadPromise = this.resolveMedia(item.track, { priority: item.purpose === 'current' || item.purpose === 'urgent' ? 'current' : 'preload', signal: item.controller.signal });
+      const descriptor = await item.downloadPromise;
+      if (!stillCurrent()) return;
       const downloadPromise = this.cache.getOrFetch(
         item.trackId,
-        streamUrl,
-        item.options,
+        descriptor,
+        { ...item.options, signal: item.controller.signal, resolveFresh: () => this.resolveMedia(item.track, { force: true, priority: 'preload', signal: item.controller.signal }) },
       );
       item.downloadPromise = downloadPromise;
       if (downloadPromise && typeof downloadPromise.catch === 'function') {
         downloadPromise.catch(() => {});
       }
-      const uri = await downloadPromise;
+      let uri;
+      try { uri = await downloadPromise; } finally { if (downloadPromise?.settled) await downloadPromise.settled; }
       if (
         item.attemptToken !== attemptId ||
         (itemEpoch !== undefined && item.epoch !== itemEpoch)
@@ -1396,4 +1404,5 @@ export class PreloadScheduler {
 }
 
 const defaultPreloadScheduler = new PreloadScheduler();
+if (typeof addSessionListener === 'function') addSessionListener(() => defaultPreloadScheduler.cancelAll());
 export default defaultPreloadScheduler;

@@ -76,6 +76,7 @@ jest.mock('expo-audio', () => ({
 
 jest.mock('../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
+  getAuthSessionGeneration: () => 0,
   authFetch: jest.fn(),
   getAuthHeaders: jest
     .fn()

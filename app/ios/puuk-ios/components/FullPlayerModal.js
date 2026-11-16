@@ -1,3 +1,4 @@
+import { SHARE_LINKS_ENABLED, presentShareEntity } from '../utils/shareLinks';
 import React, {
   useState,
   useEffect,
@@ -1186,7 +1187,9 @@ const FullPlayerModal = ({
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch {}
 
-      if (nativeEvent.event === 'add_to_playlist') {
+      if (nativeEvent.event === 'share' && SHARE_LINKS_ENABLED) {
+        presentShareEntity(activeTrack, 'track');
+      } else if (nativeEvent.event === 'add_to_playlist') {
         if (onAddToPlaylist) onAddToPlaylist(activeTrack);
       } else if (nativeEvent.event === 'edit_track') {
         if (onEditTrack) onEditTrack(activeTrack);
@@ -1197,6 +1200,7 @@ const FullPlayerModal = ({
 
   const menuActions = useMemo(
     () => [
+      ...(SHARE_LINKS_ENABLED ? [{ id: 'share', title: 'Поделиться', image: Platform.select({ ios: 'square.and.arrow.up' }) }] : []),
       {
         id: 'add_to_playlist',
         title: 'Add to Playlist',

@@ -1,7 +1,8 @@
+async function mockResolveMedia(track) { const headers = this._getHeadersAsyncFn ? await this._getHeadersAsyncFn() : {}; return { uri: this._resolveServerUrl() + '/api/stream/' + (track.id ?? track.track_id), headers, delivery: 'direct', usableUntil: Infinity }; }
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import usePlayerController from '../usePlayerController';
-import { PlaybackCoordinator } from '../../utils/playbackCoordinator';
+import { PlaybackCoordinator, PlaybackError } from '../../utils/playbackCoordinator';
 import {
   getAuthHeaders,
   getCachedAuthHeaders,
@@ -41,6 +42,7 @@ jest.mock('expo-audio', () => ({
 }));
 jest.mock('../../shared/api/api', () => ({
   SERVER_URL: 'https://puuk.app',
+  getAuthSessionGeneration: () => 0,
   authFetch: jest.fn(),
   getAuthHeaders: jest.fn(),
   getCachedAuthHeaders: jest.fn(),
@@ -69,6 +71,8 @@ function nativePlayer() {
   const listeners = new Map();
   const p = {
     puukSourceIdentityVersion: 1,
+    puukExpectedIntentVersion: 1,
+    replaceWithExpectedIntent: jest.fn((source, attempt, revision, expected, intent) => p.replaceWithAttempt(source, attempt, revision, expected, intent)),
     attempt: null,
     revision: 0,
     intent: 'pause',
@@ -97,12 +101,12 @@ function nativePlayer() {
       for (const listener of listeners.get(name) || []) listener(event);
       return event;
     },
-    replaceWithAttempt: jest.fn((source, attempt, revision, expected) => {
+    replaceWithAttempt: jest.fn((source, attempt, revision, expected, intent = 'play') => {
       if (
         revision !== null &&
         (expected !== p.attempt ||
           revision !== p.revision ||
-          p.intent !== 'play')
+          p.intent !== intent)
       )
         return false;
       p.attempt = attempt;
@@ -153,9 +157,11 @@ function nativePlayer() {
     play: jest.fn(() => {
       p.intent = 'play';
     }),
-    replace: jest.fn(),
+    replace: jest.fn((source) => { if (!source) p.attempt = null; }),
+    get currentStatus() { return { sourceIdentityVersion: 1, sourceAttemptId: p.attempt, nativeIntent: p.intent, intentRevision: p.revision }; },
     seekTo: jest.fn(),
     setActiveForLockScreen: jest.fn(),
+    setPlaybackRate: jest.fn(),
   };
   return p;
 }
@@ -167,7 +173,7 @@ const track = (id) => ({
   loudness_status: 'analyzed',
 });
 const flush = async () => {
-  for (let i = 0; i < 24; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) await Promise.resolve();
 };
 describe('usePlayerController with accepted real coordinator', () => {
   let controller, renderer, scheduler, cache;
@@ -228,6 +234,7 @@ describe('usePlayerController with accepted real coordinator', () => {
       invalidate: jest.fn().mockResolvedValue(true),
     };
     mockCoordinator = new PlaybackCoordinator({
+      resolveMedia: mockResolveMedia,
       cache,
       scheduler,
       serverUrl: 'https://puuk.app',
@@ -366,6 +373,130 @@ describe('usePlayerController with accepted real coordinator', () => {
     await progress(5);
     expect(recordPlayStart).toHaveBeenCalledTimes(1);
     expect(histories()).toHaveLength(1);
+  });
+
+  test.each(['native-pause', 'logout', 'track'])('terminal Retry fences %s while ticket is pending', async action => {
+    await select();
+    await progress(3);
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); await flush(); });
+    expect(mockPlayer.attempt).toBeNull();
+    let resolveTicket;
+    mockCoordinator.resolveMedia = jest.fn(t => t.id === 'A' ? new Promise(resolve => { resolveTicket = resolve; }) : Promise.resolve({ uri: 'https://puuk.app/api/stream/B', headers: {}, delivery: 'direct', usableUntil: Infinity }));
+    let retry;
+    await act(async () => { retry = controller.retryCurrent(); await flush(); });
+    const installs = mockPlayer.replaceWithAttempt.mock.calls.length;
+    const plays = mockPlayer.playForAttempt.mock.calls.length;
+    await act(async () => {
+      if (action === 'native-pause') mockPlayer.pause();
+      if (action === 'logout') for (const cb of mockAuthListeners) cb(null);
+      if (action === 'track') controller.playTrack(track('B'));
+      await flush();
+    });
+    const installsAfter = mockPlayer.replaceWithAttempt.mock.calls.length;
+    const playsAfter = mockPlayer.playForAttempt.mock.calls.length;
+    await act(async () => { resolveTicket({ uri: 'https://puuk.app/api/stream/A', headers: {}, delivery: 'direct', usableUntil: Infinity }); await retry; await flush(); });
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(playsAfter);
+    if (action !== 'native-pause') expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(installsAfter);
+    else {
+      // Guarded install is rejected by native after its revision changes.
+      expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(installs + 1);
+      expect(mockPlayer.replaceWithAttempt.mock.results.at(-1).value).toBe(false);
+      expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays);
+    }
+  });
+
+  test('native pause before Retry prepares a paused source, then explicit Play resumes it', async () => {
+    await select(); await progress(3);
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); mockPlayer.pause(); await flush(); });
+    const plays = mockPlayer.playForAttempt.mock.calls.length;
+    let retry;
+    await act(async () => { retry = controller.retryCurrent(); await flush(); });
+    await retryReady();
+    await act(async () => { await retry; await flush(); });
+    expect(mockCoordinator._manualRetryToken).toBeNull();
+    expect(controller.currentPlayback.status).toBe('paused');
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays);
+    await act(async () => { controller.togglePlayPause(); await flush(); });
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays + 1);
+  });
+
+  test.each(['play', 'pause', 'interrupted'])('paused terminal Retry fences native %s before source installation', async nativeIntent => {
+    await select(); await progress(3);
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); mockPlayer.pause(); await flush(); });
+    let resolveTicket;
+    mockCoordinator.resolveMedia = jest.fn(() => new Promise(resolve => { resolveTicket = resolve; }));
+    let retry;
+    await act(async () => { retry = controller.retryCurrent(); await flush(); });
+    await act(async () => { mockPlayer.intent = nativeIntent; mockPlayer.revision += 1; mockPlayer.emit({ nativeEvent: 'intent' }); await flush(); });
+    await act(async () => { resolveTicket({ uri: 'https://puuk.app/api/stream/A', headers: {}, delivery: 'direct', usableUntil: Infinity }); await flush(); });
+    expect(mockPlayer.replaceWithAttempt.mock.results.at(-1).value).toBe(false);
+    await retry;
+  });
+
+  test('older binary never emulates atomic paused Retry with unconditional replacement', async () => {
+    await select(); await progress(3);
+    await act(async () => {
+      mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' }));
+      mockPlayer.pause(); await flush();
+    });
+    mockPlayer.puukExpectedIntentVersion = undefined;
+    mockPlayer.replaceWithExpectedIntent = undefined;
+    const installs = mockPlayer.replaceWithAttempt.mock.calls.length;
+    const plays = mockPlayer.playForAttempt.mock.calls.length;
+    await act(async () => { await controller.retryCurrent(); await flush(); });
+    expect(controller.currentPlayback.status).toBe('error');
+    expect(mockCoordinator._manualRetryToken).toBeNull();
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(installs);
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays);
+  });
+
+  test.each([undefined, { sourceIdentityVersion: 1, sourceAttemptId: null, nativeIntent: 'interrupted', intentRevision: 3 }, { sourceIdentityVersion: 1, sourceAttemptId: null, nativeIntent: 'play', intentRevision: -1 }, { sourceIdentityVersion: 1, sourceAttemptId: 'old', nativeIntent: 'play', intentRevision: 3 }])('unverifiable terminal snapshot %j keeps stable error across retries and Play', async snapshot => {
+    await select(); await progress(3);
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); await flush(); });
+    Object.defineProperty(mockPlayer, 'currentStatus', { configurable: true, get: () => snapshot });
+    const notify = jest.spyOn(mockCoordinator, '_notifyState');
+    const installs = mockPlayer.replaceWithAttempt.mock.calls.length;
+    const plays = mockPlayer.playForAttempt.mock.calls.length;
+    await act(async () => { await controller.retryCurrent(); await controller.retryCurrent(); await flush(); });
+    expect(mockCoordinator._manualRetryToken).toBeNull();
+    expect(notify).toHaveBeenCalled();
+    expect(controller.currentPlayback.intent).toBe('pause');
+    expect(controller.currentPlayback.status).toBe('error');
+    await act(async () => { controller.togglePlayPause(); await flush(); });
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(installs);
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays);
+  });
+
+  test.each(['throws', 'missing'])('terminal unload %s is observable and repeated Retry cannot play until unload succeeds', async failure => {
+    await select(); await progress(3);
+    const replace = mockPlayer.replace;
+    if (failure === 'throws') replace.mockImplementation(() => { throw new Error('bridge failure'); });
+    else mockPlayer.replace = undefined;
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); await flush(); });
+    expect(controller.currentPlayback.status).toBe('error');
+    expect(controller.currentPlayback.error.message).toBe('Unable to unload audio');
+    expect(mockPlayer.pause).toHaveBeenCalled();
+    const plays = mockPlayer.playForAttempt.mock.calls.length;
+    await act(async () => { await controller.retryCurrent(); await controller.retryCurrent(); controller.togglePlayPause(); await flush(); });
+    expect(mockCoordinator._manualRetryToken).toBeNull();
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays);
+    mockPlayer.replace = replace;
+    replace.mockImplementation(source => { if (!source) mockPlayer.attempt = null; });
+    let retry;
+    await act(async () => { retry = controller.retryCurrent(); await flush(); });
+    await retryReady();
+    await act(async () => { await retry; await flush(); });
+    expect(controller.currentPlayback.status).toBe('paused');
+    await act(async () => { controller.togglePlayPause(); await flush(); });
+    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(plays + 1);
+  });
+
+  test('terminal error does not schedule automatic retry', async () => {
+    await select();
+    await act(async () => { mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' })); await flush(); });
+    const installs = mockPlayer.replaceWithAttempt.mock.calls.length;
+    await advance(35000);
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(installs);
   });
 
   test.each([
@@ -529,7 +660,8 @@ describe('usePlayerController with accepted real coordinator', () => {
     });
     await advance(35000);
     expect(mockPlayer.replaceWithAttempt).not.toHaveBeenCalled();
-    expect(mockPlayer.replace).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.replace.mock.calls.filter(([source]) => source)).toHaveLength(1);
+    expect(mockPlayer.replace).toHaveBeenCalledWith(null); // initial session revocation unload
     mockStatus.didJustFinish = true;
     await act(async () => {
       controller.setCurrentTrack({ ...controller.currentTrack });
@@ -675,13 +807,17 @@ describe('usePlayerController with accepted real coordinator', () => {
     );
   });
 
-  test('same-turn list selection and native finish read the newly selected queue before React renders', async () => {
+  test('finish before installation is ignored; installed finish advances the selected queue', async () => {
     await act(async () => {
       controller.playTrackList([track('A'), track('B'), track('C')]);
       mockPlayer.intent = 'play';
       mockPlayer.emit({ nativeEvent: 'finish', didJustFinish: true });
       await flush();
     });
+    expect(controller.currentTrack.id).toBe('A');
+    expect(controller.upNextQueue.map((t) => t.id)).toEqual(['B', 'C']);
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    await act(async () => { mockPlayer.emit({ nativeEvent: 'finish', didJustFinish: true }); await flush(); });
     expect(controller.currentTrack.id).toBe('B');
     expect(controller.upNextQueue.map((t) => t.id)).toEqual(['C']);
     expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);

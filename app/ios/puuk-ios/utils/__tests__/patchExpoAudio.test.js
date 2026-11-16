@@ -1268,13 +1268,14 @@ test('every installed source inherits the selected pitch mode before enqueue', (
 });
 
 function withoutPitchInheritance(source) {
-  return source.replace('    // Preserve the selected pitch mode for every track, retry and restored source.\n    item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed\n', '');
+  return source.replace(/  \/\/ Atomic preparation for either intent;[\s\S]*?(?=  func playForAttempt)/, '').replace('    // Preserve the selected pitch mode for every track, retry and restored source.\n    item?.audioTimePitchAlgorithm = shouldCorrectPitch ? pitchCorrectionQuality : .varispeed\n', '');
 }
 
 function previousFavoriteGeneration(ios) {
   const previousScript = path.join(path.dirname(ios), 'previous-favorite.cjs');
   const source = fs.readFileSync(script, 'utf8')
-    .replace('  patchImmediateFavoriteFeedback();', '')
+    .replace('  if (!hasImmediateFeedback) patchImmediateFavoriteFeedback();', '')
+    .replace('  patchExpectedIntentInstallation();', '')
     .replaceAll('.at(-1)', '[8]');
   fs.writeFileSync(previousScript, source);
   success(run(ios, previousScript));
@@ -1298,6 +1299,40 @@ test('upgrades the installed pitch generation to immediate favorite feedback and
   previousFavoriteGeneration(ios);
   success(run(ios));
   expect(contents(ios)).toEqual(expected);
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
+});
+
+
+test('expected-intent installation keeps guard and mutation in one source lock without autoplay', () => {
+  const install = method(expected['AudioPlayer.swift'],
+    '  func replaceWithExpectedIntent(', '  func playForAttempt(');
+  expect(install.indexOf('sourceLock.lock()')).toBeLessThan(install.indexOf('guard !released'));
+  expect(install.indexOf('else { return false }')).toBeLessThan(install.indexOf('sourceAttemptId = attemptId'));
+  expect(install).toContain('expectedIntentRevision >= 0');
+  expect(install).toContain('expectedIntent == "play" || expectedIntent == "pause"');
+  expect(install).toContain('intentRevision == expectedIntentRevision, nativeIntent == expectedIntent');
+  expect(install).toContain('sourceAttemptId == expectedAttemptId');
+  expect(install).toContain('resumeWhenReady: false');
+  expect(install).not.toMatch(/nativeIntent = [^=]/);
+  expect(install).not.toContain('intentRevision +=');
+  expect(expected['AudioModule.swift']).toContain('Property("puukExpectedIntentVersion")');
+  expect(expected['AudioModule.swift']).toContain('Function("replaceWithExpectedIntent")');
+});
+
+
+test('upgrades exact pre-intent patch output and repeats without changing other native files', () => {
+  const { root, ios } = pristine();
+  const previous = path.join(root, 'previous-intent.cjs');
+  fs.writeFileSync(previous, fs.readFileSync(script, 'utf8')
+    .replace('  patchExpectedIntentInstallation();', '')
+    .replaceAll('.at(-1)', '[9]'));
+  success(run(ios, previous));
+  const before = contents(ios);
+  success(run(ios));
+  expect(contents(ios)).toEqual(expected);
+  for (const name of names.filter(name => !['AudioPlayer.swift', 'AudioModule.swift'].includes(name)))
+    expect(contents(ios)[name]).toBe(before[name]);
   success(run(ios));
   expect(contents(ios)).toEqual(expected);
 });

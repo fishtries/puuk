@@ -5,15 +5,29 @@ export const DEFAULT_SERVER_URL =
 export let SERVER_URL = DEFAULT_SERVER_URL;
 
 let authSessionGeneration = 0;
+const sessionListeners = new Set();
+export const addSessionListener = (listener) => {
+  sessionListeners.add(listener);
+  return () => sessionListeners.delete(listener);
+};
+const advanceSession = (reason) => {
+  authSessionGeneration += 1;
+  // Revoke byte access synchronously, before any SecureStore await/auth gate.
+  for (const listener of sessionListeners) {
+    try { listener(reason); } catch { /* one listener cannot defer revocation */ }
+  }
+};
 export const getAuthSessionGeneration = () => authSessionGeneration;
 
 export const setServerUrl = (url) => {
-  if (url && typeof url === 'string') {
-    const trimmed = url.trim().replace(/\/+$/, '');
-    if (trimmed !== SERVER_URL) {
-      SERVER_URL = trimmed;
-      authSessionGeneration += 1;
-    }
+  if (typeof url !== 'string' || !url) return;
+  const trimmed = url.trim().replace(/\/+$/, '');
+  let parsed;
+  try { parsed = new URL(trimmed); } catch { return; }
+  if (!['https:', 'http:'].includes(parsed.protocol) || parsed.origin !== trimmed || parsed.username || parsed.password || /[\\\x00-\x20?#]/.test(trimmed)) return;
+  if (trimmed !== SERVER_URL) {
+    SERVER_URL = trimmed;
+    advanceSession('server');
   }
 };
 const TOKEN_KEY = 'puuk_auth_token';
@@ -53,24 +67,26 @@ export const getCachedUser = () => cachedUser;
 
 export const getAuthToken = async () => {
   if (cachedToken) return cachedToken;
+  const generation = authSessionGeneration;
   try {
     const token = await SecureStore.getItemAsync(
       TOKEN_KEY,
       SECURE_STORE_OPTIONS,
     );
+    if (generation !== authSessionGeneration) return null;
     if (token) {
       cachedToken = token;
       return token;
     }
   } catch (e) {
-    console.warn('[SecureStore read error]', e);
+    console.warn('[SecureStore read error]');
   }
   return null;
 };
 
 export const setAuthToken = async (token) => {
   if (token !== cachedToken) {
-    authSessionGeneration += 1;
+    advanceSession('token');
   }
   cachedToken = token;
   try {
@@ -80,25 +96,28 @@ export const setAuthToken = async (token) => {
       await SecureStore.deleteItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS);
     }
   } catch (e) {
-    console.warn('[SecureStore write error]', e);
+    console.warn('[SecureStore write error]');
   }
 };
 
 export const getSavedUser = async () => {
   if (cachedUser) return cachedUser;
+  const generation = authSessionGeneration;
   try {
     const raw = await SecureStore.getItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
+    if (generation !== authSessionGeneration) return null;
     if (raw) {
       cachedUser = JSON.parse(raw);
       return cachedUser;
     }
   } catch (e) {
-    console.warn('[SecureStore user read error]', e);
+    console.warn('[SecureStore user read error]');
   }
   return null;
 };
 
 export const setSavedUser = async (user) => {
+  if (cachedUser?.id != null && String(cachedUser.id) !== String(user?.id)) advanceSession('account');
   cachedUser = user;
   try {
     if (user) {
@@ -111,13 +130,13 @@ export const setSavedUser = async (user) => {
       await SecureStore.deleteItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
     }
   } catch (e) {
-    console.warn('[SecureStore user write error]', e);
+    console.warn('[SecureStore user write error]');
   }
   notifyAuthChange(user);
 };
 
 export const logout = async () => {
-  authSessionGeneration += 1;
+  advanceSession('logout');
   await setAuthToken(null);
   await setSavedUser(null);
 };
@@ -320,6 +339,17 @@ export const authFetch = async (endpoint, options = {}) => {
   const url = endpoint.startsWith('http')
     ? endpoint
     : `${SERVER_URL}${endpoint}`;
+  const generation = authSessionGeneration;
+  const server = SERVER_URL;
+  const parsed = new URL(url);
+  if (parsed.origin !== new URL(server).origin || parsed.username || parsed.password || /[\\\x00-\x20]/.test(url)) {
+    throw new ApiError('Invalid API destination', { type: 'client' });
+  }
+  const assertSession = () => {
+    if (generation !== authSessionGeneration || server !== SERVER_URL) {
+      throw new ApiError('Session changed', { type: 'abort' });
+    }
+  };
   const method = (options.method || 'GET').toUpperCase();
   const isMutation = ['POST', 'PATCH', 'DELETE', 'PUT'].includes(method);
 
@@ -350,6 +380,7 @@ export const authFetch = async (endpoint, options = {}) => {
   const body = isObjectBody ? JSON.stringify(options.body) : options.body;
 
   const token = await getAuthToken();
+  assertSession();
 
   const headers = {
     Accept: 'application/json',
@@ -380,6 +411,7 @@ export const authFetch = async (endpoint, options = {}) => {
   let lastResponse = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    assertSession();
     if (externalSignal?.aborted) {
       const abortErr =
         externalSignal.reason instanceof Error
@@ -425,6 +457,8 @@ export const authFetch = async (endpoint, options = {}) => {
       response = await fetch(url, {
         ...fetchRest,
         method,
+        redirect: 'error',
+        credentials: 'omit',
         headers,
         body,
         signal: attemptController.signal,
@@ -440,6 +474,7 @@ export const authFetch = async (endpoint, options = {}) => {
       }
     }
 
+    assertSession();
     if (externalSignal?.aborted) {
       const abortErr =
         externalSignal.reason instanceof Error

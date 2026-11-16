@@ -2218,6 +2218,7 @@ const acceptedInputs = {
     '016ee2ea3246f0e53ce7437d902ca994f35f8c918b3867a3110af888d2bcd746',
     '4c18573feeea3d01b5bf39fc064753c8f1244ea181ae0b2d3958780704faeec4',
     '4c18573feeea3d01b5bf39fc064753c8f1244ea181ae0b2d3958780704faeec4',
+    'c94e4ea9b5b177678f51e7735612494cdafd91b80bbcabf651eafb8e63df01e4',
   ],
   'AudioModule.swift': [
     '404d68b7be202ba8145667af50fd5ef0df3df4e802e660e30c6aad0e7acbbd59',
@@ -2230,6 +2231,7 @@ const acceptedInputs = {
     '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
     '86f1bdcd2891f32ba66a9575d49bf8eca85098112fd8583bd81467b5feaf3393',
     '00642d1f7e4c2abfe385d2e0565fb93c39b57d2d8b495587b2930a1ed3bd2400',
+    '837c3c62ba243cec119c1e10b178904703aa304191071ae1c9a55ca79fb9108c',
   ],
   'MediaController.swift': [
     '8e0b972ef7548b174ec5b1daff1dfb69f201095e61567111dc48298182e5d0ab',
@@ -2242,9 +2244,11 @@ const acceptedInputs = {
     'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
     'e1dfb143fa1db26c43b49c25b5ad899fc14afde5660317416e76c2d869bb71b8',
     '478bc0d260098577f1ed5d0f6196a2c9e8ed50964c850e78f1078475301ff167',
+    '478bc0d260098577f1ed5d0f6196a2c9e8ed50964c850e78f1078475301ff167',
   ],
   'AudioComponentRegistry.swift': [
     '45af89001f159d392b991cfd2111050e31ea3c9a23f94600e142f9974732621f',
+    '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
     '8240462a8aa0b1d5db765e6346557de2cf0e984fc3298567cc159ab7f229a5a0',
@@ -2266,8 +2270,39 @@ const acceptedInputs = {
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
     '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
+    '7488c7cc261b9eed2e797f193fd5ed63f4676b74f397503322462a8f45c66d01',
   ],
 };
+
+function patchExpectedIntentInstallation() {
+  const playerFile = path.join(iosDir, 'AudioPlayer.swift');
+  let s = fs.readFileSync(playerFile, 'utf8');
+  s = replaceOnce(s, '  func playForAttempt(_ attemptId: String, expectedIntentRevision: Int?) -> Bool {',
+    `  // Atomic preparation for either intent; never synthesize a Play command.
+  func replaceWithExpectedIntent(source: AudioSource?, attemptId: String, expectedIntentRevision: Int, expectedAttemptId: String?, expectedIntent: String) -> Bool {
+    sourceLock.lock(); defer { sourceLock.unlock() }
+    guard !released, source?.uri != nil, !attemptId.isEmpty,
+      expectedIntentRevision >= 0, expectedIntent == "play" || expectedIntent == "pause",
+      intentRevision == expectedIntentRevision, nativeIntent == expectedIntent,
+      sourceAttemptId == expectedAttemptId else { return false }
+    sourceAttemptId = attemptId
+    replaceCurrentSource(source: source, resumeWhenReady: false)
+    return true
+  }
+
+  func playForAttempt(_ attemptId: String, expectedIntentRevision: Int?) -> Bool {`);
+  fs.writeFileSync(playerFile, s);
+  const moduleFile = path.join(iosDir, 'AudioModule.swift');
+  s = fs.readFileSync(moduleFile, 'utf8');
+  s = replaceOnce(s, '      Property("puukSourceIdentityVersion") { (_: AudioPlayer) in 1 }',
+    `      Property("puukSourceIdentityVersion") { (_: AudioPlayer) in 1 }
+      Property("puukExpectedIntentVersion") { (_: AudioPlayer) in 1 }
+
+      Function("replaceWithExpectedIntent") { (player: AudioPlayer, source: AudioSource?, attemptId: String, expectedIntentRevision: Int, expectedAttemptId: String?, expectedIntent: String) -> Bool in
+        player.replaceWithExpectedIntent(source: source, attemptId: attemptId, expectedIntentRevision: expectedIntentRevision, expectedAttemptId: expectedAttemptId, expectedIntent: expectedIntent)
+      }`);
+  fs.writeFileSync(moduleFile, s);
+}
 
 function run() {
   const before = new Map();
@@ -2311,11 +2346,11 @@ function run() {
     throw new Error('Unsupported mixed SDK source generations');
   const hasFavoriteCommand = [...before].every(
     ([file, content]) =>
-      [7, 8].some((index) => digest(content) === acceptedInputs[path.basename(file)][index]),
+      acceptedInputs[path.basename(file)].slice(7).includes(digest(content)),
   );
   const hasPitchMode = [...before].every(
     ([file, content]) =>
-      digest(content) === acceptedInputs[path.basename(file)][8],
+      acceptedInputs[path.basename(file)].slice(8).includes(digest(content)),
   );
   if (!hasFavoriteCommand) {
     const isRemotePauseCorrected = [...before].every(
@@ -2361,7 +2396,10 @@ function run() {
     patchFavoriteCommand();
   }
   if (!hasPitchMode) patchPlaybackPitchMode();
-  patchImmediateFavoriteFeedback();
+  const hasImmediateFeedback = [...before].every(([file, content]) =>
+    acceptedInputs[path.basename(file)].slice(9).includes(digest(content)));
+  if (!hasImmediateFeedback) patchImmediateFavoriteFeedback();
+  patchExpectedIntentInstallation();
   // Verify complete outputs too: a missing legacy transform must not produce partial success.
   for (const name of Object.keys(acceptedInputs)) {
     const file = path.join(iosDir, name);

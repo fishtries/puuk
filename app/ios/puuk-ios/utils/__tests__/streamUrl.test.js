@@ -15,10 +15,10 @@ describe('normalizeStreamUrl', () => {
     );
   });
 
-  test('preserves absolute stream URL', () => {
+  test('ignores catalog external stream URL', () => {
     const track = { id: 42, stream_url: 'https://other.server.com/audio.mp3' };
     expect(normalizeStreamUrl(track, defaultServer)).toBe(
-      'https://other.server.com/audio.mp3',
+      'https://web.puuk.fun/api/stream/42',
     );
   });
 

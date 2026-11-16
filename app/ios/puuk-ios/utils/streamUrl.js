@@ -24,26 +24,6 @@ export function normalizeStreamUrl(track, serverUrl = SERVER_URL) {
     .replace(/['"]/g, '')
     .replace(/\/+$/, '');
 
-  const rawStream =
-    typeof track.stream_url === 'string'
-      ? track.stream_url.trim().replace(/['"]/g, '')
-      : '';
-
-  let normalized;
-  const streamPathIndex = rawStream.indexOf('/api/stream/');
-  if (streamPathIndex !== -1) {
-    const pathPart = rawStream.slice(streamPathIndex).replace(/\/+/g, '/');
-    normalized = `${cleanServerUrl}${pathPart}`;
-  } else if (
-    rawStream.startsWith('http://') ||
-    rawStream.startsWith('https://')
-  ) {
-    normalized = rawStream;
-  } else if (rawStream.startsWith('/')) {
-    normalized = `${cleanServerUrl}${rawStream.replace(/\/+/g, '/')}`;
-  } else {
-    normalized = `${cleanServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
-  }
-
-  return normalized;
+  // Catalog metadata is never an authority for a capability or remote origin.
+  return `${cleanServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
 }

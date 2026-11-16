@@ -1,3 +1,9 @@
+import { normalizeStreamUrl } from '../utils/streamUrl';
+import { AppState } from 'react-native';
+import defaultAudioCache from '../utils/audioCache';
+import defaultPreloadScheduler from '../utils/preloadScheduler';
+import { mediaDelivery } from '../shared/api/media';
+import { getCurrentNetworkPolicy, subscribeNetworkPolicy } from '../utils/networkPolicy';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   useAudioPlayer,
@@ -6,6 +12,7 @@ import {
 import { usePlaybackState, getPlaybackSnapshot } from './playbackStatus';
 import {
   authFetch,
+  addSessionListener,
   SERVER_URL,
   getAuthHeaders,
   getCachedAuthHeaders,
@@ -56,6 +63,7 @@ export function normalizeTrackDto(source) {
     loudness_lufs: null,
     true_peak_db: null,
     ...normalized,
+    stream_url: normalizeStreamUrl(normalized),
     artist: source?.artist || 'My Wave',
     is_liked: !!source?.is_liked,
   };
@@ -406,6 +414,31 @@ export default function usePlayerController({ setTracks }) {
     updateInterval: 100,
     keepAudioSessionActive: true,
   });
+
+  useEffect(() => {
+    const unsubscribe = typeof addSessionListener === 'function' ? addSessionListener(() => {
+      // Synchronous native revocation precedes SecureStore writes/auth rendering.
+      defaultPlaybackCoordinator.cancelCurrent('logout', player);
+      defaultAudioCache.revoke();
+      currentRequestIdRef.current = null;
+      playbackRequestRef.current += 1;
+      authEpochRef.current += 1;
+      queueEpochRef.current += 1;
+      intentRef.current = 'pause';
+      setCurrentTrack(null);
+      setUpNextQueue([]);
+      setHistory([]);
+      setLoadedPlayback(null);
+      setIsLoading(false);
+    }) : () => {};
+    const appState = AppState.addEventListener('change', state => {
+      if (state === 'active') defaultPlaybackCoordinator.foreground();
+      else { defaultAudioCache.setForeground(false); defaultPreloadScheduler.cancelAll(); mediaDelivery.invalidate(); }
+    });
+    defaultAudioCache.setOnline(getCurrentNetworkPolicy()?.isConnected !== false);
+    const network = subscribeNetworkPolicy(policy => defaultAudioCache.setOnline(policy?.isConnected !== false));
+    return () => { unsubscribe(); appState.remove(); network?.(); };
+  }, [player, setCurrentTrack, setUpNextQueue]);
   const status = usePlaybackState(player);
   const [playbackRate, setPlaybackRate] = useState(1);
 

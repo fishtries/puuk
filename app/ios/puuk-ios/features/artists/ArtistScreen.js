@@ -1,3 +1,4 @@
+import { SHARE_LINKS_ENABLED, presentShareEntity } from '../../utils/shareLinks';
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
@@ -207,6 +208,11 @@ export default function ArtistScreen({
       >
         {artist?.name || ''}
       </Text>
+      {SHARE_LINKS_ENABLED && artist && !isLoading && !errorMessage && (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Поделиться исполнителем" onPress={() => presentShareEntity(artist, 'artist')} style={{ padding: 12 }}>
+          <Ionicons name="share-outline" size={22} color="#fff" />
+        </TouchableOpacity>
+      )}
       {isAdmin ? (
         <TouchableOpacity
           testID="artist-admin-edit-button"

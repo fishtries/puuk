@@ -1,3 +1,4 @@
+import { SHARE_LINKS_ENABLED, presentShareEntity } from '../../utils/shareLinks';
 import React from 'react';
 import {
   Modal,
@@ -41,6 +42,7 @@ export default function TrackContextMenuModal({
               </View>
 
               {[
+                ...(SHARE_LINKS_ENABLED ? [{ title: 'Поделиться', icon: 'share-outline', action: track => presentShareEntity(track, 'track') }] : []),
                 {
                   title: 'Играть следующим',
                   icon: 'play-skip-forward-outline',
