@@ -106,7 +106,7 @@ test.each(['identity', 'revision'])(
   },
 );
 
-test('native menu uses a participant folder before the album even for one artist', () => {
+test('native menu opens a single artist directly and keeps the album action', () => {
   Constants.appOwnership = 'standalone';
   const select = jest.fn();
   const selectAlbum = jest.fn();
@@ -130,9 +130,9 @@ test('native menu uses a participant folder before the album even for one artist
   expect(menu.props.shouldOpenOnLongPress).toBe(false);
   expect(menu.props.actions).toEqual([
     expect.objectContaining({
-      id: 'artists',
+      id: 'artist:a',
+      title: 'Перейти к исполнителю',
       image: 'mic',
-      subactions: [{ id: 'artist:a', title: 'Artist A', image: 'mic' }],
     }),
     expect.objectContaining({
       id: 'album',
@@ -140,6 +140,7 @@ test('native menu uses a participant folder before the album even for one artist
       image: 'square.stack',
     }),
   ]);
+  expect(menu.props.actions[0].subactions).toBeUndefined();
   expect(
     tree.root.findByProps({ testID: 'artist-button' }).props.onPress,
   ).toBeUndefined();
@@ -149,7 +150,7 @@ test('native menu uses a participant folder before the album even for one artist
   expect(selectAlbum).toHaveBeenCalledWith('album-1');
 });
 
-test('a wave track without an album uses the same native participant folder', () => {
+test('a track without an album opens a single artist directly', () => {
   Constants.appOwnership = 'standalone';
   const select = jest.fn();
   let tree;
@@ -160,10 +161,11 @@ test('a wave track without an album uses the same native participant folder', ()
   expect(menu.props.shouldOpenOnLongPress).toBe(false);
   expect(menu.props.actions).toEqual([
     expect.objectContaining({
-      id: 'artists',
-      subactions: [{ id: 'artist:a', title: 'Artist A', image: 'mic' }],
+      id: 'artist:a',
+      title: 'Перейти к исполнителю',
     }),
   ]);
+  expect(menu.props.actions[0].subactions).toBeUndefined();
   act(() => menu.props.onPressAction({ nativeEvent: { event: 'artist:a' } }));
   expect(select).toHaveBeenCalledWith('a');
 });

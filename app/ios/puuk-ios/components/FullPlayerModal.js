@@ -14,6 +14,7 @@ import {
   Dimensions,
   StyleSheet,
   Platform,
+  Alert,
 } from 'react-native';
 import { initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -79,6 +80,9 @@ const FullPlayerModal = ({
   onAddToPlaylist,
   onEditTrack,
   onToggleLike,
+  onToggleDislike,
+  trackIsDisliked = false,
+  dislikePending = false,
   isLiked,
   expandProgress: externalExpandProgress,
   bottomBarHeight,
@@ -1189,18 +1193,30 @@ const FullPlayerModal = ({
 
       if (nativeEvent.event === 'share' && SHARE_LINKS_ENABLED) {
         presentShareEntity(activeTrack, 'track');
+      } else if (nativeEvent.event === 'dislike') {
+        if (!dislikePending && onToggleDislike) {
+          Promise.resolve(onToggleDislike(activeTrack)).catch(() => {
+            Alert.alert('Couldn’t save changes', 'Check your connection and try again.');
+          });
+        }
       } else if (nativeEvent.event === 'add_to_playlist') {
         if (onAddToPlaylist) onAddToPlaylist(activeTrack);
       } else if (nativeEvent.event === 'edit_track') {
         if (onEditTrack) onEditTrack(activeTrack);
       }
     },
-    [activeTrack, onAddToPlaylist, onEditTrack],
+    [activeTrack, onAddToPlaylist, onEditTrack, onToggleDislike, dislikePending],
   );
 
   const menuActions = useMemo(
     () => [
       ...(SHARE_LINKS_ENABLED ? [{ id: 'share', title: 'Поделиться', image: Platform.select({ ios: 'square.and.arrow.up' }) }] : []),
+      ...(onToggleDislike ? [{
+        id: 'dislike',
+        title: trackIsDisliked ? 'Remove Dislike' : 'Dislike',
+        image: Platform.select({ ios: trackIsDisliked ? 'hand.thumbsdown.fill' : 'hand.thumbsdown' }),
+        attributes: { disabled: dislikePending || getTrackId(currentTrack) === null },
+      }] : []),
       {
         id: 'add_to_playlist',
         title: 'Add to Playlist',
@@ -1219,7 +1235,7 @@ const FullPlayerModal = ({
           ]
         : []),
     ],
-    [onEditTrack],
+    [onEditTrack, onToggleDislike, trackIsDisliked, dislikePending, currentTrack],
   );
 
   return (

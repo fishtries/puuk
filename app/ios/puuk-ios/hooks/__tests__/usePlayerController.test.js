@@ -231,6 +231,32 @@ describe('usePlayerController', () => {
     );
   };
 
+  test('dislike clears a like without advancing a manual queue and can be removed', async () => {
+    await act(async () => controller.playTrackList([
+      { id: 1, is_liked: true }, { id: 2 },
+    ]));
+    await act(async () => controller.handleToggleDislike(controller.currentTrack));
+    expect(controller.currentTrack.id).toBe(1);
+    expect(controller.currentTrack.is_liked).toBe(false);
+    expect(controller.dislikeIds.has('1')).toBe(true);
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/1/dislike', { method: 'POST' });
+    await act(async () => controller.handleToggleDislike(controller.currentTrack));
+    expect(controller.dislikeIds.has('1')).toBe(false);
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/1/dislike', { method: 'DELETE' });
+  });
+
+  test('failed dislike preserves the like and queue', async () => {
+    await act(async () => controller.playTrackList([{ id: 1, is_liked: true }, { id: 2 }]));
+    authFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+    await act(async () => {
+      await expect(controller.handleToggleDislike(controller.currentTrack)).rejects.toThrow('503');
+    });
+    expect(controller.currentTrack.is_liked).toBe(true);
+    expect(controller.dislikeIds.has('1')).toBe(false);
+    expect(controller.dislikePending).toBe(false);
+    expect(queueIds()).toEqual([2]);
+  });
+
   test('advancing the queue resets an uncommitted speed preview', async () => {
     await startQueue();
     await act(async () => controller.changePlaybackRate(0.855, { commit: false }));
@@ -974,6 +1000,29 @@ describe('usePlayerController', () => {
     // upNextQueue should receive the wave recommendations
     expect(controller.upNextQueue.length).toBe(2);
     expect(controller.upNextQueue[0].id).toBe(1001);
+  });
+
+  test('dislike advances the wave and does not affect a track selected during the request', async () => {
+    authFetch.mockImplementation(async (url) => ({
+      ok: true,
+      json: async () => url.includes('/wave/next') ? { id: 999 } :
+        url.includes('/wave/queue') ? [{ id: 1001 }, { id: 1002 }] : [],
+    }));
+    await act(async () => controller.startWave());
+    await act(async () => controller.handleToggleDislike(controller.currentTrack));
+    expect(controller.currentTrack.id).toBe(1001);
+    expect(controller.dislikeIds.has('999')).toBe(true);
+    let resolve;
+    const response = new Promise((done) => { resolve = done; });
+    authFetch.mockImplementationOnce(() => response);
+    let pending;
+    await act(async () => { pending = controller.handleToggleDislike(controller.currentTrack); });
+    expect(controller.dislikePending).toBe(true);
+    await act(async () => controller.playTrackList([{ id: 7, is_liked: true }, { id: 8 }]));
+    await act(async () => { resolve({ ok: true }); await pending; });
+    expect(controller.currentTrack.id).toBe(7);
+    expect(controller.currentTrack.is_liked).toBe(true);
+    expect(queueIds()).toEqual([8]);
   });
 
   test('late initial wave response cannot replace a collection', async () => {

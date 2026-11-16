@@ -21,6 +21,15 @@
 | Управление аудио | `hooks/usePlayerController.js` |
 | Фоновая синхронизация и индикатор в шапке | `shared/sync/syncState.js`, `shared/components/SyncHeaderIndicator.js`, `shared/components/SyncStatusModal.js`, `shared/components/AppHeader.js` |
 
+## Дизлайк в полном плеере
+
+В меню `⋯` полного плеера и режима очереди доступно «Dislike»
+(`hand.thumbsdown`); для отмеченного трека — «Remove Dislike».
+Дизлайк снимает лайк и исключает трек из рекомендаций. В «Моей волне»
+после сохранения включается следующий трек; в ручной очереди воспроизведение
+продолжается. На время запроса пункт недоступен; ошибка показывается сообщением,
+состояние сохраняется. Отмена дизлайка не восстанавливает прежний лайк.
+
 ## Компоненты и стили
 
 Используются React Native, Expo, Reanimated и Gesture Handler. Версии проверять в `package.json`. CSS Modules, DOM, вебовый AudioEngine и Framer Motion к этому клиенту не относятся.

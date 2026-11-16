@@ -75,10 +75,10 @@ export default function ArtistSelector({
     }));
     const actions = [
       {
-        id: 'artists',
+        id: artists.length === 1 ? artistActions[0].id : 'artists',
         title: 'Перейти к исполнителю',
         image: 'mic',
-        subactions: artistActions,
+        ...(artists.length > 1 ? { subactions: artistActions } : {}),
       },
       ...(entity?.album_id && onAlbumSelect
         ? [

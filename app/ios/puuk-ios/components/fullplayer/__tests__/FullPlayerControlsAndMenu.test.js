@@ -1,3 +1,9 @@
+let mockShareEnabled = false;
+const mockPresentShare = jest.fn();
+jest.mock('../../../utils/shareLinks', () => ({
+  get SHARE_LINKS_ENABLED() { return mockShareEnabled; },
+  presentShareEntity: (...args) => mockPresentShare(...args),
+}));
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import FullPlayerModal from '../../FullPlayerModal';
@@ -425,7 +431,7 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
 
       const root = renderer.root;
       const artistMenu = root.findAllByType(MenuView).find(
-        (menu) => menu.props.actions.some((action) => action.id === 'artists'),
+        (menu) => menu.props.actions.some((action) => action.id === 'artist:art_radiohead_123'),
       );
 
       act(() => {
@@ -519,5 +525,23 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
       expect(text.props.numberOfLines).toBe(1);
       expect(text.props.ellipsizeMode).toBe('tail');
     });
+  });
+});
+
+describe('S4 outgoing Share menu integration', () => {
+  afterEach(() => { mockShareEnabled = false; mockPresentShare.mockReset(); });
+  test.each([false, true])('share build capability=%s preserves Dislike and its callback', async enabled => {
+    mockShareEnabled = enabled;
+    const track = { id: '11111111-1111-4111-8111-111111111111', title: 'Fixture', artist: 'Fixture' };
+    const dislike = jest.fn();
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<FullPlayerModal isPlayerVisible currentTrack={track} onToggleDislike={dislike} />); });
+    const menu = renderer.root.findByProps({ testID: 'native-menu-view' });
+    expect(menu.props.actions.some(a => a.id === 'share')).toBe(enabled);
+    expect(menu.props.actions.some(a => a.id === 'dislike')).toBe(true);
+    await act(async () => { menu.props.onPressAction({ nativeEvent: { event: 'dislike' } }); });
+    expect(dislike).toHaveBeenCalledWith(track);
+    if (enabled) { await act(async () => { menu.props.onPressAction({ nativeEvent: { event: 'share' } }); }); expect(mockPresentShare).toHaveBeenCalledWith(track, 'track'); }
+    await act(async () => renderer.unmount());
   });
 });

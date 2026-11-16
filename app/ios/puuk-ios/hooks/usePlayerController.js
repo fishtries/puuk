@@ -134,6 +134,11 @@ export default function usePlayerController({ setTracks }) {
     currentTrackRef.current = next;
     commitCurrentTrack(next);
   }, []);
+  const [dislikeIds, setDislikeIds] = useState(new Set());
+  const dislikeIdsRef = useRef(new Set());
+  const dislikeRevisionRef = useRef(0);
+  const pendingDislikesRef = useRef(new Set());
+  const [dislikePending, setDislikePending] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isPlayerVisible, setIsPlayerVisible] = useState(false);
   const [playerExpandToken, setPlayerExpandToken] = useState(0);
@@ -576,6 +581,19 @@ export default function usePlayerController({ setTracks }) {
       currentUserIdRef.current = newUserId;
       authReadyRef.current = true;
       authEpochRef.current += 1;
+      dislikeIdsRef.current = new Set();
+      setDislikeIds(new Set());
+      const dislikeEpoch = authEpochRef.current;
+      const dislikeRevision = dislikeRevisionRef.current;
+      if (user) {
+        authFetch('/api/dislikes').then(async (response) => {
+          if (!response.ok) return;
+          const ids = await response.json();
+          if (!isMounted || dislikeEpoch !== authEpochRef.current || dislikeRevision !== dislikeRevisionRef.current || !Array.isArray(ids)) return;
+          dislikeIdsRef.current = new Set(ids.map(String));
+          setDislikeIds(new Set(dislikeIdsRef.current));
+        }).catch(() => {});
+      }
       recentHistoryRef.current.clear();
       confirmedStartRef.current.clear();
       pendingBackgroundEventsRef.current = [];
@@ -1218,7 +1236,7 @@ export default function usePlayerController({ setTracks }) {
           (Array.isArray(data) ? data : [])
             .map(normalizeTrackDto)
             .filter(
-              (track) => track && !excluded.has(String(getTrackId(track))),
+              (track) => track && !excluded.has(String(getTrackId(track))) && !dislikeIdsRef.current.has(String(getTrackId(track))),
             ),
         );
         setUpNextQueue((prev) => mergeUniqueQueue(prev, normalizedQueue));
@@ -1686,7 +1704,7 @@ export default function usePlayerController({ setTracks }) {
       const trackId = getTrackId(track);
       if (trackId === null) return;
       const key = String(trackId);
-      if (pendingLikesRef.current.has(key)) return;
+      if (pendingLikesRef.current.has(key) || pendingDislikesRef.current.has(key)) return;
       pendingLikesRef.current.add(key);
       const epoch = authEpochRef.current;
       const active = currentTrackRef.current;
@@ -1748,6 +1766,42 @@ export default function usePlayerController({ setTracks }) {
       setHistory,
     ],
   );
+
+  const handleToggleDislike = useCallback(async (track) => {
+    const id = getTrackId(track);
+    if (id === null || !mountedRef.current) return;
+    const key = String(id);
+    if (pendingDislikesRef.current.has(key) || pendingLikesRef.current.has(key)) return;
+    dislikeRevisionRef.current += 1;
+    pendingDislikesRef.current.add(key);
+    setDislikePending(true);
+    const epoch = authEpochRef.current;
+    const removing = dislikeIdsRef.current.has(key);
+    try {
+      const response = await authFetch(`/api/tracks/${encodeURIComponent(key)}/dislike`, {
+        method: removing ? 'DELETE' : 'POST',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!mountedRef.current || epoch !== authEpochRef.current) return;
+      if (removing) dislikeIdsRef.current.delete(key);
+      else dislikeIdsRef.current.add(key);
+      setDislikeIds(new Set(dislikeIdsRef.current));
+      if (!removing) {
+        const patch = (item) => areTrackIdsEqual(item, id) ? { ...item, is_liked: false } : item;
+        setCurrentTrack((prev) => prev ? patch(prev) : prev);
+        setTracks((prev) => prev.map(patch));
+        setHistory((prev) => prev.map(patch));
+        setUpNextQueue((prev) => prev.map(patch));
+        if (isWaveSessionRef.current) {
+          setUpNextQueue((prev) => prev.filter((item) => !areTrackIdsEqual(item, id)));
+          if (areTrackIdsEqual(currentTrackRef.current, id)) await fetchNextTrack();
+        }
+      }
+    } finally {
+      pendingDislikesRef.current.delete(key);
+      if (mountedRef.current) setDislikePending(pendingDislikesRef.current.size > 0);
+    }
+  }, [setCurrentTrack, setTracks, setHistory, setUpNextQueue, fetchNextTrack]);
 
   // The selection token belongs to the track shown when the remote command fired.
   // Never apply a delayed command to a newer selection.
@@ -1941,6 +1995,9 @@ export default function usePlayerController({ setTracks }) {
     playTrack,
     playTrackList,
     handleToggleLike,
+    handleToggleDislike,
+    dislikeIds,
+    dislikePending,
     startWave,
     dismissPlayer,
     soundCheck,

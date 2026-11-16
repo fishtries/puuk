@@ -133,6 +133,9 @@ function AppContent() {
     playTrack,
     playTrackList,
     handleToggleLike,
+    handleToggleDislike,
+    dislikeIds,
+    dislikePending,
     startWave,
     dismissPlayer,
     seekTo,
@@ -829,6 +832,9 @@ function AppContent() {
         playTrack={playTrack}
         onAddToPlaylist={handleAddToPlaylist}
         onEditTrack={handleEditTrack}
+        onToggleDislike={handleToggleDislike}
+        trackIsDisliked={dislikeIds.has(String(getTrackId(activeTrack)))}
+        dislikePending={dislikePending}
         onToggleLike={handleToggleActiveLike}
         isLiked={!!activeTrack?.is_liked}
         expandProgress={expandProgress}

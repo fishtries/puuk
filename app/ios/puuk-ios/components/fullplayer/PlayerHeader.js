@@ -67,11 +67,12 @@ export default function PlayerHeader({
         {
           options: ['Cancel', ...actionTitles],
           cancelButtonIndex: 0,
+          disabledButtonIndices: (menuActions || []).flatMap((action, index) => action.attributes?.disabled ? [index + 1] : []),
         },
         (buttonIndex) => {
           if (buttonIndex === 0) return;
           const selected = menuActions?.[buttonIndex - 1];
-          if (selected && handleMenuAction) {
+          if (selected && !selected.attributes?.disabled && handleMenuAction) {
             handleMenuAction({ nativeEvent: { event: selected.id } });
           }
         },
@@ -85,6 +86,7 @@ export default function PlayerHeader({
           ...(menuActions || []).map((action) => ({
             text: action.title,
             onPress: () => {
+              if (action.attributes?.disabled) return;
               if (handleMenuAction) {
                 handleMenuAction({ nativeEvent: { event: action.id } });
               }
