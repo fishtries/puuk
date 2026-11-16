@@ -1,0 +1,107 @@
+{
+  "captured_utc": "2026-11-16T00:55:35.639938+00:00",
+  "head": "89ebc1c30b36837e584fbe72d51cdb0aed6303be",
+  "files": [
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/App.js",
+      "sha256": "7fa5bc6e9a8a95337b756c64e508ce99b356827c8341d7e978a260dc249963c7"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/components/FullPlayerModal.js",
+      "sha256": "837d7a5e0b849b14fffc73fd8b8daea5050d8cee6ecea44f7b664d8a9aaf24f8"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/components/fullplayer/PlayerHeader.js",
+      "sha256": "faec02a18239e4540ced0ec4cb69c96156cadbb4409caa6a7e217e485f728966"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/components/fullplayer/__tests__/FullPlayerControlsAndMenu.test.js",
+      "sha256": "815e16da1c1b64407ca2ebe6f99144814d1321a394eac02d74a11fd82bc97778"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/hooks/__tests__/usePlayerController.test.js",
+      "sha256": "2f3ce0edda09d505257558e077b824737b3b4ae8c9a9d67d3acc6713b0fb775c"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/hooks/usePlayerController.js",
+      "sha256": "34d76d207574468334e80b3be7590f174bcf062fae2d9177655feb218612082a"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/shared/components/ArtistSelector.js",
+      "sha256": "7d11677a1e37ddcaf6fb45993cc2be2ed44090fadacd84bc5f127d57730dbd5b"
+    },
+    {
+      "status": " M",
+      "path": "app/ios/puuk-ios/shared/components/__tests__/ArtistSelector.test.js",
+      "sha256": "fcd90ed53aa98d934f8a9ca8e858a041d75a49354ba14688807f0ca638a34588"
+    },
+    {
+      "status": " M",
+      "path": "brain/routers/wave_recommendations.py",
+      "sha256": "ff5e1ace738365bbdacbed5d3c9baf2afae1e9d6e4ffb04618e00c9c1e972e54"
+    },
+    {
+      "status": " M",
+      "path": "brain/services/recommendation_service.py",
+      "sha256": "497c93fd7a58d82a2bde1548e5fbca7bf20b9053e14d2248b2feb057f5a8eb75"
+    },
+    {
+      "status": " M",
+      "path": "brain/test_multi_artist_integration.py",
+      "sha256": "104c8232bf71a9506ebf65c17730020b2c8595977e289654d78c76e909dd778d"
+    },
+    {
+      "status": " M",
+      "path": "docs/AGENT_ORCHESTRATION.md",
+      "sha256": "a560c12adc71b54a8d85de2fc8b632d52c4da1f94f3b779bd3eee08c1f9b74cc"
+    },
+    {
+      "status": " M",
+      "path": "docs/design/DESIGN.md",
+      "sha256": "de11b69822d285ab7d34813af42cf76bd6aa76cc0ec3a9d6f8d0e41e92d36930"
+    },
+    {
+      "status": " M",
+      "path": "docs/design/ios.md",
+      "sha256": "8addbe296f8649c841648cdcf9b6ad2faac7307078278ea72b9641b6f3f29fb7"
+    },
+    {
+      "status": " M",
+      "path": "tg_music_bot/bot.py",
+      "sha256": "b3a8810edcb491608e35e32227c698d031b09082db787446a0c9c4cdafb8d82f"
+    },
+    {
+      "status": " M",
+      "path": "tg_music_bot/downloader.py",
+      "sha256": "05a96ac21817fe00f946c15209da8e06df71199a0caf04121b23cb1b7133d3c5"
+    },
+    {
+      "status": " M",
+      "path": "tg_music_bot/source_worker.py",
+      "sha256": "90a0fb270dc37e87bf132a08ade22f3ae5d77a33d383b5423c81277709be8737"
+    },
+    {
+      "status": " M",
+      "path": "tg_music_bot/test_source_selection.py",
+      "sha256": "537736a592b5f5d054c4f37bd3795eef7e6c18b7b1659894949d0b933bf1f923"
+    },
+    {
+      "status": "??",
+      "path": "docs/CDN_AND_SHARE_LINKS_ORCHESTRATION_PLAN.md",
+      "sha256": "b8567b863539b10ca5c6b1b48fa15beccb88ac2483679167c5e333ddf67690e6"
+    },
+    {
+      "status": "??",
+      "path": "docs/TASTE_SERVER_TEST_REPORT.md",
+      "sha256": "b94376eb4fd90c8d63b963cbe7a6d45cc89b01af89834bfa11d5e33968e24c96"
+    }
+  ],
+  "policy": "Preserve all baseline changes. No broad commit, reset, stash or deploy. Shared current checkout; disjoint write sets."
+}

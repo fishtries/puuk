@@ -40,3 +40,75 @@ Operator installed frozen backend package successfully; protected backup /var/ba
 Provider correction was saved and independently re-read from its edit form. A fingerprint-only server helper and in-memory comparison confirmed saved provider origin secret matches root-only server environment exactly. No re-save occurred during this verification. Root helper output contains only SHA-256 fingerprint, not key. Native bridge remains unable to enumerate apps; existing user SSH terminal supports sudo -n and was used for safe probes. No password was obtained and no browser session/cookie extraction occurred.
 
 Read-only backend metrics observed 1734 tracks, 1037 ready versions and 695 pending, zero exposures and zero purge jobs. Prepared probe_audio.py reads only one existing ready file <=1 MiB, checks its current hash, full/HEAD/Range bytes and headers; it does not change tracks/accounts/exposure or enable cache. Must run only after provider-header boundary checks succeed. These operations are not final G3/G4 acceptance.
+
+## Mixed-node propagation and bounded audio evidence
+
+After the request-header correction, operator probes recorded normal CDN signed missing-object 404 and edge no-store/CORS, but earlier probes mixed updated/unupdated nodes. A pinned connection to yccdn-m9-18 still returned pre-update 403 behavior while yccdn-m9-12 served the chosen bounded file (674903 bytes) correctly. On m9-12 full GET and HEAD passed exact bytes/hash/ETag/MIME/CORS/no-store checks; start/middle/end/suffix each returned exact 100-byte 206 bodies and matching Content-Range, but failed because Accept-Ranges was absent on 206. Therefore audio acceptance remained FAIL rather than silently relaxing the header requirement. Coordinator saved explicit Accept-Ranges bytes plus browser exposed header list including cache-host in static responses; another propagation cycle is required. Cache and client issuance remain off. Initial client-header substitution/duplication results are not accepted as a conclusive provider failure until repeated on an updated pinned connection.
+
+
+## Autonomous continuation — admin pilot selected, 2026-11-16
+
+The user selected login admin; read-only lookup confirmed immutable user ID 1.
+The pilot set is prepared for that ID only, while CDN issuance remains disabled.
+On a pinned updated node yccdn-m9-16 all nine origin/edge checks passed: missing,
+wrong and duplicate direct secrets deny 403/no-store; correct secret reaches404;
+CDN unsigned denies403, valid/client-wrong/client-duplicate reaches404, extraquery400.
+This establishes provider request-header overwrite on that node. Earlier mixed-node
+results were propagation artifacts and are not treated as proof of a bypass.
+
+Read-only audio on yccdn-m9-03 matched the existing674903-byte object: fullGET,
+HEAD and four ranges returned correct status, bytes, ETag, Content-Length, MIME,
+Content-Range, fixed web CORS and browser no-store. The exact-header gate remains
+open: adding static Accept-Ranges restored it on206 but duplicated it on200/HEAD.
+A scoped options.headerFilter update now whitelists required origin response
+headers, while static Accept-Ranges, Cache-Control and Expose-Headers supply a
+single final value. API operation bc8vndgry2rdsz3zzx4t completed; edge propagation
+and full audio recheck are still required. No cache enabled by this update.
+
+Dedicated service-account IAM auth was implemented, tested198/198 and installed
+with protected rollback backup iam-20261116T113244963322Z; details and boundaries
+are in PURGE_SERVICE_ACCOUNT_ADDENDUM.md. Exact four deployed source hashes were
+checked. Origin ON, delivery/purge OFF; no bot restart. Commit9662779 pushed.
+
+
+## Cold protocol proof and closed cache experiment — coordinator
+
+The selected admin is ID1. Dedicated service account auth succeeded for one
+nonexistent-prefix purge and an authenticated operation GET. Purge consumer was
+enabled with fresh heartbeat; mode backup mode-20261116T114128361213Z. Direct
+public API smoke under a60-second in-memory admin session passed; unsigned ticket
+401, default/direct/CDN-request all selected direct, exact range and version-bound
+full transfer matched. There were zero exposures/outbox jobs before fixture setup.
+
+API inventory confirmed one dedicated origin and consumer, no resource rules or
+secondary hostnames. Explicit SNI was enabled and slicing disabled. A HEAD+Range
+probe exposed provider forced-range206; disableProxyForceRanges restored200/full
+length. Static preflight methods/allowed headers/Max-Age300 were added. The earlier
+exact-single-field Accept-Ranges assertion was corrected according to RFC9110
+list semantics; exploratory header filtering was reverted, preserving origin
+headers and the required static response metadata.
+
+Cold origin full matrix passed. Cold CDN full matrix then passed on yccdn-m9-03
+against81127 generated silent bytes: full/HEAD, start/middle/end/suffix/open range,
+HEAD ignoring Range, matching/mismatching If-Range,304,400,416, exact multipart
+parts and allowed/denied preflight. The earlier Max-Age-on-HEAD selection heuristic
+was replaced by an actual OPTIONS check on the same connection. Full logs are
+retained in the coordinator's scoped terminal history, no URLs/keys/audio printed.
+
+One generated five-second silent fixture and a disposable random-password
+non-pilot account were recorded in the server manifest. Creation resumed the same
+recorded identity after an operator helper initially omitted the music_dir lock
+argument; no duplicate file/account was created. Exposure is now recorded under
+the same track lock before any warm-cache signed URL. No original music edited.
+
+Cache-setting API attempt with simpleValue0 normalized caching OFF despite custom
+success overrides, so it was not treated as enabled. The reviewed policy now uses
+simpleValue3600 (documented200/206/301/302 defaults), explicit zero overrides for
+redirects/OPTIONS/errors, browser cacheOFF, stale empty/off, cookies ignored and
+blacklist onlymd5/expires. Operation bc87o5lu4xku7tibpdci accepted and readback
+confirms the policy. This is a closed fixture experiment, not warm acceptance;
+global permission issuance remains OFF and all real clients remain direct.
+
+Web source integration9643683 and deterministic test fixtures2a3a413 were pushed.
+Frozen web candidate:220 tests/33 suites, build/lint exit0, both public flagsfalse.
+Production web/device rollout is still gated.

@@ -27,9 +27,10 @@ token=base64.urlsafe_b64encode(hashlib.md5((str(expires)+path+' '+key).encode(),
 query='?md5='+token+'&expires='+str(expires)
 origin='https://web.puuk.fun'
 observed = {}
+connections = {}
 
 def probe(label,host,suffix,headers=()):
-    conn=http.client.HTTPSConnection(host,timeout=8,context=ssl.create_default_context())
+    conn=connections.setdefault(host,http.client.HTTPSConnection(host,timeout=8,context=ssl.create_default_context()))
     try:
         conn.putrequest('HEAD',path+suffix)
         conn.putheader('Origin',origin)
@@ -38,18 +39,34 @@ def probe(label,host,suffix,headers=()):
         response=conn.getresponse()
         cors='web' if response.getheader('Access-Control-Allow-Origin')==origin else 'absent_or_unexpected'
         cache='no-store' if 'no-store' in response.getheader('Cache-Control','') else 'other'
+        response.read()
+        node=response.getheader('cache-host','origin')
+        if not re.fullmatch('[A-Za-z0-9_.-]{1,80}',node):node='unknown'
         observed[label] = (response.status, cors, cache)
-        print(label+': '+str(response.status)+' cors='+cors+' client_cache='+cache,flush=True)
+        print(label+': '+str(response.status)+' cors='+cors+' client_cache='+cache+' node='+node,flush=True)
         response.close()
     except Exception:
         observed[label] = (None, 'absent', 'other')
         print(label+': transport_error',flush=True)
-    finally:conn.close()
+    finally:pass
 
 probe('origin_missing_secret','origin-media.puuk.fun',query)
 probe('origin_wrong_secret','origin-media.puuk.fun',query,[('X-Puuk-Origin-Secret','probe-wrong')])
 probe('origin_correct_secret','origin-media.puuk.fun',query,[('X-Puuk-Origin-Secret',origin_key)])
 probe('origin_duplicate_secret','origin-media.puuk.fun',query,[('X-Puuk-Origin-Secret',origin_key),('X-Puuk-Origin-Secret','probe-wrong')])
+# Select a connection whose node has applied the corrected request header.
+# HEAD-only missing object: no audio, credentials or writes. Bound selection to 8 nodes.
+for _ in range(8):
+    candidate=http.client.HTTPSConnection('media.puuk.fun',timeout=8,context=ssl.create_default_context())
+    try:
+        candidate.request('HEAD',path+query,headers={'Origin':origin})
+        r=candidate.getresponse();status=r.status;r.read();r.close()
+        if status==404:
+            connections['media.puuk.fun']=candidate
+            break
+    except Exception:
+        pass
+    candidate.close()
 probe('cdn_unsigned','media.puuk.fun','')
 probe('cdn_valid','media.puuk.fun',query)
 probe('cdn_client_wrong_secret','media.puuk.fun',query,[('X-Puuk-Origin-Secret','probe-wrong')])
@@ -58,6 +75,7 @@ probe('cdn_extra_query','media.puuk.fun',query+'&probe_extra=1')
 print('Expected statuses: origin missing/wrong/duplicate 403; correct 404; CDN unsigned 403; valid/client-wrong/client-duplicate 404; extra query 400.')
 print('Synthetic missing path only. Actual audio bytes, warm cache and final acceptance remain unverified.')
 
+for connection in connections.values():connection.close()
 expected = {'origin_missing_secret': 403, 'origin_wrong_secret': 403,
     'origin_correct_secret': 404, 'origin_duplicate_secret': 403,
     'cdn_unsigned': 403, 'cdn_valid': 404, 'cdn_client_wrong_secret': 404,
