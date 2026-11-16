@@ -112,3 +112,27 @@ global permission issuance remains OFF and all real clients remain direct.
 Web source integration9643683 and deterministic test fixtures2a3a413 were pushed.
 Frozen web candidate:220 tests/33 suites, build/lint exit0, both public flagsfalse.
 Production web/device rollout is still gated.
+
+## R3 continuation — 2026-11-16 13:57 UTC
+
+Supersedes the earlier experimental query blacklist: retain ALL query parameters.
+See CONTRACT_R3_QUERY_CACHE.md for the failed R2 duplicate-query case and explicit
+provider compatibility limits. Closed warm matrix passed on yccdn-m9-14: four
+full GETs, one origin read, three Cache-Status HITs, exact generated silent bytes;
+invalid/expired capabilities denied, including same cached URL after expiry.
+Cached HEAD+Range206 and equivalent unreserved path spelling are documented R3
+compatibility observations, not retroactive R2 passes.
+
+Expiry cohort source installed successfully; rollback backup
+/var/backups/puuk-cdn/expiry-20261116T130824339624Z. Live/local delivery_service.py
+SHA256 both6e116cf37dd04fd1ecbe62e691c7804b54099cdb04f325c5ecefc94bb9248a7d.
+Installer verified source/epoch, fresh purge heartbeat and protected origin;
+issuance remains OFF. Local selected backend suite211 passed, one warning.
+
+New iOS candidate75c2302 CI succeeded; see IOS_BUILD_ACCEPTANCE.md. Controlled
+API pilot/rollback helper is prepared but has NOT executed: sudo -n was rejected
+with a password-required response after the sudo timestamp expired. No flags
+were changed by that attempt. Root access renewal is needed for the closed pilot,
+fixture retirement/purge and cleanup. Refresh the fixture exposure before probing;
+its previously recorded capability has expired. At13:57UTC brain, bot and nginx
+were active. No real-user pilot or full release acceptance is claimed.

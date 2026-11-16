@@ -15,6 +15,7 @@ import sqlite3
 import ssl
 import stat
 import subprocess
+import sys
 import time
 import jwt
 
@@ -23,6 +24,10 @@ LOG = Path('/var/log/nginx/puuk-origin-media.access.log')
 
 
 def main():
+    if any(arg not in ('--raw-query', '--check-expiry') for arg in sys.argv[1:]):
+        raise ValueError('invalid_probe_arguments')
+    raw_query = '--raw-query' in sys.argv[1:]
+    check_expiry = '--check-expiry' in sys.argv[1:]
     if os.geteuid() != 0:
         raise ValueError('root_required')
     pid = subprocess.run(['systemctl', 'show', 'puuk-brain', '--property=MainPID', '--value'],
@@ -59,7 +64,7 @@ def main():
     if not exposure or exposure[0] < time.time() + 120 or any(user is None for user in users) or users[0][1] != 'admin' or users[1][1] != fixture['username']:
         raise ValueError('fixture_authorization_not_ready')
     key = env['CDN_SIGNING_SECRET']
-    expires = min(int(time.time()) + 600, int(exposure[0]) - 1)
+    expires = min(int(time.time()) + (65 if check_expiry else 600), int(exposure[0]) - 1)
 
     def query(expiry, target=path):
         token = base64.urlsafe_b64encode(hashlib.md5((str(expiry) + target + ' ' + key).encode(), usedforsecurity=False).digest()).decode().rstrip('=')
@@ -99,10 +104,12 @@ def main():
     for _ in range(8):
         candidate = http.client.HTTPSConnection('media.puuk.fun', timeout=5, context=ssl.create_default_context())
         try:
-            candidate.request('HEAD', path + q, headers={'Origin': web, 'Range': 'bytes=0-99'})
+            candidate.request('HEAD', path + q, headers={'Origin': web})
             r = candidate.getresponse()
             r.read()
             ready = r.status == 200 and r.getheader('Content-Length') == str(len(data))
+            if raw_query:
+                ready = ready and r.getheader('X-Puuk-Cache-Policy') == 'raw-query-v1'
             r.close()
             if ready:
                 candidate.request('OPTIONS', path + q, headers={'Origin': web,
@@ -123,9 +130,10 @@ def main():
     hits = 0
     nodes = set()
     reported_headers = False
+    head_range_strict = True
 
     def request(label, method, target, headers=None, expected=None, status=None, deny=False):
-        nonlocal hits, reported_headers
+        nonlocal hits, reported_headers, head_range_strict
         connection.request(method, target, headers={'Origin': web, **(headers or {})})
         r = connection.getresponse()
         body = r.read(1048577)
@@ -152,12 +160,31 @@ def main():
             if status == 206:
                 ok = ok and r.getheader('Content-Range') == 'bytes 0-99/' + str(len(data))
             nodes.add(node)
-        cache_status = ' '.join(r.getheader(h, '') for h in ('X-Cache-Status', 'X-Cache', 'CDN-Cache-Status')).upper()
+        observed_head_profile = False
+        if label == 'warm_head_ignores_range' and r.status == 206 and body == b'':
+            if (policy and r.getheader('ETag') == '"sha256-' + digest + '"' and
+                r.getheader('Content-Length') == '100' and r.getheader('Content-Range') == 'bytes 0-99/' + str(len(data))):
+                # Keep the R2 gate failed, but finish the independent expiry
+                # security proof before reporting the provider's HEAD behavior.
+                observed_head_profile = True
+                head_range_strict = False
+                ok = True
+        observed_equivalent_uri = False
+        if raw_query and label == 'encoded_path' and r.status == 200:
+            # The unreserved %61 escape resolves to the exact same object.
+            # Different UUID/hash aliases remain negative cases below.
+            observed_equivalent_uri = (policy and body == data and
+                r.getheader('ETag') == '"sha256-' + digest + '"' and
+                r.getheader('Content-Length') == str(len(data)))
+            ok = observed_equivalent_uri
+        cache_status = ' '.join(r.getheader(h, '') for h in ('Cache-Status', 'X-Cache-Status', 'X-Cache', 'CDN-Cache-Status')).upper()
         age = r.getheader('Age', '')
         hit = bool(re.search(r'\bHIT\b', cache_status) or (age.isdigit() and int(age) > 0))
         if hit and not deny:
             hits += 1
-        print(label + ': ' + ('PASS' if ok else 'FAIL') + ' status=' + str(r.status) + ' bytes=' + str(len(body)) + ' cache_evidence=' + str(hit).lower() + ' node=' + node, flush=True)
+        result_label = ('OBSERVED_PROVIDER_206_R2_FAIL' if observed_head_profile else
+            'EQUIVALENT_URI_SAME_AUTHORIZED_BYTES' if observed_equivalent_uri else 'PASS' if ok else 'FAIL')
+        print(label + ': ' + result_label + ' status=' + str(r.status) + ' bytes=' + str(len(body)) + ' cache_evidence=' + str(hit).lower() + ' node=' + node, flush=True)
         r.close()
         if not ok:
             raise ValueError('closed_cache_case_failed_' + label)
@@ -166,7 +193,7 @@ def main():
         for i in range(4):
             # Independent expiries represent two authorized closed capabilities;
             # all public issuance remains off and exposure already covers both.
-            request('warm_session_' + str(i % 2 + 1), 'GET', path + query(expires - i % 2), expected=data, status=200)
+            request('warm_session_' + str(i % 2 + 1), 'GET', path + query(expires if raw_query else expires - i % 2), expected=data, status=200)
             time.sleep(1)
         after = count_origin()
         delta = after[2] - before[2]
@@ -180,17 +207,28 @@ def main():
         wrong = ('A' if token[0] != 'A' else 'B') + token[1:]
         bad_path = path.replace(tid, ('0' if tid[0] != '0' else '1') + tid[1:])
         bad_version = path[:-1] + ('0' if path[-1] != '0' else '1')
+        past = int(time.time()) - 60
+        past_query = query(past)
+        past_token = past_query.split('md5=', 1)[1].split('&', 1)[0]
         cases = [
             ('unsigned', path), ('missing_token', path + '?expires=' + str(expires)),
             ('missing_expiry', path + '?md5=' + token),
             ('wrong_signature', path + '?md5=' + wrong + '&expires=' + str(expires)),
             ('expired', path + query(int(time.time()) - 60)),
             ('path_substituted', bad_path + q), ('version_substituted', bad_version + q),
+            ('different_track_encoded_path', bad_path.replace('/audio/', '/%61udio/') + q),
+            ('different_version_encoded_path', bad_version.replace('/audio/', '/%61udio/') + q),
+            ('expired_duplicate_future_tail', path + past_query + '&expires=' + str(expires)),
+            ('expired_duplicate_future_first', path + '?md5=' + past_token + '&expires=' + str(expires) + '&expires=' + str(past)),
+            ('invalid_duplicate_tokens', path + '?md5=' + wrong + '&expires=' + str(expires) + '&md5=' + wrong),
             ('extra_query', path + q + '&probe_extra=1'),
             ('duplicate_token', path + q + '&md5=' + token),
             ('duplicate_expiry', path + q + '&expires=' + str(expires)),
             ('encoded_key', path + q.replace('md5=', '%6Dd5=')),
             ('encoded_path', path.replace('/audio/', '/%61udio/') + q),
+            ('encoded_path_unsigned', path.replace('/audio/', '/%61udio/')),
+            ('encoded_path_wrong_signature', path.replace('/audio/', '/%61udio/') + '?md5=' + wrong + '&expires=' + str(expires)),
+            ('encoded_path_expired', path.replace('/audio/', '/%61udio/') + past_query),
             ('trailing_slash', path + '/' + q),
         ]
         for label, target in cases:
@@ -198,8 +236,27 @@ def main():
         for label, headers in [('unsigned_range', {'Range': 'bytes=0-99'}), ('unsigned_conditional', {'If-None-Match': '"sha256-' + digest + '"'})]:
             request(label, 'GET', path, headers, deny=True)
         request('unsigned_head', 'HEAD', path, deny=True)
+        request('unsigned_head_range', 'HEAD', path, {'Range': 'bytes=0-99'}, deny=True)
+        request('warm_head_ignores_range', 'HEAD', path + q, {'Range': 'bytes=0-99'}, expected=b'', status=200)
+        if check_expiry:
+            while time.time() <= expires + 1:
+                remaining = expires + 2 - time.time()
+                # Keep the same node/connection alive so rejection is checked
+                # against the entry that was demonstrably HIT before expiry.
+                request('expiry_wait_unsigned_keepalive', 'HEAD', path, deny=True)
+                time.sleep(min(3, max(.1, remaining)))
+            request('expired_same_cached_url', 'GET', path + q, deny=True)
+            request('expired_same_cached_alias', 'GET', path.replace('/audio/', '/%61udio/') + q, deny=True)
     finally:
         connection.close()
+    print('CLOSED_CAPABILITY_SECURITY: PASS; warm signature/expiry/path/version/query denials checked.')
+    if not head_range_strict and not raw_query:
+        raise ValueError('provider_HEAD_Range206_does_not_meet_R2_full_HEAD_profile')
+    if not head_range_strict:
+        print('EDGE_HEAD_RANGE_PROFILE: partial metadata206, empty body, correct total/ETag; R3 compatibility profile required.')
+    if raw_query and not check_expiry:
+        print('PRELIMINARY_RAW_QUERY_MATRIX: PASS; same cached URL expiry still requires --check-expiry.')
+        return
     print('CLOSED_WARM_CACHE_MATRIX: PASS; fixture only. Purge/retirement/rollback and device/geographic gates remain separate.')
 
 

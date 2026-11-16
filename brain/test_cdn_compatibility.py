@@ -114,6 +114,39 @@ def test_media_ticket_dto_schema_and_defaults(compat_env):
     assert tid in r_upper.json()['url']
 
 
+def test_two_authorized_users_share_canonical_capability_within_window(compat_env,monkeypatch):
+    client,tid,digest,data,user,token,headers=compat_env
+    second_id=db.create_user('cohort_second_user',hash_password('synthetic-password'))
+    second=db.get_user_by_id(second_id)
+    second_headers={'Authorization':'Bearer '+create_access_token(second)}
+    monkeypatch.setattr(config,'CDN_DELIVERY_ENABLED',True)
+    monkeypatch.setattr(config,'CDN_ORIGIN_ENABLED',True)
+    monkeypatch.setattr(config,'CDN_PURGE_ENABLED',True)
+    monkeypatch.setattr(config,'CDN_SIGNING_SECRET','s'*32)
+    monkeypatch.setattr(config,'CDN_PILOT_USER_IDS',{user['id'],second_id})
+    monkeypatch.setattr(config,'CDN_RESOURCE_ID','synthetic-resource')
+    monkeypatch.setattr(config,'CDN_PURGE_TOKEN','synthetic-token')
+    base=int(time.time())//300*300
+    results=[]
+    for now,auth in [(base+5,headers),(base+125,second_headers),(base+301,second_headers)]:
+        monkeypatch.setattr(time,'time',lambda value=now:value)
+        with delivery.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO delivery_control(key,value) VALUES ('purge_heartbeat',?)",(str(now),))
+        response=client.post('/api/media-ticket',json={'track_id':tid,'delivery':'cdn'},headers=auth)
+        assert response.status_code==200
+        dto=response.json()
+        assert dto['delivery']=='cdn' and 1501<=dto['expires_in']<=1800
+        assert dto['expires_at']-dto['server_time']==dto['expires_in']
+        assert 'no-store' in response.headers['cache-control']
+        results.append(dto)
+    assert results[0]['url']==results[1]['url']
+    assert results[0]['expires_at']==results[1]['expires_at']==base+1800
+    assert results[2]['url']!=results[1]['url'] and results[2]['expires_at']==base+2100
+    with delivery.transaction() as conn:
+        row=conn.execute('SELECT max_expires_at FROM delivery_exposures WHERE track_id=? AND content_version=?',(tid,digest)).fetchone()
+        assert row[0]==results[2]['expires_at']
+
+
 def test_delivery_selection_flags_and_pilot_isolation(compat_env, monkeypatch):
     """Verify CDN selection requires global flag, origin flag, pilot membership, ready version, healthy purge."""
     client, tid, digest, data, user, token, auth_header = compat_env
@@ -145,7 +178,8 @@ def test_delivery_selection_flags_and_pilot_isolation(compat_env, monkeypatch):
     assert r3.status_code == 200
     dto = r3.json()
     assert dto['delivery'] == 'cdn'
-    assert dto['expires_in'] == 1800
+    assert 1501 <= dto['expires_in'] <= 1800
+    assert dto['expires_at'] - dto['server_time'] == dto['expires_in']
     assert dto['download_binding'] == 'immutable-path'
     assert f'/cdn/audio/{tid}/{digest}' in dto['url']
 

@@ -32,3 +32,12 @@ S4 R2 decision (msg_943a740eab1f): isolated adversarial test exposes paused-Retr
 S4 ctx_09e3f61bf028 settled failed/incomplete: 288 isolated tests pass only with one known failing race excluded. Retained standalone race fails. Report preserved as S4_IOS_R2_STATUS.md; additive native expected-intent/revision/attempt API proposed but not implemented/accepted. No source integration, G2/G3 acceptance or device proof. No new worker launched.
 
 Coordinator continuation: user confirms no other workers remain and identifies existing GitHub Actions unsigned-IPA build route; iOS write fence lifted. Coordinator integrates additive expected-intent native API and R2 failure paths, preserving newer deadline/wake changes. See NATIVE_RETRY_DECISION.md and S4_IOS.md. Exact staged iOS snapshot passes 620 tests in 13 suites with no skips; working dirty tree passes 625. No new worker, feature enablement, native runtime/device acceptance or production deployment. Frozen G1 hash remains historical; independent final review still required.
+
+2026-11-16 R3 continuation: full-query cache keys replace the failed blacklist
+experiment. Closed warm/expiry security matrix passed with explicitly documented
+HEAD+Range and same-object URI compatibility (CONTRACT_R3_QUERY_CACHE.md).
+Expiry cohort installed with issuance OFF;211 selected backend tests passed.
+New CDN-capable iOS CI run43868581365 succeeded. G3/G4 remain OPEN: actual pilot
+API/rollback, fixture deletion/purge, installed-device behavior, independent review,
+RF/EU and24-hour observation pending. Root sudo timestamp expired before the
+prepared closed API probe executed; user notified to renew in existing SSH tab.

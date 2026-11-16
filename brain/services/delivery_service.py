@@ -86,6 +86,16 @@ def sign_path(path,expires,secret):
     return base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
 
 
+def cdn_expiry(now,ttl):
+    """Share a canonical capability without stripping auth from the cache key.
+
+    Round down within at most five minutes; never extend the configured TTL or
+    return less than sixty seconds, including short operator-test settings.
+    """
+    window=min(300,ttl-59)
+    return now+ttl-now%window
+
+
 def validate_origin(scope):
     if not config.CDN_ORIGIN_ENABLED:
         raise HTTPException(404,detail='Not found')
@@ -452,7 +462,7 @@ def issue(request,track_id,requested,deadline,cancel):
                 if requested=='cdn' and config.CDN_DELIVERY_ENABLED and config.CDN_ORIGIN_ENABLED and user['id'] in config.CDN_PILOT_USER_IDS and version:
                     with delivery.transaction(deadline,cancel) as conn:
                         if delivery.purge_healthy(conn):
-                            expires=now+config.CDN_TICKET_TTL_SECONDS
+                            expires=cdn_expiry(now,config.CDN_TICKET_TTL_SECONDS)
                             delivery.expose(conn,track_id,version['content_version'],expires)
                             mode='cdn'
                 check_deadline(deadline,cancel)
