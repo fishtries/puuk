@@ -48,3 +48,8 @@ drain all PASS. Generated-fixture authenticated deletion, durable outbox succeed
 same-node warm URL404 before expiry and disposable cleanup PASS. Issuance remains
 OFF after rollback. These close the scoped server rehearsal items, not physical
 client/geographic/24-hour or independent final-review gates.
+
+2026-11-16 15:44:14UTC: user confirms new IPA installed; admin-only pilot activated.
+Actual admin API CDN ticket/range smoke PASS; independent live flags confirm sole
+ID1 and healthy purge heartbeat. Physical playback/seek and measured performance
+still pending.24-hour pilot observation is now started, not completed.

@@ -159,3 +159,19 @@ bounded six-GET check required actual HIT and passed without changing CDN policy
 No original recording was changed. Delivery remains OFF after the verified rollback.
 Next: install/verify the new CDN-capable IPA, then scoped admin pilot observation.
 Physical-device, geographic and independent final-review gates remain open.
+
+## Admin pilot enabled — 2026-11-16 15:44:14 UTC
+
+User confirmed the new CDN-capable IPA is installed and executed the prepared
+root activation command. ADMIN_PILOT passed: actual API CDN ticket and exact
+100-byte Range response, legacy direct, fresh purge heartbeat. Independent SSH
+readback confirms delivery/origin/purge=true, sole pilot ID1 and epoch
+admin-pilot-1794843851. Protected predecessor environment:
+/var/backups/puuk-cdn/admin-pilot-20261116T154411815834Z.
+
+Pilot observation starts15:44:14UTC (18:44:14 Moscow) on November16. Earliest
+24-hour observation completion is November17 at the same time, subject to actual
+measurements. No physical playback/seek, RF/EU performance improvement or full
+rollout is inferred from the operator smoke. User-facing comparison should use
+fresh playback after relaunch; audio CDN does not accelerate home API or covers.
+Ordinary rollback remains set-delivery-mode.py direct, preserving purge/origin.
