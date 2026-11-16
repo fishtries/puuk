@@ -5,7 +5,7 @@ import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import styles from './LoginModal.module.css';
 
-export const LoginModal: React.FC<{ mandatory?: boolean }> = ({ mandatory = false }) => {
+export const LoginModal: React.FC<{ mandatory?: boolean; onCancelDestination?: () => void }> = ({ mandatory = false, onCancelDestination }) => {
   const isLoginOpen = usePlayerStore((state) => state.isLoginOpen);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
 
@@ -63,12 +63,12 @@ export const LoginModal: React.FC<{ mandatory?: boolean }> = ({ mandatory = fals
           >
             <header className={styles.header}>
               <h2 className={styles.title}>Авторизация в Puuk</h2>
-              {!mandatory && (
+              {(!mandatory || onCancelDestination) && (
                 <button
                   type="button"
                   className={styles.closeBtn}
-                  onClick={handleClose}
-                  aria-label="Закрыть окно"
+                  onClick={onCancelDestination ?? handleClose}
+                  aria-label={onCancelDestination ? "Отменить переход по ссылке" : "Закрыть окно"}
                 >
                   <X size={18} />
                 </button>

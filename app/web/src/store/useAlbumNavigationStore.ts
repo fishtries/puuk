@@ -1,3 +1,5 @@
+import { SHARE_LINKS_ENABLED, entityShareId } from '../utils/shareLinks';
+import { useShareNavigationStore } from './useShareNavigationStore';
 import { create } from 'zustand';
 import { Album } from '../types/track';
 
@@ -13,7 +15,11 @@ interface AlbumNavigationState {
 
 export const useAlbumNavigationStore = create<AlbumNavigationState>((set, get) => ({
   pendingAlbum: null,
-  requestOpenAlbum: (album: Album) => set({ pendingAlbum: album }),
+  requestOpenAlbum: (album: Album) => {
+    const id = entityShareId('album', album);
+    if (SHARE_LINKS_ENABLED && id) useShareNavigationStore.getState().navigateToTarget({ type: 'album', id });
+    else set({ pendingAlbum: album });
+  },
   consumePendingAlbum: () => {
     const album = get().pendingAlbum;
     if (album) set({ pendingAlbum: null });

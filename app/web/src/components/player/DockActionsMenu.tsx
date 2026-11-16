@@ -1,6 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { ListMusic, Tag, ListPlus, MoreHorizontal } from 'lucide-react';
+import { ListMusic, Tag, ListPlus, MoreHorizontal, Share2, Music2 } from 'lucide-react';
+import { toast } from 'sonner';
+import type { Track } from '../../types/track';
+import { SHARE_LINKS_ENABLED, entityShareId, shareEntityUrl } from '../../utils/shareLinks';
+import { useShareNavigationStore } from '../../store/useShareNavigationStore';
 import styles from './DockActionsMenu.module.css';
 
 const MENU_SPRING = {
@@ -21,6 +25,7 @@ interface DockActionsMenuProps {
   onEditTags?: () => void;
   onAddToPlaylist?: () => void;
   onOpen?: () => void;
+  track?: Track | null;
 }
 
 export const DockActionsMenu: React.FC<DockActionsMenuProps> = ({
@@ -29,6 +34,7 @@ export const DockActionsMenu: React.FC<DockActionsMenuProps> = ({
   onEditTags,
   onAddToPlaylist,
   onOpen,
+  track,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -52,7 +58,7 @@ export const DockActionsMenu: React.FC<DockActionsMenuProps> = ({
     };
   }, [isOpen]);
 
-  const close = () => setIsOpen(false);
+  const close = () => { setIsOpen(false); rootRef.current?.querySelector('button')?.focus(); };
 
   const handleToggle = () => {
     setIsOpen((v) => {
@@ -103,6 +109,20 @@ export const DockActionsMenu: React.FC<DockActionsMenuProps> = ({
               <span>Очередь и информация</span>
             </button>
 
+            {SHARE_LINKS_ENABLED && track && <>
+              <button type="button" role="menuitem" className={styles.menuItem} onClick={async () => {
+                close();
+                const id = entityShareId('track', track);
+                const result = id ? await shareEntityUrl({ type: 'track', id }) : 'failed';
+                if (result === 'copied') toast.success('Ссылка скопирована');
+                else if (result === 'shared') toast.success('Ссылка отправлена');
+                else if (result === 'failed') toast.error('Не удалось поделиться');
+              }}><Share2 size={16} /><span>Поделиться</span></button>
+              <button type="button" role="menuitem" className={styles.menuItem} onClick={() => {
+                close(); const id = entityShareId('track', track);
+                if (id) useShareNavigationStore.getState().navigateToTarget({ type: 'track', id });
+              }}><Music2 size={16} /><span>Открыть трек</span></button>
+            </>}
             {onEditTags && (
               <button
                 type="button"

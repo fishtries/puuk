@@ -7,6 +7,7 @@ import { useLyrics } from '../../hooks/useLyrics';
 import { getCoverUrl } from '../../api/tracks';
 import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
+import { ShareButton } from '../../views/TrackDetail';
 import styles from './FullPlayerModal.module.css';
 
 interface FullPlayerModalProps {
@@ -91,6 +92,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ onAddToPlaylis
                 <h1 className={styles.title}>{currentTrack?.title || 'Нет трека'}</h1>
                 <p className={styles.artist}>{currentTrack?.artist || '—'}</p>
                 {currentTrack?.album && <span className={styles.album}>{currentTrack.album}</span>}
+                {currentTrack && <ShareButton type="track" entity={currentTrack} className={styles.addToPlaylistBtn} />}
                 {currentTrack && isAuthorized && onAddToPlaylist && (
                   <button
                     type="button"

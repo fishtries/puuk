@@ -47,7 +47,11 @@ class FakeAudioElement {
     this.handlers.set(type, list);
   }
 
-  load(): void {}
+  removeEventListener(type: string, listener: (event: Event) => void): void {
+    this.handlers.set(type, (this.handlers.get(type) ?? []).filter(item => item !== listener));
+  }
+  removeAttribute(): void { this.src = ''; }
+  load(): void { if (this.src) queueMicrotask(() => { for (const listener of [...this.handlers.get('canplay') ?? []]) listener(new Event('canplay')); }); }
   play(): Promise<void> {
     return Promise.resolve();
   }
@@ -414,8 +418,8 @@ describe('Loudness Normalization (Web Unit Tests)', () => {
   describe('6. Stale track DTO refresh at playback', () => {
     const engine = AudioEngine.getInstance();
 
-    const STALE_ID = 'stale-track-1';
-    const FRESH_ID = 'fresh-track-1';
+    const STALE_ID = '00000000-0000-4000-a000-000000000001';
+    const FRESH_ID = '00000000-0000-4000-a000-000000000002';
 
     let fetchCalls: string[] = [];
     const originalFetch = globalThis.fetch;

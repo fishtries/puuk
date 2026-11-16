@@ -112,7 +112,11 @@ class FakeAudioElement {
     this.handlers.set(type, list);
   }
 
-  load(): void {}
+  removeEventListener(type: string, listener: (event: Event) => void): void {
+    this.handlers.set(type, (this.handlers.get(type) ?? []).filter(item => item !== listener));
+  }
+  removeAttribute(name: string): void { if (name === 'src') this.src = ''; }
+  load(): void { if (this.src) queueMicrotask(() => this.fire('canplay')); }
   play(): Promise<void> {
     this.paused = false;
     return Promise.resolve();
@@ -180,6 +184,8 @@ function loadedStreamIds(): string[] {
 }
 
 function seedWave(currentTrackId: string, queueIds: string[], playedIds: string[]): void {
+  audioInstance.src = `/api/stream/${currentTrackId}?mt=synthetic-media`;
+  audioInstance.srcLog.length = 0;
   usePlayerStore.setState({
     isWaveActive: true,
     currentTrack: track(currentTrackId),
@@ -190,6 +196,7 @@ function seedWave(currentTrackId: string, queueIds: string[], playedIds: string[
 }
 
 beforeEach(() => {
+  usePlayerStore.getState().resetUserData();
   usePlayerStore.setState({
     currentTrack: null,
     status: 'idle',
@@ -220,99 +227,99 @@ beforeEach(() => {
 
 describe('Wave double-feedback guard', () => {
   it('1. ended auto-advance reports finish only — no duplicate skip for the same track', async () => {
-    seedWave('B', ['B', 'C'], []);
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'], []);
     audioInstance.fire('ended');
     await settleAsyncChains();
 
-    assert.deepEqual(feedbackSummaries(), [{ track_id: 'B', event_type: 'finish' }]);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'C');
+    assert.deepEqual(feedbackSummaries(), [{ track_id: '00000000-0000-4000-a000-000000000042', event_type: 'finish' }]);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000043');
   });
 
   it('2. manual nextTrack still reports skip feedback (external no-arg contract)', async () => {
     usePlayerStore.setState({ currentTime: 45 });
-    seedWave('B', ['B', 'C'], []);
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'], []);
 
     await usePlayerStore.getState().nextTrack();
 
-    assert.deepEqual(feedbackSummaries(), [{ track_id: 'B', event_type: 'skip' }]);
+    assert.deepEqual(feedbackSummaries(), [{ track_id: '00000000-0000-4000-a000-000000000042', event_type: 'skip' }]);
     assert.equal(firstFeedbackBody()?.listen_duration_ms, 45000);
     assert.equal(firstFeedbackBody()?.context, 'wave');
     assert.equal(firstFeedbackBody()?.client, 'web');
     assert.equal(typeof firstFeedbackBody()?.event_id, 'string');
     assert.ok(Date.parse(String(firstFeedbackBody()?.occurred_at)));
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'C');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000043');
   });
 
   it('3. ended with repeatMode one replays the current track without skipping ahead', async () => {
-    seedWave('B', ['B', 'C'], []);
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'], []);
     usePlayerStore.setState({ repeatMode: 'one' });
 
     audioInstance.fire('ended');
     await settleAsyncChains();
 
-    assert.deepEqual(feedbackSummaries(), [{ track_id: 'B', event_type: 'finish' }]);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
-    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['B', 'C']);
-    assert.deepEqual(loadedStreamIds(), []);
+    assert.deepEqual(feedbackSummaries(), [{ track_id: '00000000-0000-4000-a000-000000000042', event_type: 'finish' }]);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043']);
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000042']);
   });
 });
 
 describe('Wave batch consumption', () => {
   it('4. toggleWave activates with exactly one fetch and plays the batch head', async () => {
-    waveQueueReplies = [['A', 'B', 'C'].map(track)];
+    waveQueueReplies = [['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'].map(track)];
 
     await usePlayerStore.getState().toggleWave();
 
     assert.equal(waveQueueFetchUrls.length, 1);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'A');
-    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['A', 'B', 'C']);
-    assert.deepEqual(loadedStreamIds(), ['A']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000041');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043']);
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000041']);
   });
 
   it('5. repeated Next consumes the buffer: played head leaves the queue, ids are remembered', async () => {
-    seedWave('B', ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'], ['B']);
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049'], ['00000000-0000-4000-a000-000000000042']);
 
     await usePlayerStore.getState().nextTrack();
     await usePlayerStore.getState().nextTrack();
 
     const state = usePlayerStore.getState();
-    assert.equal(state.currentTrack?.id, 'D');
-    assert.deepEqual(state.queue.map((t) => t.id), ['C', 'D', 'E', 'F', 'G', 'H', 'I']);
-    for (const id of ['B', 'C', 'D']) {
+    assert.equal(state.currentTrack?.id, '00000000-0000-4000-a000-000000000044');
+    assert.deepEqual(state.queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049']);
+    for (const id of ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044']) {
       assert.ok(state.wavePlayedIds.includes(id), `wavePlayedIds should contain ${id}`);
     }
     // Buffer serves both Next presses: no Qdrant fetch, exactly one load per
     // consumed track (C and D) — the seeded head B is never re-loaded.
     assert.equal(waveQueueFetchUrls.length, 0);
-    assert.deepEqual(loadedStreamIds(), ['C', 'D']);
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044']);
   });
 
   it('6. prefetch loads the next batch only when the remaining buffer hits the threshold', async () => {
-    seedWave('B', ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'], ['B']);
-    waveQueueReplies = [['J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q'].map(track)];
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049'], ['00000000-0000-4000-a000-000000000042']);
+    waveQueueReplies = [['00000000-0000-4000-a000-00000000004a', '00000000-0000-4000-a000-00000000004b', '00000000-0000-4000-a000-00000000004c', '00000000-0000-4000-a000-00000000004d', '00000000-0000-4000-a000-00000000004e', '00000000-0000-4000-a000-00000000004f', '00000000-0000-4000-a000-000000000050', '00000000-0000-4000-a000-000000000051'].map(track)];
 
     for (let i = 0; i < 4; i += 1) {
       await usePlayerStore.getState().nextTrack();
     }
     assert.equal(waveQueueFetchUrls.length, 0);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'F');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000046');
 
     await usePlayerStore.getState().nextTrack();
     await settleAsyncChains();
 
     assert.equal(waveQueueFetchUrls.length, 1);
     const state = usePlayerStore.getState();
-    assert.equal(state.currentTrack?.id, 'G');
+    assert.equal(state.currentTrack?.id, '00000000-0000-4000-a000-000000000047');
     // Keep the current track as the navigation anchor before the unplayed buffer.
     assert.deepEqual(state.queue.map((t) => t.id), [
-      'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+      '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049', '00000000-0000-4000-a000-00000000004a', '00000000-0000-4000-a000-00000000004b', '00000000-0000-4000-a000-00000000004c', '00000000-0000-4000-a000-00000000004d', '00000000-0000-4000-a000-00000000004e', '00000000-0000-4000-a000-00000000004f', '00000000-0000-4000-a000-000000000050', '00000000-0000-4000-a000-000000000051',
     ]);
   });
 });
 
 describe('Wave single in-flight request', () => {
   it('7. concurrent nextTrack calls share one wave fetch and fetch again after reset', async () => {
-    seedWave('B', [], ['B']);
+    seedWave('00000000-0000-4000-a000-000000000042', [], ['00000000-0000-4000-a000-000000000042']);
     let releaseGate!: (batch: Track[]) => void;
     const gate = new Promise<Track[]>((resolve) => {
       releaseGate = resolve;
@@ -326,28 +333,28 @@ describe('Wave single in-flight request', () => {
     // Both callers park on the shared promise: exactly one HTTP fetch happened.
     assert.equal(waveQueueFetchUrls.length, 1);
 
-    releaseGate([track('X')]);
+    releaseGate([track('00000000-0000-4000-a000-000000000058')]);
     await Promise.all([first, second]);
     await settleAsyncChains();
 
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'X');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000058');
     assert.equal(waveQueueFetchUrls.length, 1);
     // The batch head streamed exactly once — a shared in-flight fetch must not
     // double-play X when both parked presses resume.
-    assert.deepEqual(loadedStreamIds(), ['X']);
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000058']);
 
     // The in-flight slot was released: the next call performs a fresh fetch.
-    waveQueueReplies = [[track('Y')]];
+    waveQueueReplies = [[track('00000000-0000-4000-a000-000000000059')]];
     queueReplyOverride = null;
     await usePlayerStore.getState().nextTrack();
 
     assert.equal(waveQueueFetchUrls.length, 2);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'Y');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000059');
   });
 
   it('9. concurrent presses on an empty buffer land distinct tracks — the batch head never double-plays', async () => {
-    seedWave('B', [], ['B']);
-    waveQueueReplies = [['X', 'Y'].map(track)];
+    seedWave('00000000-0000-4000-a000-000000000042', [], ['00000000-0000-4000-a000-000000000042']);
+    waveQueueReplies = [['00000000-0000-4000-a000-000000000058', '00000000-0000-4000-a000-000000000059'].map(track)];
 
     const first = usePlayerStore.getState().nextTrack();
     const second = usePlayerStore.getState().nextTrack();
@@ -358,20 +365,20 @@ describe('Wave single in-flight request', () => {
     // Second press consumed the refreshed buffer: X played once, then Y.
     // The extra fetch is the automatic buffer refill after Y.
     assert.equal(waveQueueFetchUrls.length, 2);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'Y');
-    assert.deepEqual(loadedStreamIds(), ['X', 'Y']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000059');
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000058', '00000000-0000-4000-a000-000000000059']);
   });
 
   it('8. concurrent Next presses with a buffered queue consume it sequentially', async () => {
-    seedWave('B', ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'], ['B']);
+    seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049'], ['00000000-0000-4000-a000-000000000042']);
 
     void usePlayerStore.getState().nextTrack();
     await usePlayerStore.getState().nextTrack();
 
     const state = usePlayerStore.getState();
-    assert.equal(state.currentTrack?.id, 'D');
+    assert.equal(state.currentTrack?.id, '00000000-0000-4000-a000-000000000044');
     assert.equal(waveQueueFetchUrls.length, 0);
-    assert.deepEqual(loadedStreamIds(), ['C', 'D']);
+    assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044']);
   });
 });
 
@@ -379,42 +386,43 @@ describe('Wave single in-flight request', () => {
 describe('Collection order and search recommendations', () => {
   it('plays from the selected collection position and starts similar tracks after the last ended event', async () => {
     seedWave('old', ['old', 'unrelated'], []);
-    const list = ['A', 'B', 'C'].map(track);
+    const list = ['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'].map(track);
     await usePlayerStore.getState().playTrack(list[1], list, 'collection');
     assert.equal(usePlayerStore.getState().isWaveActive, false);
     await usePlayerStore.getState().nextTrack();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'C');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000043');
     assert.equal(waveQueueFetchUrls.length, 0);
-    waveQueueReplies = [['D', 'E', 'F', 'G'].map(track)];
+    waveQueueReplies = [['00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047'].map(track)];
+    await settleAsyncChains();
     audioInstance.fire('ended');
     await settleAsyncChains();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'D');
-    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['D', 'E', 'F', 'G']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000044');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047']);
     assert.equal(waveQueueFetchUrls.length, 1);
-    assert.equal(new URL(waveQueueFetchUrls[0], 'https://puuk.app').searchParams.get('current_track_id'), 'C');
+    assert.equal(new URL(waveQueueFetchUrls[0], 'https://puuk.app').searchParams.get('current_track_id'), '00000000-0000-4000-a000-000000000043');
   });
 
   it('search keeps the selected track playing and follows it with the first recommendation', async () => {
-    waveQueueReplies = [['B', 'C', 'D', 'E'].map(track)];
-    await usePlayerStore.getState().playTrack(track('A'), undefined, 'search');
+    waveQueueReplies = [['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045'].map(track)];
+    await usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000041'), undefined, 'search');
     await settleAsyncChains();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'A');
-    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['A', 'B', 'C', 'D', 'E']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000041');
+    assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045']);
     await usePlayerStore.getState().nextTrack();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
   });
 
   it('repeat all and repeat one take priority over collection autoplay', async () => {
-    const list = ['A', 'B'].map(track);
+    const list = ['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042'].map(track);
     await usePlayerStore.getState().playTrack(list[1], list, 'collection');
     usePlayerStore.getState().setRepeatMode('one');
     audioInstance.fire('ended');
     await settleAsyncChains();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
     usePlayerStore.getState().setRepeatMode('all');
     audioInstance.fire('ended');
     await settleAsyncChains();
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'A');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000041');
     assert.equal(waveQueueFetchUrls.length, 0);
   });
 
@@ -422,15 +430,15 @@ describe('Collection order and search recommendations', () => {
     it(`discards late ${source} recommendations after selecting a new collection`, async () => {
       let release!: (response: Response) => void;
       queueReplyOverride = () => new Promise((resolve) => { release = resolve; });
-      await usePlayerStore.getState().playTrack(track('A'), [track('A')], source);
+      await usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000041'), [track('00000000-0000-4000-a000-000000000041')], source);
       const advance = source === 'collection' ? usePlayerStore.getState().nextTrack() : undefined;
       await settleAsyncChains();
-      await usePlayerStore.getState().playTrack(track('X'), ['X', 'Y'].map(track), 'collection');
+      await usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000058'), ['00000000-0000-4000-a000-000000000058', '00000000-0000-4000-a000-000000000059'].map(track), 'collection');
       release(jsonResponse([track('stale')]));
       await advance;
       await settleAsyncChains();
-      assert.equal(usePlayerStore.getState().currentTrack?.id, 'X');
-      assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['X', 'Y']);
+      assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000058');
+      assert.deepEqual(usePlayerStore.getState().queue.map((t) => t.id), ['00000000-0000-4000-a000-000000000058', '00000000-0000-4000-a000-000000000059']);
       assert.equal(usePlayerStore.getState().isWaveActive, false);
     });
   }

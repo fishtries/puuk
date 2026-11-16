@@ -29,6 +29,8 @@ import { UploadMusicModal } from '../playlists/UploadMusicModal';
 import { ProfileCapsuleMenu } from '../profile/ProfileCapsuleMenu';
 import styles from './HomeScreen.module.css';
 
+import { SHARE_LINKS_ENABLED, entityShareId } from '../../utils/shareLinks';
+import { useShareNavigationStore } from '../../store/useShareNavigationStore';
 import { DEMO_MIX } from './demoMix';
 import {
   FreshMixCard,
@@ -175,10 +177,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   };
 
   const handleAlbumClick = (album: Album) => {
+    const id = entityShareId('album', album);
+    if (SHARE_LINKS_ENABLED && id) { useShareNavigationStore.getState().navigateToTarget({ type: 'album', id }); return; }
     setSelectedAlbum(album);
   };
 
   const handleArtistClick = (artist: Artist) => {
+    const id = entityShareId('artist', artist);
+    if (SHARE_LINKS_ENABLED && id) { useShareNavigationStore.getState().navigateToTarget({ type: 'artist', id }); return; }
     setSearchQuery(artist.name);
   };
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
@@ -25,12 +25,30 @@ import { Track } from './types/track';
 
 import styles from './App.module.css';
 import { queryClient } from './api/queryClient';
-import { setUnauthorizedHandler } from './api/client';
+import { useShareNavigationStore, readPendingDestination } from './store/useShareNavigationStore';
+import { useTagEditorStore } from './store/useTagEditorStore';
+import { useAlbumEditorStore } from './store/useAlbumEditorStore';
+import { useAlbumNavigationStore } from './store/useAlbumNavigationStore';
+import { SHARE_LINKS_ENABLED, parseShareTarget } from './utils/shareLinks';
+import { TrackDetail } from './views/TrackDetail';
+import { ArtistDetail } from './views/ArtistDetail';
+import { AlbumDetail } from './views/AlbumDetail';
+import type { Album } from './types/track';
+import type { ArtistSummaryDTO } from './api/share';
+import shareStyles from './views/ShareDetail.module.css';
+import { setUnauthorizedHandler, onApiSessionChange } from './api/client';
 
 function AppContent() {
   const [viewMode, setViewMode] = useState<'home' | 'lyrics'>('home');
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [trackForPlaylist, setTrackForPlaylist] = useState<Track | null>(null);
+
+  const share = useShareNavigationStore();
+  const token = useAuthStore(state => state.token);
+  const sessionError = useAuthStore(state => state.error);
+  const focusBeforeShare = useRef<HTMLElement | null>(null);
+  const wasShare = useRef(false);
+  const shareStage = useRef<HTMLElement>(null);
 
   const checkAuth = useAuthStore((state) => state.checkAuth);
   const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
@@ -55,8 +73,57 @@ function AppContent() {
   useMediaSession();
 
   useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
+    if (!SHARE_LINKS_ENABLED) return;
+    useShareNavigationStore.getState().initFromLocation();
+    const pop = () => useShareNavigationStore.getState().handlePopState();
+    window.addEventListener('popstate', pop);
+    return () => window.removeEventListener('popstate', pop);
+  }, []);
+
+  useEffect(() => {
+    if (!SHARE_LINKS_ENABLED || !isAuthChecked || !user || !token) return;
+    const state = useShareNavigationStore.getState();
+    if (!state.currentTarget && state.pendingDestination) {
+      const pending = readPendingDestination();
+      if (!pending) { state.clearPendingDestination(); return; }
+      state.navigateToTarget({ type: pending.type, id: pending.id }, { replace: true });
+    } else if (state.currentTarget && !state.resolvedEntity && !state.error) {
+      void state.resolveCurrentTarget();
+    }
+  }, [user, token, isAuthChecked, share.generation]);
+
+  useEffect(() => useShareNavigationStore.subscribe((state, previous) => {
+    if (state.currentTarget !== previous.currentTarget && state.currentTarget) {
+      if (!previous.currentTarget) focusBeforeShare.current = document.activeElement as HTMLElement;
+      setViewMode('home');
+    }
+  }), []);
+
+  useEffect(() => {
+    if (share.currentTarget && !wasShare.current) {
+      focusBeforeShare.current ??= document.activeElement as HTMLElement;
+    } else if (!share.currentTarget && wasShare.current) {
+      if (focusBeforeShare.current?.isConnected) focusBeforeShare.current.focus();
+      focusBeforeShare.current = null;
+    }
+    wasShare.current = Boolean(share.currentTarget);
+  }, [share.currentTarget]);
+
+  useEffect(() => {
+    if (share.resolvedEntity?.type === 'album' || share.error) {
+      const heading = shareStage.current?.querySelector<HTMLElement>('h1, h2');
+      if (heading) { heading.tabIndex = -1; heading.focus(); }
+    }
+  }, [share.resolvedEntity, share.error]);
+
+  useEffect(() => onApiSessionChange(() => {
+    setTrackForPlaylist(null);
+    setIsLibraryOpen(false);
+    useTagEditorStore.getState().closeTagEditor();
+    useAlbumEditorStore.getState().closeAlbumEditor();
+    useAlbumNavigationStore.setState({ pendingAlbum: null });
+  }), []);
+  useEffect(() => { void checkAuth(); }, [checkAuth]);
 
   useEffect(() => {
     setUnauthorizedHandler(() => useAuthStore.getState().logout());
@@ -74,7 +141,9 @@ function AppContent() {
   if (!user) {
     return (
       <div className={styles.authGate}>
-        <LoginModal mandatory />
+        {token && sessionError ? <div role="alert"><p>Не удалось проверить сессию</p><button type="button" onClick={() => void checkAuth()}>Повторить</button></div> :
+          <LoginModal mandatory onCancelDestination={SHARE_LINKS_ENABLED && share.currentTarget ? () => { useAuthStore.getState().logout(); share.cancelNavigation(); } : undefined} />}
+
       </div>
     );
   }
@@ -84,10 +153,23 @@ function AppContent() {
       {viewMode === 'home' ? (
         /* Sketch-based Home View with Glassmorphism Islands */
         <div className={styles.homeContainer}>
+          <div hidden={Boolean(share.currentTarget) || Boolean(window.location.pathname !== '/' && !share.currentTarget)}>
           <HomeScreen
             onOpenAuth={() => setIsLoginOpen(true)}
             onAddToPlaylist={setTrackForPlaylist}
           />
+          </div>
+          {(share.currentTarget || window.location.pathname !== '/') && <main ref={shareStage} className={shareStyles.stage} aria-label="По ссылке">
+            <button type="button" className={`${shareStyles.button} ${shareStyles.back}`} onClick={share.cancelNavigation}><ArrowLeft size={16} />Главная</button>
+            {!share.currentTarget ? <p role="status">{!SHARE_LINKS_ENABLED && parseShareTarget(`${window.location.pathname}${window.location.search}${window.location.hash}`) ? 'Ссылки пока недоступны' : 'Некорректная ссылка'}</p> : share.isResolving ? <p role="status">Загрузка…</p> : share.error ? <div role="alert">
+              <h1 className={shareStyles.title}>{share.error.message}</h1>
+              {share.error.kind === 'retryable' && <button type="button" className={shareStyles.button} onClick={() => void share.resolveCurrentTarget()}>Повторить</button>}
+            </div> : share.resolvedEntity ? <>
+              {share.resolvedEntity.type === 'track' && <TrackDetail track={share.resolvedEntity.entity as Track} />}
+              {share.resolvedEntity.type === 'album' && <AlbumDetail album={share.resolvedEntity.entity as Album} resolved={{ album: share.resolvedEntity.entity as Album, tracks: share.resolvedEntity.tracks }} />}
+              {share.resolvedEntity.type === 'artist' && <ArtistDetail artist={share.resolvedEntity.entity as ArtistSummaryDTO} tracks={share.resolvedEntity.tracks} albums={share.resolvedEntity.albums} />}
+            </> : null}
+          </main>}
 
           <FloatingPlayerDock
             onOpenLyrics={() => setViewMode('lyrics')}

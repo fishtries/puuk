@@ -48,6 +48,7 @@ class FakeAudioElement {
     this.srcValue = value;
   }
   addEventListener(): void {}
+  removeAttribute(): void { this.src = ''; }
   load(): void {}
   play(): Promise<void> {
     return Promise.resolve();

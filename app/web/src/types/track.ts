@@ -1,7 +1,12 @@
 export interface Track {
   id: string;
+  share_id?: string;
   title: string;
   artist: string;
+  artists?: Array<{ id: string; share_id?: string; name: string }>;
+  album_id?: string | number | null;
+  album_share_id?: string | null;
+  content_version?: string | null;
   album?: string;
   duration: number; // in seconds
   file_path?: string;
@@ -88,6 +93,7 @@ export interface LyricsSearchResultDTO {
 
 export interface Album {
   id: string;
+  share_id?: string;
   title: string;
   artist: string;
   album_artist?: string;
@@ -136,6 +142,8 @@ export interface Playlist {
 }
 
 export interface Artist {
+  id?: string;
+  share_id?: string;
   name: string;
   track_count: number;
   album_count: number;

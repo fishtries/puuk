@@ -63,7 +63,11 @@ class FakeAudioElement {
     this.handlers.set(type, list);
   }
 
-  load(): void {}
+  removeEventListener(type: string, listener: (event: Event) => void): void {
+    this.handlers.set(type, (this.handlers.get(type) ?? []).filter(item => item !== listener));
+  }
+  removeAttribute(name: string): void { if (name === 'src') this.src = ''; }
+  load(): void { if (this.src) queueMicrotask(() => this.fire('canplay')); }
   play(): Promise<void> {
     this.paused = false;
     return Promise.resolve();
@@ -152,6 +156,7 @@ function streamSrcLog(): string[] {
 
 beforeEach(() => {
   currentAuthToken = 'test-token';
+  usePlayerStore.getState().resetUserData();
   usePlayerStore.setState({
     currentTrack: null,
     status: 'idle',
@@ -180,10 +185,10 @@ beforeEach(() => {
 
 describe('Переключение трека: немедленное глушение и гонки загрузки', () => {
   it('кэш тикета не используется после смены auth-токена', async () => {
-    const firstUrl = await resolveAuthorizedAudioUrl('A');
+    const firstUrl = await resolveAuthorizedAudioUrl('00000000-0000-4000-a000-000000000041');
 
     currentAuthToken = 'another-user-token';
-    const secondUrl = await resolveAuthorizedAudioUrl('A');
+    const secondUrl = await resolveAuthorizedAudioUrl('00000000-0000-4000-a000-000000000041');
 
     assert.notEqual(secondUrl, firstUrl);
     assert.equal(
@@ -193,7 +198,7 @@ describe('Переключение трека: немедленное глуше
   });
 
   it('1. прежний источник глушится синхронно, до ответа media-тикета', async () => {
-    usePlayerStore.setState({ currentTrack: track('A'), queue: [track('A')], status: 'playing' });
+    usePlayerStore.setState({ currentTrack: track('00000000-0000-4000-a000-000000000041'), queue: [track('00000000-0000-4000-a000-000000000041')], status: 'playing' });
     audioInstance.paused = false;
 
     let releaseB!: (response: Response) => void;
@@ -201,20 +206,20 @@ describe('Переключение трека: немедленное глуше
       () => new Promise<Response>((resolve) => { releaseB = resolve; }),
     );
 
-    const switching = usePlayerStore.getState().playTrack(track('B'), [track('B')]);
+    const switching = usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000042'), [track('00000000-0000-4000-a000-000000000042')]);
 
     // Синхронная часть playTrack: UI уже на новом треке, старый звук выключен,
     // хотя билет для B ещё не вернулся.
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
     assert.equal(usePlayerStore.getState().status, 'loading');
     assert.equal(audioInstance.paused, true);
     assert.equal(audioInstance.src, '');
 
-    releaseB(ticketFor('B'));
+    releaseB(ticketFor('00000000-0000-4000-a000-000000000042'));
     await switching;
     audioInstance.fire('play');
 
-    assert.ok(streamSrcLog()[0].startsWith('/api/stream/B?mt='));
+    assert.ok(streamSrcLog()[0].startsWith('/api/stream/00000000-0000-4000-a000-000000000042?mt='));
     assert.equal(usePlayerStore.getState().status, 'playing');
   });
 
@@ -224,17 +229,17 @@ describe('Переключение трека: немедленное глуше
       () => new Promise<Response>((resolve) => { releaseA = resolve; }),
     );
 
-    const first = usePlayerStore.getState().playTrack(track('A'), [track('A')]);
-    const second = usePlayerStore.getState().playTrack(track('B'), [track('B')]);
+    const first = usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000041'), [track('00000000-0000-4000-a000-000000000041')]);
+    const second = usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000042'), [track('00000000-0000-4000-a000-000000000042')]);
 
-    releaseA(ticketFor('A'));
+    releaseA(ticketFor('00000000-0000-4000-a000-000000000041'));
     await Promise.all([first, second]);
     await settle();
     audioInstance.fire('play');
 
     // A опоздал: играет только B, статус не испорчен.
-    assert.deepEqual(streamSrcLog().map((src) => src.split('?')[0]), ['/api/stream/B']);
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
+    assert.deepEqual(streamSrcLog().map((src) => src.split('?')[0]), ['/api/stream/00000000-0000-4000-a000-000000000042']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
     assert.equal(usePlayerStore.getState().status, 'playing');
   });
 
@@ -243,7 +248,7 @@ describe('Переключение трека: немедленное глуше
 
     // Сначала сбой на актуальном переключении.
     ticketFactories.push(fail);
-    await usePlayerStore.getState().playTrack(track('A'), [track('A')]);
+    await usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000041'), [track('00000000-0000-4000-a000-000000000041')]);
     assert.equal(usePlayerStore.getState().status, 'error');
 
     // Затем сбой опоздавшего запроса поверх успешного B.
@@ -252,29 +257,30 @@ describe('Переключение трека: немедленное глуше
     ticketFactories.push(
       () => new Promise<Response>((resolve) => { releaseSlow = resolve; }),
     );
-    const stale = usePlayerStore.getState().playTrack(track('C'), [track('C')]);
-    const fresh = usePlayerStore.getState().playTrack(track('B'), [track('B')]);
+    const stale = usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000043'), [track('00000000-0000-4000-a000-000000000043')]);
+    const fresh = usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000042'), [track('00000000-0000-4000-a000-000000000042')]);
     releaseSlow(fail());
     await Promise.all([stale, fresh]);
     await settle();
     audioInstance.fire('play');
 
     assert.equal(usePlayerStore.getState().status, 'playing');
-    assert.equal(usePlayerStore.getState().currentTrack?.id, 'B');
-    assert.deepEqual(streamSrcLog().map((src) => src.split('?')[0]), ['/api/stream/B']);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, '00000000-0000-4000-a000-000000000042');
+    assert.deepEqual(streamSrcLog().map((src) => src.split('?')[0]), ['/api/stream/00000000-0000-4000-a000-000000000042']);
   });
 
   it('4. togglePlay во время ожидания тикета не ставит error', async () => {
-    usePlayerStore.setState({ currentTrack: track('A'), queue: [track('A')], status: 'playing' });
+    usePlayerStore.setState({ currentTrack: track('00000000-0000-4000-a000-000000000041'), queue: [track('00000000-0000-4000-a000-000000000041')], status: 'playing' });
 
     ticketFactories.push(
       () => new Promise<Response>(() => {}), // билет не приходит
     );
 
-    void usePlayerStore.getState().playTrack(track('B'), [track('B')]);
+    void usePlayerStore.getState().playTrack(track('00000000-0000-4000-a000-000000000042'), [track('00000000-0000-4000-a000-000000000042')]);
     usePlayerStore.getState().togglePlay();
     await settle();
 
-    assert.equal(usePlayerStore.getState().status, 'loading');
+    assert.equal(usePlayerStore.getState().status, 'paused');
+    assert.equal(audioInstance.paused, true);
   });
 });

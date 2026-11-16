@@ -1,0 +1,61 @@
+{
+  "flags": {
+    "VITE_CDN_DELIVERY_ENABLED": false,
+    "VITE_SHARE_LINKS_ENABLED": false
+  },
+  "source_files": {
+    "app/web/src/App.tsx": "2bbb93f2706ecffead30bcbd281d2bf1d2b6d3e8282622a7f5ceaa317342b3b9",
+    "app/web/src/api/__tests__/mediaDelivery.test.ts": "126c21edb7882d821f0cd5754ffe596dca774d0fa8b3117629284a608bfaf7b8",
+    "app/web/src/api/client.ts": "5f092efcbc4e380af3d96c2df88515cd941a9b8b7d53819d7ce0ac016b3702a1",
+    "app/web/src/api/media.ts": "f66cd1bde69db972f6ded64ffb7dee049e31f455447fa2db8ed1b4d043272c63",
+    "app/web/src/api/share.ts": "6ca3bf05372f8648648041acc71cb6e0abb6cc4eb871e140b711c3481e00e018",
+    "app/web/src/components/auth/LoginModal.tsx": "0060ace1d6e681071ea7bd8d276303eccb459fa1620cc0ef4ee1e08529c5e150",
+    "app/web/src/components/home/HomeScreen.tsx": "1d1e09a6add476db5470113928914fb011396c2c150e23e8c5cbe7a91f2df576",
+    "app/web/src/components/player/ApplePlayerDeck.tsx": "559207aa4018f285174f4fb7c9e8443ed700eadcfe83a70aabcd0abb0d3ac472",
+    "app/web/src/components/player/DockActionsMenu.tsx": "690dd3d5aa0fa717fdfac6c8293ff019119b2cc426c22b88a41b2e7f6bafaa36",
+    "app/web/src/components/player/FloatingPlayerDock.tsx": "637b5af50c74afa4e8b581aeaf25e56e914644d2f1a2c3230bc0014bb6e0335f",
+    "app/web/src/components/player/FullPlayerModal.tsx": "360997c8997844fe7d1a0304428e21827cbbaa4b80d07de429ebfb97ad2c1bec",
+    "app/web/src/engine/AudioEngine.ts": "d0a9576814899ed17cf15aa3249ca4de732fb435fc97e8cf47ca3eab8c681a61",
+    "app/web/src/engine/__tests__/deliveryRecovery.test.ts": "0798a4b729ca6a9a6dfc9916b5368643e796cfb314fcb2291082b584e6cca7e4",
+    "app/web/src/engine/__tests__/loudnessNormalization.test.ts": "3d3194ec8761d9e145531c7e810e46530cbb056ebb68184a6183796a001786a2",
+    "app/web/src/store/__tests__/shareIntegration.test.ts": "3b7ae8d1b8187ba59f0ca7e1abadcdf76c4c8d93f7fd83e71a6aef0de5ca81fb",
+    "app/web/src/store/__tests__/shareNavigation.test.ts": "d741e46259d7cf59cd59cd3b3acf1cf7f1f599a70950fed3811c5930a4ec81ce",
+    "app/web/src/store/__tests__/usePlayerStore.purge.test.ts": "b12554d1d3e585fc1d6abb138c58288175e715a5be0b83e8fda1a57753c2289d",
+    "app/web/src/store/__tests__/usePlayerStore.stream.test.ts": "c04aa1388255da6eabc8a6311644ee1f6e434ef9b2c13104ccdb99d31d4dcbe0",
+    "app/web/src/store/__tests__/usePlayerStore.wave.test.ts": "896fe9e8d115e11b578ba81e4c76991233ce92cb6d5247efa5cf2db5f0aab49d",
+    "app/web/src/store/useAlbumNavigationStore.ts": "52b87f3cfdbf5beec75238f695807fb393d3dfd4279e85ce78e8e03accb17bd1",
+    "app/web/src/store/useAuthStore.ts": "5f76be479f9c5be246d364a193018079833fd07d9388d6663b8a99bd1ddfdd36",
+    "app/web/src/store/usePlayerStore.ts": "43914769ec83eb9a616e505c4a047cc9dbb1338f587e7b4dc9c2e7adeacb0121",
+    "app/web/src/store/useShareNavigationStore.ts": "2780f39d87da5819851418d2f79f41b0802797a7a6392fb1063fc8fd1113d434",
+    "app/web/src/types/track.ts": "2c0a69303586d1ab2dd31cc1953d8056155fb14569b2cfa0748ca363aea7fc97",
+    "app/web/src/utils/__tests__/shareLinks.test.ts": "c320cd9b77515f2527b6dbd9700a784e43a098fcc047f160c3ed121aeb671897",
+    "app/web/src/utils/shareLinks.ts": "aae692cea63fe53e04d341666a5676b8ad23360678eecfbc67ef17710f3b07f3",
+    "app/web/src/views/AlbumDetail.tsx": "3f3346e7cc40cce4378ee2c909697a2ab0097717ccc16a22d716a2cee17e766a",
+    "app/web/src/views/ArtistDetail.tsx": "3e371aa2564f131e3ad298079942a836aac18a2051c43fcb3d8f614f25b49d69",
+    "app/web/src/views/ShareDetail.module.css": "143c8f7eb86248fc6a717951a9f2bb23f281bb4f2418ff0558fb3e7fb9dc654a",
+    "app/web/src/views/TrackDetail.tsx": "01c59ee959062dd119c86c53d6007c5abce45774bc6da358e1174e2a37a11f9f"
+  },
+  "lockfile_sha256": "f7166b25ca1aba373b0da19ae2f8b144ca6336a88939c152197e4f0cca6c2a56",
+  "built_files": {
+    "assets/index-BLoIPA8Z.css": "3ea4571ce44e26620f4c6e4311e5ca00dbfa35b5b8bc5e947c1023e06b78d0e6",
+    "assets/index-DNB0Tfmw.js": "0eadd28083c92654729c0045c7f43c0c91ce427112cd72fec07e71d6fd3c21d6",
+    "favicon.svg": "61bc9a161de58248288e6905425d7180f0624c2865007b97d763fdac12043a66",
+    "icons.svg": "b45fa506195cfcdef406ba9f0c77b36ddc1a7c224040926ec70abc2fdea7b93a",
+    "index.html": "42f7369b6af01c1c8e3c43f340577c595fb7fc3c967010981efcbec5caefb804",
+    "wave_original.png": "e7c2caab4ac8a9919caf24bed263e7b68797611bfd4a1a75314edf1db5e4e5b4",
+    "wave_star.png": "5b81634d155c2f8308735486a0fbe58d5e926859c03daed6d791aa49b8c043a0",
+    "wave_star@2x.png": "fa2bc3a005f0c90e75660e703f4db3303ec365ec1ff8f8641ab527e021dcb55c",
+    "wwdc_breakdown.png": "c8c8daa77d6cf5d48adfdeb7e4fc146b07745bc1aaf70874f5f4a35e2e96cf3c",
+    "wwdc_flower_bg.jpg": "5031535f065d256302cf77155adc794380bc657bbade58521088a0b48986790f",
+    "wwdc_preview.webp": "2ea5f08e76e93e7309c66b176f201b549e2953935f62d2858b7d42e6baf31b63",
+    "wwdc_reference.mp4": "58517c37717380967e3d1972c23477f260708ea0dcde49061298a5e28d58866c",
+    "your_mix_bg.png": "942ffbfbc8b642f6083c83edfd54041032d867e24ee8b0f090e0ec378cc97199"
+  },
+  "validation": {
+    "tests_passed": 220,
+    "suites": 33,
+    "build_exit": 0,
+    "lint_exit": 0,
+    "deployment": false
+  }
+}

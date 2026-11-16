@@ -2,25 +2,29 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Disc3 } from 'lucide-react';
 import { fetchAlbumDetail, getCoverUrl } from '../api/tracks';
+import { ShareButton } from './TrackDetail';
+import type { AlbumDetail as AlbumDetailDTO } from '../types/track';
 import { Album } from '../types/track';
 import { CollectionDetail } from '../components/collection/CollectionDetail';
 import { useAlbumEditorStore } from '../store/useAlbumEditorStore';
 
 interface AlbumDetailProps {
   album: Album;
+  resolved?: AlbumDetailDTO;
 }
 
-export const AlbumDetail: React.FC<AlbumDetailProps> = ({ album }) => {
+export const AlbumDetail: React.FC<AlbumDetailProps> = ({ album, resolved }) => {
   const openAlbumEditor = useAlbumEditorStore((state) => state.openAlbumEditor);
 
   const { data, isFetching, isError } = useQuery({
-    queryKey: ['album-tracks', album.id],
-    queryFn: () => fetchAlbumDetail(String(album.id)),
+    queryKey: ['album-tracks', album.share_id ?? album.id],
+    enabled: !resolved,
+    queryFn: () => fetchAlbumDetail(album.share_id ?? String(album.id)),
     staleTime: 60000,
   });
 
-  const detailAlbum = data?.album ?? album;
-  const tracks = data?.tracks ?? [];
+  const detailAlbum = resolved?.album ?? data?.album ?? album;
+  const tracks = resolved?.tracks ?? data?.tracks ?? [];
   const coverUrl = getCoverUrl(tracks[0] ?? detailAlbum);
 
   const subtitleParts: string[] = [];
@@ -30,6 +34,8 @@ export const AlbumDetail: React.FC<AlbumDetailProps> = ({ album }) => {
   if (detailAlbum.year) subtitleParts.push(String(detailAlbum.year));
 
   const headerActions = (
+    <>
+    <ShareButton type="album" entity={detailAlbum} />
     <button
       type="button"
       className="album-edit-trigger"
@@ -53,9 +59,10 @@ export const AlbumDetail: React.FC<AlbumDetailProps> = ({ album }) => {
       <Disc3 size={13} />
       <span>Редактировать</span>
     </button>
+    </>
   );
 
-  if (isError) {
+  if (isError && !resolved) {
     return (
       <div style={{ padding: 24, color: 'var(--text-secondary, #d4d4d8)', fontSize: 13 }}>
         Не удалось загрузить альбом. Возможно, он был объединён или удалён.
@@ -69,7 +76,7 @@ export const AlbumDetail: React.FC<AlbumDetailProps> = ({ album }) => {
       subtitle={subtitleParts.join(' · ') || undefined}
       coverUrl={coverUrl}
       tracks={tracks}
-      isLoading={isFetching && !data}
+      isLoading={!resolved && isFetching && !data}
       emptyLabel="В этом альбоме пока нет треков"
       headerActions={headerActions}
     />

@@ -1,4 +1,4 @@
-import { AudioEngineEventMap, PlaybackStatus } from '../types/player';
+import type { AudioEngineEventMap, PlaybackStatus } from '../types/player';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Listener<T> = (data: T) => void;
@@ -6,6 +6,9 @@ type Listener<T> = (data: T) => void;
 export interface AudioLoadOptions {
   autoplay?: boolean;
   normalizationGainDb?: number;
+  position?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export const MIN_NORMALIZATION_GAIN_DB = -12.0;
@@ -29,6 +32,9 @@ export class AudioEngine {
   private webAudioStatus: WebAudioStatus = 'idle';
   private status: PlaybackStatus = 'idle';
   private rafId: number | null = null;
+  private sourceGeneration = 0;
+  private sourceReady = false;
+  private cancelLoad: (() => void) | null = null;
   private userVolume = 1;
   private normalizationGainDb = 0;
   private isMuted = false;
@@ -81,9 +87,9 @@ export class AudioEngine {
       this.webAudioStatus = 'active';
       this.applyEffectiveGain(false);
       return true;
-    } catch (e) {
+    } catch {
       if (this.webAudioStatus !== 'unavailable') {
-        console.warn('Web Audio API init failed, falling back to element volume:', e);
+        console.warn('Web Audio API unavailable');
       }
       this.webAudioStatus = 'unavailable';
       return false;
@@ -94,13 +100,14 @@ export class AudioEngine {
     if (!this.audioContext || this.audioContext.state !== 'suspended') return;
     try {
       await this.audioContext.resume();
-    } catch (e) {
-      console.warn('AudioContext resume failed:', e);
+    } catch {
+      console.warn('AudioContext resume failed');
     }
   }
 
   private setupAudioListeners(): void {
     this.audio.addEventListener('play', () => {
+      if (!this.sourceReady || this.audio.paused) return;
       this.setStatus('playing');
       this.startTimeLoop();
     });
@@ -113,23 +120,25 @@ export class AudioEngine {
     });
 
     this.audio.addEventListener('ended', () => {
+      if (!this.audio.src) return;
       this.setStatus('idle');
       this.stopTimeLoop();
       this.emit('ended', undefined as void);
     });
 
-    this.audio.addEventListener('waiting', () => {
-      this.setStatus('loading');
+    for (const event of ['waiting', 'stalled']) this.audio.addEventListener(event, () => {
+      if (this.audio.src) this.setStatus('loading');
     });
 
     this.audio.addEventListener('canplay', () => {
       if (this.status === 'loading') {
-        this.setStatus('playing');
+        this.setStatus(this.audio.paused ? 'paused' : 'playing');
       }
     });
 
     this.audio.addEventListener('error', () => {
-      const errMsg = this.audio.error?.message || 'Audio playback error';
+      if (!this.audio.src || !this.audio.error) return;
+      const errMsg = this.audio.error?.code === 3 ? 'decode_error' : this.audio.error?.code === 4 ? 'unsupported_format' : 'opaque_media_error';
       this.setStatus('error');
       this.stopTimeLoop();
       this.emit('error', { message: errMsg });
@@ -242,37 +251,62 @@ export class AudioEngine {
     }
   }
 
-  public async load(
-    url: string,
-    options: boolean | AudioLoadOptions = true
-  ): Promise<void> {
-    const autoplay = typeof options === 'boolean' ? options : (options.autoplay ?? true);
-    if (typeof options === 'object' && options.normalizationGainDb !== undefined) {
-      this.normalizationGainDb = AudioEngine.clampGainDb(options.normalizationGainDb);
-    }
-
+  /** One source attempt; the store owns recovery and its shared budget. */
+  public async load(url: string, options: boolean | AudioLoadOptions = true): Promise<void> {
+    this.cancelLoad?.();
+    const generation = ++this.sourceGeneration;
+    const config = typeof options === 'boolean' ? { autoplay: options } : options;
+    if (config.normalizationGainDb !== undefined) this.normalizationGainDb = AudioEngine.clampGainDb(config.normalizationGainDb);
     this.initAudioContext();
     await this.resumeAudioContext();
-
+    if (generation !== this.sourceGeneration || config.signal?.aborted) throw new Error('source_cancelled');
     this.applyEffectiveGain(true);
-
+    this.sourceReady = false;
     this.setStatus('loading');
-    this.audio.src = url;
-    this.audio.load();
-
-    if (autoplay) {
-      try {
-        await this.audio.play();
-      } catch (err) {
-        console.warn('Autoplay prevented or failed:', err);
-        this.setStatus('paused');
-      }
-    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.audio.removeEventListener('canplay', ready);
+        this.audio.removeEventListener('error', failed);
+        config.signal?.removeEventListener('abort', cancelled);
+        if (this.cancelLoad === cancelled) this.cancelLoad = null;
+      };
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error); else resolve();
+      };
+      const cancelled = () => { finish(new Error('source_cancelled')); if (generation === this.sourceGeneration) this.stop(); };
+      const failed = () => finish(new Error(this.audio.error?.code === 3 ? 'decode_error' : this.audio.error?.code === 4 ? 'unsupported_format' : 'opaque_media_error'));
+      const ready = () => {
+        if (generation !== this.sourceGeneration || config.signal?.aborted) { cancelled(); return; }
+        this.sourceReady = true;
+        if (config.position) this.seek(config.position);
+        finish();
+      };
+      const timer = setTimeout(() => {
+        finish(new Error('source_timeout'));
+        if (generation === this.sourceGeneration) this.stop();
+      }, Math.max(1, Math.min(7000, config.timeoutMs ?? 7000)));
+      this.cancelLoad = cancelled;
+      this.audio.addEventListener('canplay', ready);
+      this.audio.addEventListener('error', failed);
+      config.signal?.addEventListener('abort', cancelled, { once: true });
+      this.audio.crossOrigin = 'anonymous';
+      this.audio.src = url;
+      this.audio.load();
+    });
+    if (generation !== this.sourceGeneration || config.signal?.aborted) throw new Error('source_cancelled');
+    if (config.autoplay ?? true) await this.play();
   }
 
   public async play(): Promise<void> {
+    const generation = this.sourceGeneration;
     this.initAudioContext();
     await this.resumeAudioContext();
+    if (generation !== this.sourceGeneration) return;
     // Между stop() прежнего трека и load() нового источника нет: play() без
     // src бросил бы NotSupportedError и вешал на плеер статус 'error'.
     if (!this.audio.currentSrc) return;
@@ -287,9 +321,13 @@ export class AudioEngine {
    * внутренним loading-статусом.
    */
   public stop(): void {
+    this.sourceGeneration += 1;
+    this.sourceReady = false;
+    this.cancelLoad?.();
     this.status = 'loading';
     this.audio.pause();
-    this.audio.src = '';
+    this.audio.removeAttribute('src');
+    this.audio.load();
     this.stopTimeLoop();
   }
 

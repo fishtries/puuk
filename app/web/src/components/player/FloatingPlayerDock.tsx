@@ -332,6 +332,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           </button>
 
           <DockActionsMenu
+            track={currentTrack}
             isQueueInfoActive={isTrackInfoOpen}
             onToggleQueueInfo={toggleTrackInfo}
             onEditTags={currentTrack ? () => openTagEditor(currentTrack) : undefined}

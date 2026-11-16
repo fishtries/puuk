@@ -20,6 +20,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { getCoverUrl } from '../../api/tracks';
 import { AuthorizedImage } from '../common/AuthorizedImage';
 import { Track } from '../../types/track';
+import { ShareButton } from '../../views/TrackDetail';
 import styles from './ApplePlayerDeck.module.css';
 
 function formatTime(seconds: number): string {
@@ -127,6 +128,7 @@ export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => voi
               >
                 <Tag size={19} />
               </button>
+              <ShareButton type="track" entity={currentTrack} className={styles.likeBtn} iconOnly />
               {isAuthorized && onAddToPlaylist && (
                 <button
                   type="button"
