@@ -3,13 +3,15 @@ import os
 import sys
 import unittest
 import uuid
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
 
-import db
+with mock.patch('qdrant_client.QdrantClient'):
+    import db
 from api import app
 from auth import create_access_token
 from security import hash_password
@@ -32,6 +34,8 @@ def _api_get_routes() -> list[str]:
 class TestClosedAccess(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from _test_media_fixtures import setup_media_class
+        setup_media_class(cls, sys.modules[__name__])
         db.init_db()
         from fastapi.testclient import TestClient
         cls.client = TestClient(app)

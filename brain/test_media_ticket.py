@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import test_db_path  # noqa: F401 — изолирует тестовую БД, должен идти до db/config
 
-import db
+with mock.patch('qdrant_client.QdrantClient'):
+    import db
 import jwt
 from api import app
 from auth import (
@@ -32,6 +33,8 @@ SAMPLE_MP3 = os.path.join(os.path.dirname(__file__), "temp_audio", "Daft Punk - 
 class TestMediaTicket(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from _test_media_fixtures import setup_media_class
+        setup_media_class(cls, sys.modules[__name__])
         db.init_db()
         from fastapi.testclient import TestClient
         cls.client = TestClient(app)
@@ -141,7 +144,8 @@ class TestMediaTicket(unittest.TestCase):
     def test_11_expired_ticket_url_still_shape_compatible(self):
         """Контракт ответа: url/expires_in/expires_at; url играет без заголовков."""
         body = self._issue_ticket(self.track_id)
-        self.assertEqual(set(body.keys()), {"url", "expires_in", "expires_at"})
+        self.assertTrue({"url", "expires_in", "expires_at"}.issubset(body))
+        self.assertEqual(body["delivery"], "direct")
         resp = self.client.get(body["url"])
         self.assertEqual(resp.status_code, 200)
 
@@ -164,6 +168,8 @@ class TestStreamContract(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        from _test_media_fixtures import setup_media_class
+        setup_media_class(cls, sys.modules[__name__])
         db.init_db()
         from fastapi.testclient import TestClient
         cls.client = TestClient(app)
@@ -225,7 +231,7 @@ class TestStreamContract(unittest.TestCase):
 
     def test_01_full_response_headers_and_sqlite_only_path(self):
         with mock.patch("routers.streaming.client.retrieve") as retrieve:
-            with self.assertLogs("puuk.streaming", level="INFO") as captured:
+            with self.assertLogs("puuk.delivery", level="INFO") as captured:
                 resp = self._get(self.track_id)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.headers["accept-ranges"], "bytes")
@@ -291,12 +297,17 @@ class TestStreamContract(unittest.TestCase):
         create_ticket.assert_not_called()
 
     def test_08_db_track_missing_file_does_not_touch_qdrant_and_logs(self):
+        # Earlier missing-file probes permanently retire their identity; use a new
+        # missing file to exercise first detection rather than an existing tombstone.
+        missing_id = str(uuid.uuid4())
+        db.add_or_update_track(missing_id, str(self.audio_root / (missing_id + '.mp3')),
+                               'Missing fixture', None, 'Contract Artist')
         with mock.patch("routers.streaming.client.retrieve") as retrieve:
-            with self.assertLogs("puuk.streaming", level="WARNING") as captured:
-                resp = self._get(self.missing_file_track_id)
+            with self.assertLogs("puuk.delivery", level="WARNING") as captured:
+                resp = self._get(missing_id)
         self.assertEqual(resp.status_code, 404)
         retrieve.assert_not_called()
-        self.assertTrue(any("file missing" in line for line in captured.output))
+        self.assertTrue(any("reason=file_missing" in line for line in captured.output))
 
     def test_09_unknown_track_id_is_404(self):
         with mock.patch("services.media_locations.client.retrieve", return_value=[]):
@@ -320,18 +331,18 @@ class TestStreamContract(unittest.TestCase):
         mock_point = mock.MagicMock()
         mock_point.id = self.qdrant_only_track_id
         mock_point.payload = {
-            "file_path": SAMPLE_MP3,
+            "file_path": self.audio_copy('recovery-stream'),
             "title": "Recovered Stream Track",
             "artist": "Recovered Artist",
             "duration": 120.0,
         }
         with mock.patch("services.media_locations.client.retrieve", return_value=[mock_point]) as retrieve:
-            with self.assertLogs("puuk.streaming", level="INFO") as captured:
+            with self.assertLogs("puuk.delivery", level="INFO") as captured:
                 resp = self._get(self.qdrant_only_track_id)
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(int(resp.headers["content-length"]), os.path.getsize(SAMPLE_MP3))
             self.assertIsNotNone(db.get_track(self.qdrant_only_track_id))
-            self.assertTrue(any("source=stream" in line and "recovered=True" in line for line in captured.output))
+            self.assertTrue(any("path=recovery" in line and "recovered=True" in line for line in captured.output))
             self.assertTrue(any("path=recovery" in line for line in captured.output))
             self.assertEqual(retrieve.call_count, 1)
 
@@ -361,7 +372,7 @@ class TestStreamContract(unittest.TestCase):
         mock_point = mock.MagicMock()
         mock_point.id = self.ticket_recovery_track_id
         mock_point.payload = {
-            "file_path": SAMPLE_MP3,
+            "file_path": self.audio_copy('recovery-ticket'),
             "title": "Ticket Recovery Track",
             "artist": "Recovered Artist",
             "duration": 120.0,
@@ -391,7 +402,7 @@ class TestStreamContract(unittest.TestCase):
         doomed_id = str(uuid.uuid4())
         db.add_or_update_track(
             track_id=doomed_id,
-            file_path=os.path.abspath(SAMPLE_MP3),
+            file_path=self.audio_copy('deleted'),
             title="Doomed Track",
             album_id=None,
             artist="Contract Artist",

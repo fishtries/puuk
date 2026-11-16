@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from services.delivery_boundary import DeliveryBoundaryMiddleware
 
 import config
 import db
@@ -112,6 +112,18 @@ async def _loudness_sync_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    config.validate_delivery_config()
+    from services.delivery_service import startup as delivery_startup
+    delivery_startup()
+    from services.content_version_service import HashSupervisor
+    from services.cdn_purge_service import PurgeSupervisor
+    hash_owner = HashSupervisor()
+    purge_owner = PurgeSupervisor()
+    hash_owner.start()
+    if config.CDN_PURGE_ENABLED:
+        purge_owner.start()
+    app.state.delivery_hash_owner = hash_owner
+    app.state.delivery_purge_owner = purge_owner
     try:
         from services.track_metadata_service import reconcile_uncommitted_mutations
         reconcile_uncommitted_mutations()
@@ -146,6 +158,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from services.delivery_service import shutdown as delivery_shutdown
+        hash_owner.stop.set()
+        purge_owner.stop.set()
+        app.state.delivery_clean_shutdown = await delivery_shutdown()
+        await asyncio.to_thread(hash_owner.shutdown)
+        await asyncio.to_thread(purge_owner.shutdown)
         if reconcile_task is not None:
             reconcile_task.cancel()
             try:
@@ -176,11 +194,13 @@ app = FastAPI(
 )
 
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://web.puuk.fun"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Range", "If-None-Match"],
+    DeliveryBoundaryMiddleware,
+    account_cors_options={
+        "allow_origins": ["https://web.puuk.fun"],
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Authorization", "Content-Type", "Range", "If-None-Match"],
+    },
 )
 
 # --- Routers ---
@@ -200,6 +220,9 @@ app.include_router(wave_rec_router)
 
 from routers.streaming import router as streaming_router
 app.include_router(streaming_router)
+
+from routers.share import router as share_router
+app.include_router(share_router)
 
 from routers.albums import router as albums_router
 app.include_router(albums_router)

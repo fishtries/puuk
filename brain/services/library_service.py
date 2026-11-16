@@ -20,39 +20,16 @@ def scan_library():
     if not base_path.exists() or not base_path.is_dir():
         raise FileNotFoundError("Music directory not found")
 
+    from services.media_locations import ingest_music_file
     added = 0
     for file_path in base_path.rglob("*"):
-        if file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            rel_path = str(file_path.relative_to(base_path))
-            track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
+        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
             try:
-                meta = read_audio_metadata(str(file_path))
-                album_id = resolve_import_album(track_id, meta.album, meta.album_artist, year=meta.year, artist_source=audio_artist_source(meta, album=True))
-                db_track = db.get_track(track_id)
-                file_changed = False
-                if db_track:
-                    old_size = db_track.get("file_size")
-                    old_mtime = db_track.get("file_mtime_ns")
-                    if (meta.file_size is not None and old_size is not None and old_size != meta.file_size) or \
-                       (meta.file_mtime_ns is not None and old_mtime is not None and old_mtime != meta.file_mtime_ns):
-                        file_changed = True
-
-                db.add_or_update_track(
-                    track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
-                    duration=meta.duration, genre=meta.genre,
-                    track_number=meta.track_number, disc_number=meta.disc_number,
-                    artist_source=audio_artist_source(meta),
-                )
-                # Режим сканера: пустой жанр в файле не затирает жанр в БД (например,
-                # выставленный вручную через редактор тегов).
-                db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
-
-                if file_changed:
-                    db.reset_track_loudness_pending(track_id, file_size=meta.file_size, file_mtime_ns=meta.file_mtime_ns)
-            except Exception as e:
-                print(f"[scan] Error scanning {file_path}: {e}")
-
-            added += 1
+                row = ingest_music_file(str(file_path), source='import')
+                if row:
+                    added += 1
+            except Exception:
+                print('[scan] ingest_failed')
 
     result = {"status": "success", "tracks_scanned": added}
     queue_counters = _deliver_embedding_queue()
@@ -123,12 +100,9 @@ def sync_missing_tracks_to_db() -> dict:
         if base_path.exists() and base_path.is_dir():
             for file_path in base_path.rglob("*"):
                 if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-                    rel_path = str(file_path.relative_to(base_path))
-                    track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, rel_path))
-                    if not db.get_track(track_id):
-                        row = ensure_track_from_file(str(file_path), track_id=track_id)
-                        if row:
-                            synced_disk += 1
+                    row = ensure_track_from_file(str(file_path))
+                    if row:
+                        synced_disk += 1
     except Exception as e:
         print(f"[sync_missing_tracks_to_db] Disk check warning: {e}")
 

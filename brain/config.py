@@ -48,3 +48,73 @@ def get_effective_music_dir() -> str:
             return os.path.realpath(local_fallback)
         os.makedirs(path, exist_ok=True)
     return os.path.realpath(path)
+
+# Delivery security configuration is centralized here. Disabled installations need
+# no provider credentials; enabling any boundary validates its complete inputs.
+import re as _re
+import secrets as _secrets
+from urllib.parse import urlsplit as _urlsplit
+
+
+def _delivery_bool(name):
+    value = os.getenv(name, 'false').lower()
+    if value not in ('true', 'false', '1', '0', 'yes', 'no'):
+        raise ValueError(f'{name}: invalid boolean')
+    return value in ('true', '1', 'yes')
+
+
+def _delivery_int(name, default, low, high):
+    try:
+        value = int(os.getenv(name, str(default)))
+        if low <= value <= high:
+            return value
+    except ValueError:
+        pass
+    raise ValueError(f'{name}: invalid range')
+
+
+JWT_SECRET = os.getenv('JWT_SECRET') or _secrets.token_hex(32)
+JWT_EXPIRATION_DAYS = _delivery_int('JWT_EXPIRATION_DAYS', 30, 1, 365)
+MEDIA_TICKET_TTL_SECONDS = _delivery_int('MEDIA_TICKET_TTL_SECONDS', 600, 60, 1800)
+CDN_DELIVERY_ENABLED = _delivery_bool('CDN_DELIVERY_ENABLED')
+CDN_ORIGIN_ENABLED = _delivery_bool('CDN_ORIGIN_ENABLED')
+CDN_PURGE_ENABLED = _delivery_bool('CDN_PURGE_ENABLED')
+CDN_BASE_URL = os.getenv('CDN_BASE_URL', 'https://media.puuk.fun')
+CDN_SIGNING_SECRET = os.getenv('CDN_SIGNING_SECRET', '')
+CDN_ORIGIN_SECRET = os.getenv('CDN_ORIGIN_SECRET', '')
+CDN_RESOURCE_ID = os.getenv('CDN_RESOURCE_ID', '')
+CDN_PURGE_TOKEN = os.getenv('CDN_PURGE_TOKEN', '')
+CDN_TICKET_TTL_SECONDS = _delivery_int('CDN_TICKET_TTL_SECONDS', 1800, 60, 1800)
+CDN_DELIVERY_EPOCH = os.getenv('CDN_DELIVERY_EPOCH', 'direct-v1')
+if not _re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', CDN_DELIVERY_EPOCH):
+    raise ValueError('CDN_DELIVERY_EPOCH: invalid identifier')
+_pilot = os.getenv('CDN_PILOT_USER_IDS', '')
+if _pilot and not _re.fullmatch(r'[1-9][0-9]*(,[1-9][0-9]*)*', _pilot):
+    raise ValueError('CDN_PILOT_USER_IDS: expected positive database IDs')
+CDN_PILOT_USER_IDS = frozenset(int(value) for value in _pilot.split(',') if value)
+DELIVERY_LOCK_DIR = os.getenv('DELIVERY_LOCK_DIR', '')
+
+
+def get_delivery_lock_dir():
+    return DELIVERY_LOCK_DIR or os.path.join(os.path.dirname(os.path.abspath(os.getenv('PUUK_DB_PATH') or DB_PATH)), '.delivery-locks')
+
+
+def validate_delivery_config():
+    base = _urlsplit(CDN_BASE_URL)
+    if (base.scheme != 'https' or not base.hostname or base.netloc != base.hostname
+            or base.path or base.query or base.fragment or base.username):
+        raise ValueError('CDN_BASE_URL: expected exact HTTPS origin')
+    if CDN_ORIGIN_ENABLED or CDN_DELIVERY_ENABLED:
+        if not _re.fullmatch(r'[0-9a-f]{64}', CDN_ORIGIN_SECRET):
+            raise ValueError('CDN_ORIGIN_SECRET: invalid security configuration')
+        if len(CDN_SIGNING_SECRET) != 32 or not _re.fullmatch(r'[!-~]{32}', CDN_SIGNING_SECRET):
+            raise ValueError('CDN_SIGNING_SECRET: invalid security configuration')
+        if len({JWT_SECRET, CDN_SIGNING_SECRET, CDN_ORIGIN_SECRET}) != 3:
+            raise ValueError('Delivery secrets must be independent')
+    if CDN_PURGE_ENABLED or CDN_DELIVERY_ENABLED:
+        if not _re.fullmatch(r'[a-zA-Z0-9_-]{1,50}', CDN_RESOURCE_ID) or not CDN_PURGE_TOKEN or len(CDN_PURGE_TOKEN)>7000 or any(ord(c)<33 or ord(c)>126 for c in CDN_PURGE_TOKEN):
+            raise ValueError('CDN purge: incomplete security configuration')
+    return True
+
+
+validate_delivery_config()

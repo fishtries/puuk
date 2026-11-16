@@ -107,26 +107,50 @@ def delete_track_everywhere(track_id: str, current_user: Dict[str, Any]) -> Dict
             detail="Найдено несколько файлов с совпадающим именем; удаление отменено для безопасности",
         )
 
-    # Вектор удаляем первым: если Qdrant недоступен, файл и запись БД остаются на месте.
+    from repositories import delivery, share_entities
+    from repositories.base import deadline_context
+    import hashlib
+    import time
+    root=get_effective_music_dir()
     try:
-        qdrant_client.delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=PointIdsList(points=[track_id]),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Не удалось удалить вектор из Qdrant: {e}")
-
-    file_deleted = False
-    target = candidates[0] if candidates else None
-    with track_mutation_lock(track_id, get_effective_music_dir()):
-        if target:
+        rel=share_entities.normalize_rel_path(db_track['file_path'])
+    except share_entities.IdentityNotClaimed:
+        conn=db.get_connection(deadline=time.monotonic()+.1)
+        try:
+            claim=conn.execute('SELECT rel_path FROM track_path_claims WHERE track_id=?',(track_id,)).fetchone()
+            rel=claim[0] if claim else 'unavailable-'+hashlib.sha256(str(track_id).encode()).hexdigest()
+        finally:
+            conn.close()
+    path_key='ingest-path-'+hashlib.sha256(rel.encode()).hexdigest()
+    target=candidates[0] if candidates else None
+    file_deleted=False
+    try:
+        lock_end=time.monotonic()+.1
+        with track_mutation_lock(path_key,root,lock_end), track_mutation_lock(track_id,root,lock_end):
+            delivery.invalidate(track_id,deleting=True,deadline=time.monotonic()+.1)
+        # Network cleanup is outside the mutation/path lock and SQL transaction.
+        try:
+            qdrant_client.delete(collection_name=COLLECTION_NAME,points_selector=PointIdsList(points=[track_id]))
+        except Exception:
+            raise HTTPException(502,detail='Не удалось удалить вектор из Qdrant') from None
+        lock_end=time.monotonic()+.1
+        with track_mutation_lock(path_key,root,lock_end), track_mutation_lock(track_id,root,lock_end):
+            # A replacement import may have claimed the path during network IO.
+            conn=db.get_connection(deadline=time.monotonic()+.1)
             try:
-                os.remove(target)
-                file_deleted = True
-            except OSError as e:
-                raise HTTPException(status_code=500, detail=f"Не удалось удалить аудиофайл: {e}")
-
-    db.delete_track(track_id)
-    db.delete_empty_albums()
-
-    return {"status": "success", "file_deleted": file_deleted}
+                claim=conn.execute('SELECT track_id FROM track_path_claims WHERE rel_path=?',(rel,)).fetchone()
+                new_owner=claim is not None and claim['track_id']!=track_id
+            finally:
+                conn.close()
+            if target and not new_owner:
+                try:
+                    os.remove(target)
+                    file_deleted=True
+                except OSError:
+                    raise HTTPException(500,detail='Не удалось удалить аудиофайл') from None
+            with deadline_context(time.monotonic()+.1):
+                db.delete_track(track_id)
+                db.delete_empty_albums()
+    except TimeoutError:
+        raise HTTPException(503,detail={'code':'delivery_busy','message':'Delivery busy'},headers={'Retry-After':'1'}) from None
+    return {'status':'success','file_deleted':file_deleted}

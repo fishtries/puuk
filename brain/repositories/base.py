@@ -1,6 +1,30 @@
 """SQLite connection management: pragmas, row factory, shared path."""
 import os
 import sqlite3
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_delivery_context = ContextVar("delivery_deadline", default=(None, None))
+
+
+def check_deadline(deadline=None, cancel=None):
+    inherited_deadline, inherited_cancel = _delivery_context.get()
+    deadline = deadline if deadline is not None else inherited_deadline
+    cancel = cancel if cancel is not None else inherited_cancel
+    if (cancel is not None and cancel.is_set()) or (deadline is not None and time.monotonic() >= deadline):
+        raise TimeoutError("delivery_busy")
+
+
+@contextmanager
+def deadline_context(deadline=None, cancel=None):
+    token = _delivery_context.set((deadline, cancel))
+    try:
+        check_deadline(deadline, cancel)
+        yield
+    finally:
+        _delivery_context.reset(token)
+
 
 from config import DB_PATH
 
@@ -35,19 +59,26 @@ CATALOG_META_TABLE_SQL = """
 """
 
 
-def get_connection() -> sqlite3.Connection:
-    """
-    Открывает соединение с включенными foreign_keys, busy_timeout и row_factory.
-    Путь резолвится на каждый вызов: тесты изолируют БД через PUUK_DB_PATH
-    (см. test_db_path.py), и переменная окружения действует независимо от
-    порядка импорта config.
-    """
+def get_connection(deadline=None, cancel=None) -> sqlite3.Connection:
+    inherited_deadline, inherited_cancel = _delivery_context.get()
+    deadline = deadline if deadline is not None else inherited_deadline
+    cancel = cancel if cancel is not None else inherited_cancel
+    check_deadline(deadline, cancel)
     path = os.getenv("PUUK_DB_PATH") or DB_PATH
-    conn = sqlite3.connect(path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA busy_timeout = 5000;")
-    return conn
+    busy_ms = min(100, max(1, int((deadline-time.monotonic())*1000))) if deadline is not None else 5000
+    conn = sqlite3.connect(path, timeout=busy_ms/1000 if deadline is not None else 10.0)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA busy_timeout = {busy_ms}")
+        if deadline is not None or cancel is not None:
+            conn.set_progress_handler(lambda: int((cancel is not None and cancel.is_set()) or
+                (deadline is not None and time.monotonic() >= deadline)), 1000)
+        check_deadline(deadline, cancel)
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def bump_catalog_version(conn: sqlite3.Connection) -> None:

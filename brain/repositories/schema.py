@@ -92,6 +92,14 @@ def apply_migrations(conn):
                     elif version == 13:
                         from repositories.base import bump_catalog_version
                         bump_catalog_version(conn)
+                    if version == 16:
+                        from repositories.share_entities import backfill
+                        backfill(conn)
+                        for kind, table in (('album', 'albums'), ('artist', 'artists')):
+                            cursor.execute(f"""CREATE TRIGGER IF NOT EXISTS share_register_{table}
+                                AFTER INSERT ON {table} BEGIN
+                                INSERT OR IGNORE INTO share_entities(entity_type,public_id,state)
+                                VALUES ('{kind}',CAST(NEW.id AS TEXT),'active'); END""")
                     if version == 15:
                         # Trigger bodies contain semicolons, so install them as
                         # complete statements inside the migration transaction.
@@ -119,6 +127,12 @@ def verify_and_repair_schema(cursor):
     где миграция могла быть частично применена или преждевременно
     отмечена в schema_migrations.
     """
+    # Older schema snapshots are also used by migration tooling. Backfill only
+    # after migration 016 has created the registry.
+    if cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='share_entities'").fetchone():
+        from repositories.share_entities import backfill
+        backfill(cursor.connection)
+
     # 1. Поля loudness и порядка в tracks
     _ensure_columns(cursor, "tracks", {
         "loudness_lufs": "REAL",

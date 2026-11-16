@@ -97,7 +97,7 @@ def get_artwork_metadata(artist_id: str) -> dict | None:
 def get_artist_detail(artist_id: str, base_url: str) -> dict | None:
     if not artist_id:
         return None
-    artist_summary = find_artist_by_id(artist_id)
+    artist_summary = registered_artist_summary(artist_id)
     if not artist_summary:
         return None
     if is_various_artists(artist_summary.get("name")):
@@ -132,6 +132,7 @@ def get_artist_detail(artist_id: str, base_url: str) -> dict | None:
 def public_artist(artist: dict, base_url: str) -> dict:
     item = {
         "id": artist["id"],
+        "share_id": str(artist["id"]),
         "name": artist["name"],
         "track_count": artist["track_count"],
         "album_count": artist["album_count"],
@@ -244,3 +245,17 @@ def remove_artwork_atomically(artist_id: str, path: str) -> None:
     finally:
         conn.close()
     _discard_artwork_backup(backup_path)
+
+
+def registered_artist_summary(artist_id):
+    """Detail existence includes registered profiles with no memberships."""
+    conn=get_connection()
+    try:
+        row=conn.execute("""SELECT ar.*,
+            (SELECT COUNT(*) FROM track_artists ta WHERE ta.artist_id=ar.id) AS track_count,
+            (SELECT COUNT(*) FROM album_artists aa WHERE aa.artist_id=ar.id AND EXISTS (SELECT 1 FROM tracks t WHERE t.album_id=aa.album_id)) AS album_count,
+            COALESCE((SELECT CASE WHEN has_artwork THEN version ELSE 0 END FROM artist_artwork aw WHERE aw.artist_id=ar.id),0) AS artwork_version
+            FROM artists ar WHERE ar.id=?""",(artist_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()

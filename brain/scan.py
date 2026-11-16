@@ -109,29 +109,14 @@ def resync_loudness_from_qdrant(client: QdrantClient) -> int:
     logger.info(f"Loudness перенесено для {counters['synced']} треков.")
     return counters["synced"]
 
-def _index_scanned_file(file_path, rel_path, track_id):
-    """Commit source metadata before publishing a queue point."""
+def _index_scanned_file(file_path, rel_path=None, track_id=None):
+    """Commit canonical identity before any queue/Qdrant publication."""
     import db
-    from metadata import read_audio_metadata
-    from repositories.artist_credits import audio_artist_source
-    from services.media_locations import resolve_import_album
-
-    meta = read_audio_metadata(str(file_path))
-    previous = db.get_track(track_id)
-    file_changed = bool(previous and (
-        (previous.get('file_size') is not None and previous['file_size'] != meta.file_size) or
-        (previous.get('file_mtime_ns') is not None and previous['file_mtime_ns'] != meta.file_mtime_ns)
-    ))
-    album_id = resolve_import_album(track_id, meta.album, meta.album_artist,
-                                    year=meta.year, artist_source=audio_artist_source(meta, album=True))
-    db.add_or_update_track(track_id, rel_path, meta.title, album_id, meta.artist, meta.lyrics,
-                           duration=meta.duration, genre=meta.genre, file_size=meta.file_size,
-                           file_mtime_ns=meta.file_mtime_ns, track_number=meta.track_number,
-                           disc_number=meta.disc_number, artist_source=audio_artist_source(meta))
-    db.update_track_metadata_from_audio(track_id, meta, album_id, preserve_empty_genre=True)
-    if file_changed:
-        db.reset_track_loudness_pending(track_id, file_size=meta.file_size, file_mtime_ns=meta.file_mtime_ns)
-    return db.get_tracks_by_ids([track_id])[str(track_id)]
+    from services.media_locations import ingest_music_file
+    row=ingest_music_file(str(file_path),source='import')
+    if row is None:
+        return None
+    return db.get_tracks_by_ids([row['id']])[row['id']]
 
 
 def main():
@@ -172,6 +157,10 @@ def main():
                 except Exception as db_err:
                     logger.warning("SQLite ingest failed for %s: %s", file_path.name, db_err)
                     continue
+
+                if indexed is None:
+                    continue
+                point_id = indexed['id']
 
                 # Qdrant failure must not prevent SQLite ingest.
                 try:

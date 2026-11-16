@@ -58,7 +58,7 @@ def normalize_text(value: Any) -> str:
     return " ".join(normalized.split()).casefold()
 
 
-def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artist_source: CreditSource | None = None) -> int:
+def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artist_source: CreditSource | None = None, conn=None) -> int:
     """Единая точка создания/поиска альбома по идентичности (title, album_artist).
 
     Пустое название канонизируется в UNKNOWN_ALBUM_TITLE; пустой album_artist
@@ -72,10 +72,12 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artis
     norm_artist = normalize_text(display_artist)
     clean_year = str(year).strip() if year else None
 
-    for attempt in (0, 1):
-        conn = get_connection()
+    own = conn is None
+    for attempt in ((0, 1) if own else (1,)):
+        conn = get_connection() if own else conn
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            if own:
+                conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM albums WHERE title_normalized = ? AND album_artist_normalized = ?",
@@ -105,7 +107,8 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artis
                 after = ingest_artist_credits(conn, 'album', row['id'], artist_source if artist_source is not None else legacy_artist_source(album_artist))
                 if updates or before != after:
                     bump_catalog_version(conn)
-                conn.commit()
+                if own:
+                    conn.commit()
                 return row["id"]
             cursor.execute(
                 """
@@ -118,15 +121,18 @@ def resolve_album(title, album_artist=None, year=None, cover_path=None, *, artis
             album_id = cursor.lastrowid
             ingest_artist_credits(conn, 'album', album_id, artist_source if artist_source is not None else legacy_artist_source(album_artist))
             bump_catalog_version(conn)
-            conn.commit()
+            if own:
+                conn.commit()
             return album_id
         except sqlite3.IntegrityError:
-            conn.rollback()
+            if own:
+                conn.rollback()
             if attempt == 0:
                 continue
             raise
         finally:
-            conn.close()
+            if own:
+                conn.close()
     raise RuntimeError("resolve_album: unreachable")
 
 
@@ -309,6 +315,9 @@ def merge_album_into(source_album_id, target_album_id) -> None:
                     f"UPDATE albums SET {', '.join(updates)} WHERE id = ?",
                     tuple(params),
                 )
+        if source and target:
+            from repositories.share_entities import alias_album
+            alias_album(conn, source_album_id, target_album_id)
         cursor.execute("DELETE FROM albums WHERE id = ?", (source_album_id,))
         bump_catalog_version(conn)
         conn.commit()
@@ -327,6 +336,8 @@ def delete_empty_albums() -> int:
         conn.execute('BEGIN IMMEDIATE')
         ids = [r[0] for r in conn.execute('SELECT id FROM albums WHERE NOT EXISTS (SELECT 1 FROM tracks WHERE album_id=albums.id)')]
         for album_id in ids:
+            from repositories.share_entities import tombstone
+            tombstone(conn, 'album', album_id)
             forget_artist_credits(conn, 'album', album_id)
             conn.execute('DELETE FROM albums WHERE id=?', (album_id,))
         if ids:
@@ -377,6 +388,7 @@ def backfill_album_identities(*, conn=None) -> int:
     cursor.execute("SELECT id, title, album_artist, year FROM albums")
     albums = [dict(row) for row in cursor.fetchall()]
 
+    has_registry=conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='share_entities'").fetchone() is not None
     merged = 0
     for album in albums:
         computed_artist = _most_frequent_track_value(cursor, album["id"], "COALESCE(album_artist, artist)")
@@ -424,11 +436,18 @@ def backfill_album_identities(*, conn=None) -> int:
                 keeper["year"] = dup["year"]
             if not keeper.get("cover_path") and dup.get("cover_path"):
                 keeper["cover_path"] = dup["cover_path"]
+            if has_registry:
+                from repositories.share_entities import alias_album
+                alias_album(conn, dup['id'], keeper['id'])
             cursor.execute("DELETE FROM albums WHERE id = ?", (dup["id"],))
             merged += 1
     if own:
         conn.commit()
 
+    if has_registry:
+        from repositories.share_entities import tombstone
+        for empty in conn.execute('SELECT id FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)').fetchall():
+            tombstone(conn, 'album', empty[0])
     cursor.execute("""
         DELETE FROM albums
         WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks WHERE album_id IS NOT NULL)

@@ -229,6 +229,10 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
 
     abs_path, effective_dir = resolve_track_file_path(db_track)
     
+    from services.delivery_service import observe
+    with track_mutation_lock(track_id, effective_dir):
+        observe(track_id, abs_path)
+
     # Read live from disk
     actual_meta = read_audio_metadata(abs_path)
 
@@ -285,14 +289,14 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
 
     from repositories.artist_credits import hydrate_track_credits
     credit_row = hydrate_track_credits([db_track])[0]
-    from serializers import serialize_track
+    from serializers import serialize_track, artist_shares
     favorite_ids = db.get_favorite_track_ids(current_user["id"]) if current_user and current_user.get("id") is not None else set()
     return {
         **serialize_track(credit_row, base_url, favorite_ids),
-        "artists": credit_row.get("artists", []),
+        "artists": artist_shares(credit_row.get("artists", [])),
         "artists_revision": credit_row.get("artists_revision", 0),
         "artist_id": credit_row.get("artist_id"),
-        "album_artists": credit_row.get("album_artists", []),
+        "album_artists": artist_shares(credit_row.get("album_artists", [])),
         "album_artists_revision": credit_row.get("album_artists_revision", 0),
         "id": track_id,
         "title": effective_title or db_track["title"],
@@ -463,7 +467,15 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
     # Two-tier lock (Process + Sidecar file lock)
     with track_mutation_lock(track_id, effective_dir):
         stat = os.stat(abs_path)
-        journal_id = db.log_mutation_journal(track_id, "prepared", stat.st_size, stat.st_mtime_ns)
+        from repositories import delivery
+        from services.delivery_service import observe
+        import time
+        try:
+            with delivery.transaction(time.monotonic()+.1) as conn:
+                delivery.reserve_retirement(conn, track_id)
+                journal_id = conn.execute("INSERT INTO track_mutation_journal(track_id,status,old_size,old_mtime_ns) VALUES (?,'prepared',?,?)", (track_id,stat.st_size,stat.st_mtime_ns)).lastrowid
+        except (TimeoutError,):
+            raise HTTPException(503, detail={'code':'delivery_busy','message':'Delivery busy'}, headers={'Retry-After':'1'}) from None
 
         try:
             actual_meta = safe_replace_audio_file(abs_path, patch)
@@ -515,9 +527,11 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
                     print(f"[metadata] Warning calculating cover color: {e}")
 
             db.update_mutation_journal(journal_id, "committed")
+            observe(track_id, abs_path)
 
         except Exception as e:
             db.update_mutation_journal(journal_id, "failed")
+            observe(track_id, abs_path)
             raise HTTPException(status_code=500, detail=f"Failed to update audio file tags: {e}")
 
     # Return updated track
@@ -542,6 +556,8 @@ def resync_track_from_disk(track_id: str, current_user: Optional[Dict[str, Any]]
 
     with track_mutation_lock(track_id, effective_dir):
         actual_meta = read_audio_metadata(abs_path)
+        from services.delivery_service import observe
+        observe(track_id, abs_path, retry_failed=True)
         album_id = _album_for_audio_metadata(db_track, actual_meta)
 
         db.update_track_metadata_from_audio(
@@ -550,6 +566,13 @@ def resync_track_from_disk(track_id: str, current_user: Optional[Dict[str, Any]]
             album_id=album_id,
             cover_version_inc=False
         )
+
+    conn=db.get_connection()
+    try:
+        conn.execute("UPDATE track_mutation_journal SET status='committed' WHERE track_id=? AND status IN ('prepared','replaced','failed')",(track_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
     updated = get_track_metadata_details(track_id, current_user or {"role": "admin"}, base_url)
     return {

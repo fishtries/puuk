@@ -43,6 +43,7 @@ def search_library(
         artists.append({
             "id": artist_id,
             "artist_id": artist_id,
+            "share_id": artist_id,
             "name": art["name"],
             "track_count": art.get("track_count", 0),
             "album_count": art.get("album_count", 0),

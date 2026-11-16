@@ -1,0 +1,139 @@
+{
+  "files": [
+    {
+      "path": "api.py",
+      "sha256": "3f43c72ba307985528e3cb493f44a433ce865dd2509a62bcf61a700aa6034a0c",
+      "before": "a279547a214ad4e713ae7818fb380e869a8c49de147eee2f07412ad74ef53bc7"
+    },
+    {
+      "path": "auth.py",
+      "sha256": "9b987ef41fd1ced018fbee13d34b9284fea74202aeea01ffc8803221b024ca1a",
+      "before": "23782d62060fd3aa98638c477d6752ab1789a7586c0a3accd007b5f33a8038e8"
+    },
+    {
+      "path": "config.py",
+      "sha256": "69b643b2e724f884ee1e42968f4a754131d523c5aa88783fca52689dc1d1b7df",
+      "before": "4029eaf4d6f5822fc80429f9395ddc2f929eaccd37dc8644e3fbcb9523f65d41"
+    },
+    {
+      "path": "metadata.py",
+      "sha256": "bb539d456cce63f49ef766fee4a98dc8987aecaf03230b4dc41cc6b6aeb624c4",
+      "before": "85db970577c86bdae813575a3f27ad5246043a26e03354185bacfd2cf11ff19a"
+    },
+    {
+      "path": "migrations/016_cdn_share_contract.sql",
+      "sha256": "7be022d6e9227c2cf184cfd30b24b00f855d7adb76b63776fbdce64eff010547",
+      "before": null
+    },
+    {
+      "path": "repositories/albums.py",
+      "sha256": "5d91259946559cc4bf37150baca58153b553e88f6a4b2f4fd3a67a43cd67645a",
+      "before": "1b7324020503839e592e93082714b577f1fbbfc18a3f00c21303135cd3a1f618"
+    },
+    {
+      "path": "repositories/artists.py",
+      "sha256": "884de0c8b41f695d214d66d937d04b16e636a8d4740a3b4fb03869933d4b29f7",
+      "before": "b13efc4732e6add2db34f62d111c56b792971caea871f5f56915ddeaa2d8810f"
+    },
+    {
+      "path": "repositories/base.py",
+      "sha256": "ee05f2769a2fdaaff8627243306ad6b943be044446ca74a758cf229244b381d4",
+      "before": "348365599eb32d2300c441175e5f6c611a61eb84b385eb5fb1ff99ac24187044"
+    },
+    {
+      "path": "repositories/delivery.py",
+      "sha256": "99db0e85e28b5303fdecd9a297945d4cce7839fede52d9af41973c24c7f24d91",
+      "before": null
+    },
+    {
+      "path": "repositories/schema.py",
+      "sha256": "6a4354f57e3626aa6d4b033260de80eebf629ef2f8a35c4b82e91e754c825db5",
+      "before": "6e5f0d6bc30966e4db10112ae6e04d95d1922409bbdaa6a04c80e55a4153538a"
+    },
+    {
+      "path": "repositories/share_entities.py",
+      "sha256": "0d8060e952b8559c1aaf9b6cd9e0dd89c6c91bd7275bd0951d0940ed850cb076",
+      "before": null
+    },
+    {
+      "path": "repositories/tracks.py",
+      "sha256": "bdebe1718d462423ebf128c6db36eb75d690d79da4cc03188207b4ce9b9f826c",
+      "before": "126debf93879124bc3e3d400a7c881b8f1e17e807124767ae0c41f3d79857350"
+    },
+    {
+      "path": "repositories/users.py",
+      "sha256": "2875c2159b8f38850cd5bce42d336c5d4e9ccd1eb2f832736ab8e98e22f559b9",
+      "before": "f3a6426b4f2412d71600fd9dc34c5e2c39ce77767c9fead1736c26fd4c5d1ee9"
+    },
+    {
+      "path": "routers/search.py",
+      "sha256": "babed270806408b3f862715367e8f881d1b0d222311e96ef434a2f6466f4600b",
+      "before": "0a689553c27db02de49efde4429a28b93fa56568157babb63b638b2d633b1ad6"
+    },
+    {
+      "path": "routers/share.py",
+      "sha256": "aa56836b62bd91b0bc79f52a8093876c1bac17476dc67a07f96214089d754891",
+      "before": null
+    },
+    {
+      "path": "routers/streaming.py",
+      "sha256": "9eccac3089a1512956d3410222b334a46c5454c2f684bc659176a75c8481144c",
+      "before": "6382aae1a9ebaee0ed00bc597832a3809e6787b89773e38cde534a9b2d688a87"
+    },
+    {
+      "path": "scan.py",
+      "sha256": "fcc6ed5cb5bdcfd9ad25b823ab2c3130e8062939502976544f88c9aff41d11d6",
+      "before": "87c0dfbaf3ff9f39e481bca001e1265507742384bbacbb5147cab49ce453107f"
+    },
+    {
+      "path": "serializers.py",
+      "sha256": "acc811c2c2e9668a274fe96ed9255cebe1c29c1110e9f9c45f78eb1529b8604a",
+      "before": "60117f4e1a37e8f7f49790a9b6196dc43f1b00529b88bed72250ebb3836e5c32"
+    },
+    {
+      "path": "services/album_service.py",
+      "sha256": "cc0ccbc163d56f2f711ad4dad1e11f9477bf46924ab0fd4acbf9e9e7a123768b",
+      "before": "2175de35c0c65fd83b3d55f85954d85345de1adb5a81b60311fd1f18841c2b5f"
+    },
+    {
+      "path": "services/cdn_purge_service.py",
+      "sha256": "005498ca9bf9a00ecef6d33bcc97e93274d1fa2a5cb1d106e19375343222b92c",
+      "before": null
+    },
+    {
+      "path": "services/content_version_service.py",
+      "sha256": "660ad031e3a7b0a7d56d30580d69ef23d6a722358ec1089142942fb440bbb341",
+      "before": null
+    },
+    {
+      "path": "services/delivery_boundary.py",
+      "sha256": "5fb695ca6d12e5ec84b04347d7136be4cee2adaf94e26c3713b273df3ccd5acc",
+      "before": null
+    },
+    {
+      "path": "services/delivery_service.py",
+      "sha256": "c685299940e3a4e3f646912b119f676f4383c6be8f1bac62074be5bd7938ef6e",
+      "before": null
+    },
+    {
+      "path": "services/library_service.py",
+      "sha256": "8419865b3cd0cd86adaf05e197c6f39efb7c5846aaf454733882e7224bb5a9e0",
+      "before": "0c41e68a8236cf8eb59f09fe68f7ed143b6b0f54ef1b96d0015f9341043cc804"
+    },
+    {
+      "path": "services/media_locations.py",
+      "sha256": "76ee5214e1e363e1686716d4820f2a3b0a9cbe51fffc0b9e7ecd4b078d19ed0d",
+      "before": "030a89c5bc035a672c17b6eb6b9748d1b73e672cd475aaecbe1ec248bd4ba4ea"
+    },
+    {
+      "path": "services/track_deletion_service.py",
+      "sha256": "28e934f60bf29ea23e53cb46bb9b619d11c1b6350f510906565a00d37fb9787a",
+      "before": "92ed6132d3eb80ff98b240c00444755ce01ff2b90d032a1c2e253c0cfd2ab9a5"
+    },
+    {
+      "path": "services/track_metadata_service.py",
+      "sha256": "206d0d0bf4fedcc3ce93da99d7c2697343b935046536e61e34d0c9ed90254904",
+      "before": "476adf67fe19d0c9a1d512925947d698cf643579bb278f83ee72d3e86e966fb6"
+    }
+  ]
+}

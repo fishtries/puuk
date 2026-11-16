@@ -685,7 +685,8 @@ import threading
 from collections import defaultdict
 from contextlib import contextmanager
 
-_process_locks = defaultdict(threading.Lock)
+import weakref
+_process_locks = weakref.WeakValueDictionary()
 _process_lock_guard = threading.Lock()
 
 
@@ -719,31 +720,64 @@ def validate_safe_path(rel_path: str, music_dir: str) -> str:
 
 def _get_process_lock(track_id: str) -> threading.Lock:
     with _process_lock_guard:
-        return _process_locks[track_id]
+        lock = _process_locks.get(track_id)
+        if lock is None:
+            lock = threading.Lock()
+            _process_locks[track_id] = lock
+        return lock
 
 
 @contextmanager
-def track_mutation_lock(track_id: str, music_dir: str):
-    """
-    Two-tier mutex:
-    1. In-process threading.Lock per track_id.
-    2. Sidecar file lock fcntl.flock on <music_dir>/.mutation_locks/<track_id>.lock
-    """
-    proc_lock = _get_process_lock(track_id)
-    lock_dir = os.path.join(music_dir, ".mutation_locks")
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(lock_dir, f"{track_id}.lock")
-
-    with proc_lock:
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
-        try:
+def track_mutation_lock(track_id: str, music_dir: str, deadline=None, cancel=None):
+    """Shared writer/descriptor lock; optional budget covers both lock levels."""
+    import time
+    import hashlib
+    from repositories.base import check_deadline
+    def remaining():
+        check_deadline(deadline, cancel)
+        return max(0, deadline-time.monotonic()) if deadline is not None else None
+    wait = remaining()
+    acquired_guard = _process_lock_guard.acquire() if wait is None else _process_lock_guard.acquire(timeout=wait)
+    if not acquired_guard:
+        raise TimeoutError('delivery_busy')
+    try:
+        proc_lock = _process_locks.get(track_id)
+        if proc_lock is None:
+            proc_lock = threading.Lock()
+            _process_locks[track_id] = proc_lock
+    finally:
+        _process_lock_guard.release()
+    wait = remaining()
+    acquired = proc_lock.acquire() if wait is None else proc_lock.acquire(timeout=wait)
+    if not acquired:
+        raise TimeoutError('delivery_busy')
+    lock_fd = None
+    try:
+        remaining()
+        lock_dir = os.path.join(music_dir, '.mutation_locks')
+        os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+        # All writers use the same normalized safe key, including historical IDs.
+        key = hashlib.sha256(str(track_id).encode()).hexdigest()
+        lock_fd = os.open(os.path.join(lock_dir, key+'.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+        if deadline is None and cancel is None:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            yield
-        finally:
+        else:
+            while True:
+                remaining()
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(min(0.01, remaining() or 0.01))
+        remaining()
+        yield
+    finally:
+        if lock_fd is not None:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
             finally:
                 os.close(lock_fd)
+        proc_lock.release()
 
 
 def safe_replace_audio_file(abs_path: str, patch: MetadataPatch) -> AudioMetadata:

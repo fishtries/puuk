@@ -107,13 +107,16 @@ def get_track_artist_map() -> Dict[str, Optional[str]]:
     conn.close()
     return mapping
 
-def get_track(track_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tracks WHERE id = ?", (track_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
+def get_track(track_id, *, conn=None):
+    own = conn is None
+    conn = get_connection() if own else conn
+    try:
+        row = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        if own:
+            conn.close()
+
 
 def delete_track(track_id) -> bool:
     """
@@ -126,6 +129,10 @@ def delete_track(track_id) -> bool:
     try:
         conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
+        from repositories.share_entities import tombstone
+        from repositories.delivery import reserve_retirement
+        reserve_retirement(conn, track_id, deleting=True)
+        tombstone(conn, 'track', track_id)
         forget_artist_credits(conn, 'track', track_id)
         cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         deleted = cursor.rowcount > 0
@@ -241,12 +248,17 @@ def add_or_update_track(
     track_number=None,
     disc_number=None,
     album_track_position=None,
-    *, artist_source: CreditSource | None = None,
+    *, artist_source: CreditSource | None = None, conn=None,
 ):
     genre_value = _clean_genre(genre)
-    conn = get_connection()
+    own = conn is None
+    conn = get_connection() if own else conn
     try:
-        conn.execute('BEGIN IMMEDIATE')
+        if own:
+            conn.execute('BEGIN IMMEDIATE')
+        from repositories.share_entities import claim_track_identity, IdentityNotClaimed
+        if claim_track_identity(conn, file_path, 'recovery', track_id) != str(track_id):
+            raise IdentityNotClaimed('identity_not_claimed')
         before = _track_fingerprint(conn, track_id)
         album_id = _recovery_album(conn, track_id, album_id)
         cursor = conn.cursor()
@@ -270,16 +282,21 @@ def add_or_update_track(
                 INSERT INTO tracks (id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre, file_size, file_mtime_ns, track_number, disc_number, album_track_position)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (track_id, file_path, title, album_id, artist, lyrics, added_by_user_id, cover_color, duration, genre_value, file_size, file_mtime_ns, track_number, disc_number, album_track_position))
+        from repositories.delivery import enqueue
+        enqueue(track_id, conn=conn)
         ingest_artist_credits(conn, 'track', track_id, artist_source if artist_source is not None else legacy_artist_source(artist))
         conn.execute("UPDATE artist_credit_state SET recovery_album_id=(SELECT album_id FROM tracks WHERE id=?) WHERE entity_type='track' AND entity_id=?", (track_id, str(track_id)))
         if _track_fingerprint(conn, track_id) != before:
             bump_catalog_version(conn)
-        conn.commit()
+        if own:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if own:
+            conn.rollback()
         raise
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 def update_track_cover_color(track_id, cover_color):
     conn = get_connection()
@@ -394,7 +411,7 @@ def update_track_metadata(track_id, title, artist, album_id, lyrics, *, artist_s
 UNCHANGED = object()
 
 
-def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Any = UNCHANGED, *, artist_source: CreditSource | None = None, album_artist_source: CreditSource | None = None):
+def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Any = UNCHANGED, *, artist_source: CreditSource | None = None, album_artist_source: CreditSource | None = None, conn=None):
     """
     Обновляет запись трека в SQLite фактическими данными, прочитанными из файла на диске.
 
@@ -402,9 +419,11 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
     не затирает существующее непустое значение в БД. По умолчанию False —
     ручные PATCH/resync-потоки, где файл является источником истины.
     """
-    conn = get_connection()
+    own = conn is None
+    conn = get_connection() if own else conn
     try:
-        conn.execute('BEGIN IMMEDIATE')
+        if own:
+            conn.execute('BEGIN IMMEDIATE')
         before = _track_fingerprint(conn, track_id)
         album_id = _recovery_album(conn, track_id, album_id)
         cursor = conn.cursor()
@@ -479,12 +498,15 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
             album_changed = False
         if _track_fingerprint(conn, track_id) != before or album_changed:
             bump_catalog_version(conn)
-        conn.commit()
+        if own:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if own:
+            conn.rollback()
         raise
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 # --- Журнал мутаций (Mutation Journal) ---
@@ -513,7 +535,7 @@ def get_uncommitted_mutations() -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM track_mutation_journal
-        WHERE status = 'replaced'
+        WHERE status IN ('prepared','replaced','failed')
         ORDER BY created_at ASC
     """)
     rows = cursor.fetchall()

@@ -16,13 +16,14 @@ def create_user(username: str, password_hash: str = None, telegram_id: int = Non
     conn.close()
     return user_id
 
-def get_user_by_id(user_id: int) -> dict | None:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
+def get_user_by_id(user_id: int, *, deadline=None, cancel=None) -> dict | None:
+    conn = get_connection(deadline=deadline, cancel=cancel)
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
 
 def get_user_by_username(username: str) -> dict | None:
     conn = get_connection()

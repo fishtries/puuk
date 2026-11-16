@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Optional
+from typing import Optional, Literal
 
 import db
 from auth import (
@@ -28,49 +28,26 @@ router = APIRouter(tags=["streaming"])
 
 class MediaTicketRequest(BaseModel):
     track_id: str
+    delivery: Literal['direct', 'cdn'] = 'direct'
 
 
 class MediaTicketResponse(BaseModel):
     url: str
     expires_in: int
     expires_at: int
+    delivery: Literal['direct', 'cdn']
+    server_time: int
+    content_version: str | None
+    content_length: int | None
+    download_binding: Literal['if-match', 'immutable-path'] | None
+    delivery_epoch: str
+    cache_for: int
 
 
-@router.post("/api/media-ticket", response_model=MediaTicketResponse)
-def issue_media_ticket(
-    payload: MediaTicketRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Выдаёт короткоживущий media-тикет для стриминга одного трека.
-    Веб получает его по Bearer (обычный fetch), затем <audio> играет
-    /api/stream/{id}?mt=... напрямую — поток с Range вместо полной blob-загрузки.
-
-    Трек проверяется до выдачи: обычный путь — SQLite; при отсутствии записи
-    допускается одна попытка восстановления из Qdrant (файл должен существовать
-    внутри музыкального каталога). Несуществующий/удалённый/невоспроизводимый
-    трек -> 404, чтобы клиенты не получали тикет, ведущий к бесполезному запросу.
-    """
-    try:
-        uuid.UUID(payload.track_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Невалидный track_id")
-
-    track = db.get_track(payload.track_id)
-    if not track:
-        track = _recover_missing_track(payload.track_id, "media-ticket")
-    if not track:
-        raise HTTPException(status_code=404, detail="Трек не найден")
-
-    if not _resolve_db_file_path(track):
-        raise HTTPException(status_code=404, detail="Файл трека не найден")
-
-    ticket, expires_at = create_media_ticket_with_expiry(current_user, payload.track_id)
-    return MediaTicketResponse(
-        url=f"/api/stream/{payload.track_id}?mt={ticket}",
-        expires_in=MEDIA_TICKET_TTL_SECONDS,
-        expires_at=expires_at,
-    )
+@router.post('/api/media-ticket', response_model=MediaTicketResponse)
+async def issue_media_ticket(payload: MediaTicketRequest, request: Request):
+    from services.delivery_service import executor, issue
+    return await executor.run(request,lambda deadline,cancel: issue(request,payload.track_id,payload.delivery,deadline,cancel))
 
 
 def _resolve_db_file_path(db_track: dict) -> Optional[str]:
@@ -149,49 +126,16 @@ def _resolve_stream_file_path(
     return file_path
 
 
-@router.get("/api/stream/{track_id}")
-def stream_track(track_id: str, current_user: dict = Depends(get_stream_user)):
-    """
-    Стриминг аудиофайла по track_id.
-    Обычный путь читает SQLite и локальный файл; Qdrant используется только для
-    восстановления записи при SQLite cache miss.
-    """
-    try:
-        uuid.UUID(track_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Невалидный track_id")
+@router.api_route('/api/stream/{track_id}', methods=['GET', 'HEAD'])
+async def stream_track(track_id: str, request: Request):
+    from services.delivery_service import executor, stream
+    return await executor.run(request,lambda deadline,cancel: stream(request,track_id,deadline,cancel))
 
-    started_at = time.perf_counter()
-    db_track = db.get_track(track_id)
-    recovery_path = not db_track
-    if not db_track:
-        db_track = _recover_missing_track(track_id, "stream")
 
-    file_path = _resolve_db_file_path(db_track) if db_track else None
-    logger.info(
-        "stream file resolution completed path=%s track_id=%s found=%s duration_ms=%.2f",
-        "recovery" if recovery_path else "sqlite",
-        track_id,
-        bool(file_path and os.path.isfile(file_path)),
-        (time.perf_counter() - started_at) * 1000,
-    )
-
-    if not file_path or not os.path.isfile(file_path):
-        if db_track:
-            logger.warning(
-                "stream: track %s in DB but file missing on disk: %s",
-                track_id,
-                file_path or db_track.get("file_path"),
-            )
-        raise HTTPException(status_code=404, detail="Файл трека не найден")
-
-    from services.cover_extractor import get_media_type
-
-    return FileResponse(
-        path=file_path,
-        media_type=get_media_type(file_path),
-        filename=os.path.basename(file_path),
-    )
+@router.api_route('/cdn/audio/{track_id}/{content_version}', methods=['GET', 'HEAD'])
+async def protected_audio(track_id: str, content_version: str, request: Request):
+    from services.delivery_service import executor, stream
+    return await executor.run(request,lambda deadline,cancel: stream(request,track_id,deadline,cancel,content_version))
 
 
 _COVER_CACHE_CONTROL = "private, max-age=86400"

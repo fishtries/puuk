@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 import db
 from repositories.albums import UNCHANGED
-from serializers import serialize_track
+from serializers import serialize_track, artist_shares
 from services.artist_credit_lock import serialize_artist_credit_mutation
 from services.track_metadata_service import (
     check_track_edit_permissions,
@@ -34,10 +34,11 @@ def serialize_album(row: Dict[str, Any], base_url: str) -> Dict[str, Any]:
     stored_artist = row.get("album_artist") or ""
     return {
         "id": row["id"],
+        "share_id": str(row["id"]),
         "title": row["title"],
         "album_artist": stored_artist,
         "artist_id": row.get("artist_id"),
-        "artists": row.get("artists", []),
+        "artists": artist_shares(row.get("artists", [])),
         "artists_revision": row.get("artists_revision", 0),
         "artist": stored_artist or db.VARIOUS_ARTISTS,
         "year": row.get("year"),
@@ -257,7 +258,7 @@ def update_album(album_id: int, payload, current_user: Dict[str, Any], base_url:
 
     succeeded: List[str] = []
     failed: List[Dict[str, Any]] = []
-    for t in track_rows:
+    for t in sorted(track_rows,key=lambda item:str(item['id'])):
         try:
             mutate_track_metadata(
                 t["id"], track_payload, current_user, base_url, target_album_id=canonical_id

@@ -35,14 +35,19 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
 
     artist_id = r.get("artist_id")
 
+    from repositories.delivery import get_version
+    version = get_version(track_id)
     return {
+        "share_id": track_id,
+        "album_share_id": str(r['album_id']) if r.get('album_id') is not None else None,
+        "content_version": version['content_version'] if version and version['state'] == 'ready' else None,
         "id": track_id,
         "title": r.get("title", ""),
         "artist": r.get("artist", ""),
         "artist_id": artist_id,
-        "artists": r.get("artists", []),
+        "artists": artist_shares(r.get("artists", [])),
         "artists_revision": r.get("artists_revision", 0),
-        "album_artists": r.get("album_artists", []),
+        "album_artists": artist_shares(r.get("album_artists", [])),
         "album_artists_revision": r.get("album_artists_revision", 0),
         "album": album_name,
         "album_id": r.get("album_id"),
@@ -79,3 +84,17 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
         "favorited_at": r.get("favorited_at"),
         "played_at": r.get("played_at")
     }
+
+
+def artist_shares(artists):
+    return [{**item, 'share_id':str(item['id'])} for item in artists]
+
+
+_SHARE_TRACK_FIELDS = frozenset(('id','share_id','album_share_id','content_version','title','artist','artist_id','artists',
+    'album_artists','album','album_id','album_artist','year','genre','track_number','disc_number','album_track_position',
+    'has_lyrics','duration','bitrate','sample_rate','channels','format','coverArt','cover_version','cover_color','is_liked',
+    'normalization_gain_db','loudness_status','loudness_lufs','true_peak_db'))
+
+
+def share_track(dto):
+    return {key:value for key,value in dto.items() if key in _SHARE_TRACK_FIELDS}

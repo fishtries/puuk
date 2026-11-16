@@ -23,23 +23,9 @@ logger = logging.getLogger("puuk.auth")
 # Секрет задается только через окружение. Без него используется случайный
 # временный секрет (никакого известного дефолта в коде): токены остаются
 # недействительными после перезапуска, поэтому в production JWT_SECRET обязателен.
-JWT_SECRET = os.getenv("JWT_SECRET")
-if not JWT_SECRET:
-    JWT_SECRET = secrets.token_hex(32)
-    logger.warning(
-        "JWT_SECRET не задан — используется случайный временный секрет. "
-        "Выданные токены перестанут действовать после перезапуска. "
-        "Задайте JWT_SECRET в переменных окружения."
-    )
+from config import JWT_SECRET, JWT_EXPIRATION_DAYS, MEDIA_TICKET_TTL_SECONDS
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_DAYS = int(os.getenv("JWT_EXPIRATION_DAYS", "30"))
-
-# Media-ticket: короткоживущий подписанный токен для стриминга одного трека.
-# Нужен, потому <audio> не может отправлять Authorization-заголовок, а полная
-# blob-загрузка блокировала переключение треков на время скачивания файла.
-# Тикет привязан к track_id (tid) и не даёт доступа к остальному API.
 MEDIA_TICKET_SCOPE = "media"
-MEDIA_TICKET_TTL_SECONDS = int(os.getenv("MEDIA_TICKET_TTL_SECONDS", "600"))
 
 # auto_error=False: обе зависимости (строгая и опциональная) сами решают,
 # как обрабатывать запрос без токена
@@ -130,7 +116,9 @@ def verify_media_ticket(token: str, track_id: str) -> Optional[dict]:
         return None
     try:
         user_id = int(payload["sub"])
-    except ValueError:
+        if not 0 < user_id <= 2**63-1:
+            raise ValueError("invalid_user_id")
+    except (ValueError, TypeError):
         return None
     user = db.get_user_by_id(user_id)
     if not user:
@@ -153,7 +141,7 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> dict:
         )
 
     payload = decode_access_token(token)
-    if not payload or "sub" not in payload:
+    if not payload or payload.get("scope") == MEDIA_TICKET_SCOPE or "sub" not in payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный или истекший токен авторизации",
@@ -161,7 +149,9 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> dict:
         )
     try:
         user_id = int(payload["sub"])
-    except ValueError:
+        if not 0 < user_id <= 2**63-1:
+            raise ValueError("invalid_user_id")
+    except (ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Некорректный идентификатор пользователя в токене",
