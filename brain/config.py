@@ -84,6 +84,7 @@ CDN_SIGNING_SECRET = os.getenv('CDN_SIGNING_SECRET', '')
 CDN_ORIGIN_SECRET = os.getenv('CDN_ORIGIN_SECRET', '')
 CDN_RESOURCE_ID = os.getenv('CDN_RESOURCE_ID', '')
 CDN_PURGE_TOKEN = os.getenv('CDN_PURGE_TOKEN', '')
+CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH = os.getenv('CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH', '')
 CDN_TICKET_TTL_SECONDS = _delivery_int('CDN_TICKET_TTL_SECONDS', 1800, 60, 1800)
 CDN_DELIVERY_EPOCH = os.getenv('CDN_DELIVERY_EPOCH', 'direct-v1')
 if not _re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', CDN_DELIVERY_EPOCH):
@@ -112,8 +113,14 @@ def validate_delivery_config():
         if len({JWT_SECRET, CDN_SIGNING_SECRET, CDN_ORIGIN_SECRET}) != 3:
             raise ValueError('Delivery secrets must be independent')
     if CDN_PURGE_ENABLED or CDN_DELIVERY_ENABLED:
-        if not _re.fullmatch(r'[a-zA-Z0-9_-]{1,50}', CDN_RESOURCE_ID) or not CDN_PURGE_TOKEN or len(CDN_PURGE_TOKEN)>7000 or any(ord(c)<33 or ord(c)>126 for c in CDN_PURGE_TOKEN):
+        key_path = CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH
+        if key_path and (not os.path.isabs(key_path) or '\x00' in key_path or '..' in key_path.split('/')):
+            raise ValueError('CDN purge: invalid credential path')
+        if not _re.fullmatch(r'[a-zA-Z0-9_-]{1,50}', CDN_RESOURCE_ID) or not (CDN_PURGE_TOKEN or key_path) or (CDN_PURGE_TOKEN and key_path) or len(CDN_PURGE_TOKEN)>7000 or any(ord(c)<33 or ord(c)>126 for c in CDN_PURGE_TOKEN):
             raise ValueError('CDN purge: incomplete security configuration')
+        if key_path:
+            from services.cdn_credentials import service_account_key
+            service_account_key(key_path)
     return True
 
 

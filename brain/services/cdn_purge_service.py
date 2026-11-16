@@ -12,6 +12,7 @@ import time
 import uuid
 import config
 from repositories import delivery
+from services.cdn_credentials import service_account_key, service_account_token, retry_after
 from services.content_version_service import OwnerSupervisor
 
 logger=logging.getLogger('puuk.delivery')
@@ -94,10 +95,10 @@ class PurgeSupervisor(OwnerSupervisor):
                     first_attempt_at=COALESCE(first_attempt_at,?),submitted_revision=revision,lease_until=?,changed_at=? WHERE id=? AND fence=?""",(now,now+60,now,self.job,self.fence))
                 row['attempts']+=1
                 row['first_attempt_at']=row['first_attempt_at'] or now
-        data={'token':config.CDN_PURGE_TOKEN,'resource':config.CDN_RESOURCE_ID,
-            'operation':row['operation_id'] if polling else None,'paths':[row['path']]}
-        raw=json.dumps(data,separators=(',',':')).encode()
         try:
+            data={**credential_payload(),'resource':config.CDN_RESOURCE_ID,
+                'operation':row['operation_id'] if polling else None,'paths':[row['path']]}
+            raw=json.dumps(data,separators=(',',':')).encode()
             if len(raw)>8192:
                 raise ValueError('configuration_invalid')
             result=self.run_child('services.cdn_purge_service',['--http-job'],budget=10,limit=4096,stdin=raw,renew=self.renew)
@@ -143,16 +144,22 @@ class PurgeSupervisor(OwnerSupervisor):
         logger.warning('delivery_purge reason=%s',reason)
 
 
+def credential_payload():
+    if config.CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH:
+        return {'service_account_key':service_account_key(config.CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH)}
+    return {'token':config.CDN_PURGE_TOKEN}
+
+
 def http_job():
     # No application/router/Qdrant import. urllib redirect handling is explicitly
     # disabled; HTTPSConnection has no proxy environment or transport retry.
     import http.client
     import ssl
     import socket
-    from email.utils import parsedate_to_datetime
     end=time.monotonic()+10
     data=json.loads(sys.stdin.buffer.read(8193))
-    if not _ID.fullmatch(data.get('resource','')) or not isinstance(data.get('token'),str) or len(data['token'])>7000 or '\r' in data['token'] or '\n' in data['token']:
+    token=data.get('token','')
+    if not _ID.fullmatch(data.get('resource','')) or not isinstance(token,str) or len(token)>7000 or any(ord(c)<33 or ord(c)>126 for c in token):
         raise ValueError()
     operation=data.get('operation')
     if operation is not None:
@@ -165,18 +172,19 @@ def http_job():
             raise ValueError()
         host='cdn.api.cloud.yandex.net'; path='/cdn/v1/cache/'+data['resource']+':purge'; method='POST'
         body=json.dumps({'paths':paths}).encode()
+    if 'service_account_key' in data:
+        if token:raise ValueError('ambiguous_credentials')
+        token=service_account_token(data['service_account_key'],end)
+        if isinstance(token,dict):
+            print(json.dumps(token));return
+    if not token or time.monotonic()>=end:raise ValueError('credential_unavailable')
     conn=http.client.HTTPSConnection(host,timeout=min(2,end-time.monotonic()),context=ssl.create_default_context())
     try:
-        conn.request(method,path,body=body,headers={'Authorization':'Bearer '+data['token'],'Content-Type':'application/json','Accept':'application/json'})
+        conn.request(method,path,body=body,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
         response=conn.getresponse()
         if not 200<=response.status<300:
             retry=response.status==429 or response.status>=500
-            after=response.getheader('Retry-After','0')
-            try:
-                after=float(after) if after.isdigit() else max(0,parsedate_to_datetime(after).timestamp()-time.time())
-            except (ValueError,TypeError,OverflowError):
-                after=0
-            print(json.dumps({'status':'retry' if retry else 'terminal','reason':'http_error','retry_after':min(86400,after)}))
+            print(json.dumps({'status':'retry' if retry else 'terminal','reason':'http_error','retry_after':retry_after(response)}))
             return
         raw=bytearray()
         while True:

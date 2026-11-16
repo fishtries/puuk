@@ -127,7 +127,7 @@ def invalidate(track_id, *, deleting=False, unmanaged=False, deadline=None, canc
 
 def purge_healthy(conn=None):
     import config
-    if not config.CDN_PURGE_ENABLED or not config.CDN_RESOURCE_ID or not config.CDN_PURGE_TOKEN:
+    if not config.CDN_PURGE_ENABLED or not config.CDN_RESOURCE_ID or not (config.CDN_PURGE_TOKEN or config.CDN_PURGE_SERVICE_ACCOUNT_KEY_PATH):
         return False
     own = conn is None
     conn = get_connection() if own else conn
