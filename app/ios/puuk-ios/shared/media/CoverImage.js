@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Image, View, StyleSheet } from 'react-native';
+import { Image, View, StyleSheet, PixelRatio } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
   getCachedAuthHeaders,
@@ -136,6 +136,14 @@ export const resolveCoverUri = (rawUri, token = null, versionOrOptions = null) =
       const separator = targetUri.includes('?') ? '&' : '?';
       targetUri = `${targetUri}${separator}${vParam}`;
     }
+  }
+
+  // Preview variants retain the same authorization and artwork revision.
+  const size = typeof versionOrOptions === 'object' ? versionOrOptions?.size : null;
+  if (apiCoverIndex !== -1 && [128, 256, 512, 1024].includes(size)) {
+    const parsed = new URL(targetUri);
+    parsed.searchParams.set('size', String(size));
+    targetUri = parsed.toString();
   }
 
   // Для artwork артиста: auth только через Authorization: Bearer заголовок
@@ -308,7 +316,7 @@ function CoverImage({
         const resolvedUri = resolveCoverUri(
           rawUri,
           isArtwork ? null : authToken,
-          effectiveVersion
+          { version: effectiveVersion, size: coverPreviewSize(style, PixelRatio.get()) }
         );
         imageSource = {
           uri: resolvedUri,
@@ -346,5 +354,13 @@ function CoverImage({
 }
 
 export default React.memo(CoverImage);
+
+export function coverPreviewSize(style, density = 3) {
+  const flat = StyleSheet.flatten(style) || {};
+  const width = typeof flat.width === 'number' ? flat.width : 1024;
+  const height = typeof flat.height === 'number' ? flat.height : width;
+  const pixels = Math.max(width, height) * density;
+  return [128, 256, 512, 1024].find(size => size >= pixels) || 1024;
+}
 
 export { DEFAULT_COVER };

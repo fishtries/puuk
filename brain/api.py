@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from services.delivery_boundary import DeliveryBoundaryMiddleware
+from services.catalog_compression import CatalogCompressionMiddleware
 
 import config
 import db
@@ -193,6 +194,7 @@ app = FastAPI(
     openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
 
+app.add_middleware(CatalogCompressionMiddleware)
 app.add_middleware(
     DeliveryBoundaryMiddleware,
     account_cors_options={

@@ -10,10 +10,24 @@ import CoverImage, {
   prefetchCover,
   NeutralPlaceholder,
   DEFAULT_COVER,
+  coverPreviewSize,
 } from '../CoverImage';
 import * as api from '../../api/api';
 
 describe('components/CoverImage and utils', () => {
+  it('selects bounded previews for native pixel dimensions', () => {
+    expect(coverPreviewSize({ width: 50, height: 50 }, 3)).toBe(256);
+    expect(coverPreviewSize({ width: 300, height: 300 }, 3)).toBe(1024);
+    expect(coverPreviewSize({ width: '100%' }, 3)).toBe(1024);
+  });
+
+  it('keeps preview authorization and version while leaving artist artwork alone', () => {
+    const uri = new URL(resolveCoverUri('/api/cover/example?v=7', 'private', { size: 256 }));
+    expect(uri.searchParams.get('v')).toBe('7');
+    expect(uri.searchParams.get('token')).toBe('private');
+    expect(uri.searchParams.get('size')).toBe('256');
+    expect(resolveCoverUri('/api/artists/example/artwork', null, { size: 256 })).not.toContain('size=');
+  });
   const originalServerUrl = api.SERVER_URL;
 
   beforeEach(() => {
@@ -377,7 +391,7 @@ describe('components/CoverImage and utils', () => {
       });
 
       const image = renderer.root.findByType(Image);
-      expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/cover/track-456?token=token_123`);
+      expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/cover/track-456?size=128&token=token_123`);
       expect(image.props.source.headers).toEqual({ Authorization: 'Bearer token_123' });
     });
   });

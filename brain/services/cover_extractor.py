@@ -1,6 +1,7 @@
 """Embedded artwork extraction (MP3/MP4/FLAC) and dominant color calculation."""
 import io
 import os
+from functools import lru_cache
 
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4
@@ -14,6 +15,43 @@ MEDIA_TYPES = {
     ".m4a": "audio/mp4",
     ".aac": "audio/aac",
 }
+
+
+def extract_cover_preview(file_path: str, size: int, version=0):
+    """Bounded preview cache; file identity and metadata revision invalidate it.
+
+    Audio and original artwork are read only. At most 32 previews of at most
+    512 KiB are retained. Callers must authenticate before using this function.
+    """
+    st = os.stat(file_path)
+    return _cover_preview(file_path, st.st_dev, st.st_ino, st.st_size,
+                          st.st_mtime_ns, st.st_ctime_ns, size, version)
+
+
+@lru_cache(maxsize=32)
+def _cover_preview(file_path, device, inode, length, mtime, ctime, size, version):
+    data, mime = extract_cover_bytes(file_path)
+    if not data:
+        return None, None
+    return resize_cover_image(data, size)
+
+
+def resize_cover_image(data, size):
+    """Render the same bounded JPEG representation for embedded/default artwork."""
+    from PIL import Image, ImageOps
+    with Image.open(io.BytesIO(data)) as source:
+        if source.width * source.height > 16_000_000:
+            raise ValueError('Artwork exceeds preview decode budget')
+        image = ImageOps.exif_transpose(source)
+        image.thumbnail((size, size), Image.Resampling.LANCZOS)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=82, optimize=True)
+    result = output.getvalue()
+    if len(result) > 512 * 1024:
+        raise ValueError('Artwork exceeds preview output budget')
+    return result, 'image/jpeg'
 
 
 def get_media_type(file_path: str) -> str:

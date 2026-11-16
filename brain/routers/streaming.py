@@ -14,11 +14,11 @@ from auth import (
     get_stream_user,
 )
 from config import get_effective_music_dir, DEFAULT_COVER_PATH, DEFAULT_COVER_COLOR
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from services.recommendation_service import client
-from services.cover_extractor import extract_cover_bytes, extract_dominant_hex
+from services.cover_extractor import extract_cover_bytes, extract_cover_preview, resize_cover_image, extract_dominant_hex
 from config import COLLECTION_NAME
 
 logger = logging.getLogger("puuk.streaming")
@@ -164,6 +164,7 @@ def get_cover_art(
     track_id: str,
     request: Request,
     current_user: dict = Depends(get_cover_user),
+    size: Optional[int] = Query(None, ge=128, le=1024),
 ):
     """
     Возвращает обложку трека из ID3-тегов файла или дефолтную обложку.
@@ -179,6 +180,8 @@ def get_cover_art(
 
     db_track = db.get_track(track_id)
     etag = _cover_etag(track_id, db_track)
+    if size is not None:
+        etag = etag[:-1] + f'-preview-{size}-jpeg82"'
     cache_headers = {"ETag": etag, "Cache-Control": _COVER_CACHE_CONTROL}
 
     if _etag_matches(request.headers.get("if-none-match"), etag):
@@ -188,7 +191,8 @@ def get_cover_art(
 
     if file_path and os.path.isfile(file_path):
         try:
-            image_data, mime = extract_cover_bytes(file_path)
+            image_data, mime = (extract_cover_preview(file_path, size, etag)
+                                if size is not None else extract_cover_bytes(file_path))
             if image_data:
                 return Response(content=image_data, media_type=mime, headers=cache_headers)
         except Exception:
@@ -196,6 +200,10 @@ def get_cover_art(
 
     # Если обложка отсутствует в файле, возвращаем дефолтную обложку
     if os.path.isfile(DEFAULT_COVER_PATH):
+        if size is not None:
+            with open(DEFAULT_COVER_PATH, 'rb') as source:
+                image_data, mime = resize_cover_image(source.read(), size)
+            return Response(content=image_data, media_type=mime, headers=cache_headers)
         return FileResponse(DEFAULT_COVER_PATH, media_type="image/jpeg", headers=cache_headers)
 
     raise HTTPException(status_code=404, detail="Обложка отсутствует в файле")

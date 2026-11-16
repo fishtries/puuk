@@ -34,7 +34,7 @@ class TestCoverCache(unittest.TestCase):
         album_id = db.resolve_album("Cache Test Album", album_artist="Cache Artist")
         db.add_or_update_track(
             track_id=TRACK_ID,
-            file_path="/nonexistent/no_cover.mp3",
+            file_path="no_cover.mp3",
             title="Cache Track",
             album_id=album_id,
             artist="Cache Artist",
@@ -62,6 +62,17 @@ class TestCoverCache(unittest.TestCase):
         resp = self._get({"If-None-Match": etag})
         self.assertEqual(resp.status_code, 304)
         self.assertEqual(resp.headers["etag"], etag)
+
+    def test_preview_etag_is_distinct_and_auth_is_required(self):
+        original = self._get().headers['etag']
+        path = f'/api/cover/{TRACK_ID}?size=256'
+        response = self.client.get(path, headers=self.auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotEqual(response.headers['etag'], original)
+        self.assertEqual(self.client.get(path, headers={**self.auth, 'If-None-Match': original}).status_code, 200)
+        self.assertEqual(self.client.get(path, headers={**self.auth, 'If-None-Match': response.headers['etag']}).status_code, 304)
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.get(path.replace('256', '4096'), headers=self.auth).status_code, 422)
 
     def test_03_external_file_change_invalidates_etag(self):
         # Сканируемая внешняя замена файла: mtime меняется, cover_version — нет
