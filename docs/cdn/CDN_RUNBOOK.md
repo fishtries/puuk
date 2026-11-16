@@ -146,3 +146,18 @@ Closed complete CDN audio/preflight proof after propagation; warm-cache negative
 matrix and real exposed-fixture purge/rollback; reviewed web publication; signed
 physical iOS installation and behavior; RF/EU measurements and24-hour pilot.
 Neither198 isolated backend tests nor220 web tests substitute for those live gates.
+
+## R3 verified rehearsal follow-up
+
+The earlier blacklist and never-pilot fixture notes are historical. Current cache
+keys retain all query parameters (CONTRACT_R3_QUERY_CACHE.md). The disposable
+fixture account briefly joined the sole-member closed API pilot; admin remained
+direct. probe_pilot_rollback.py verified issuance, range bytes and ordinary rollback,
+then cleared membership/advanced epoch. probe_retirement.py verified actual warm
+HIT, real API retirement, succeeded outbox and same-node404 before capability
+expiry, then cleanup removed only the generated fixture/account. No fixture is
+left to reuse: create a new explicitly owned fixture for a later rehearsal.
+
+New CDN-capable IPA run43868581365 is available; physical verification is pending.
+Delivery remains OFF after rehearsal. Never re-run the fixture create command
+against the cleaned manifest to pretend this is a new acceptance run.

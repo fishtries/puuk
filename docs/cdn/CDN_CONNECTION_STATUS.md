@@ -136,3 +136,26 @@ were changed by that attempt. Root access renewal is needed for the closed pilot
 fixture retirement/purge and cleanup. Refresh the fixture exposure before probing;
 its previously recorded capability has expired. At13:57UTC brain, bot and nginx
 were active. No real-user pilot or full release acceptance is claimed.
+
+## Closed API rollout, rollback and purge — 2026-11-16 14:00–14:02 UTC
+
+Sudo renewed in the existing operator SSH terminal. probe-pilot-rollback.py
+executed successfully: only the disposable fixture account received CDN tickets;
+admin remained non-pilot/direct, omitted delivery remained legacy/direct, bounded
+cohort expiry and exact CDN Range bytes passed. Ordinary rollback cleared pilot
+membership, disabled issuance and advanced epoch; new tickets were direct while
+the previously valid capability drained with exact bytes. No DB restore or bot
+restart. Protected rollback backup: mode-20261116T140003302960Z.
+
+After refreshing the durable fixture exposure, probe-retirement.py proved exact
+warm bytes, retired the generated track through the real authenticated DELETE
+API, observed all matching durable purge outbox jobs succeeded, then observed404
+for the identical warm capability on the same maintained edge connection BEFORE
+its expiry. The fixture helper removed only the generated file/disposable account;
+tombstone, exposures and purge audit were retained. An initial two-immediate-GET
+warm check stopped before deletion because HIT was not yet observed; the final
+bounded six-GET check required actual HIT and passed without changing CDN policy.
+
+No original recording was changed. Delivery remains OFF after the verified rollback.
+Next: install/verify the new CDN-capable IPA, then scoped admin pilot observation.
+Physical-device, geographic and independent final-review gates remain open.

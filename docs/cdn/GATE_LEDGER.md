@@ -41,3 +41,10 @@ New CDN-capable iOS CI run43868581365 succeeded. G3/G4 remain OPEN: actual pilot
 API/rollback, fixture deletion/purge, installed-device behavior, independent review,
 RF/EU and24-hour observation pending. Root sudo timestamp expired before the
 prepared closed API probe executed; user notified to renew in existing SSH tab.
+
+Closed live follow-up: disposable-account CDN API issuance, admin non-pilot and
+legacy direct isolation, exact Range, real CDN-to-direct rollback and old permission
+drain all PASS. Generated-fixture authenticated deletion, durable outbox succeeded,
+same-node warm URL404 before expiry and disposable cleanup PASS. Issuance remains
+OFF after rollback. These close the scoped server rehearsal items, not physical
+client/geographic/24-hour or independent final-review gates.
