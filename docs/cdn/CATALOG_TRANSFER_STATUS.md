@@ -84,3 +84,30 @@ They reveal reachability variance but do not establish why the user's exit is sl
 Commit eb5cbc8 pushed; adaptive-cover iOS candidate CI run43902437289 started:
 https://github.com/fishtries/puuk/actions/runs/43902437289 . Compilation and installed
 acceptance remain pending. Backend transfer package is staged, not installed yet.
+
+## Production install — 2026-11-16 16:01:07 UTC
+
+User executed the root installer and public probe. Both PASS; source backup
+/var/backups/puuk-cdn/catalog-20261116T160107365165Z. Public wire observations:
+tracks13570/77043 bytes, history27034/155611 bytes. Preview, authenticated304 and
+unauthorized401 passed. Brain, bot and nginx independently confirmed active.
+
+Source hash reconciliation identified a packaging mistake: the second recursive
+scp copied the refreshed package INTO the existing release directory rather than
+replacing its contents. Thus the installed package is the first candidate; gzip
+and embedded cover previews are active, but the later default-artwork resize
+follow-up is NOT deployed. Its root manifest correctly verified that first
+candidate; do not call it the exact final eb5cbc8 source. Live SHA256:
+
+- api.py:2b54a4805d411d5c48d9e2fcb800d2e823e72b1f1dc004a05d0989a0245de2bc
+- routers/streaming.py:aa4b4097eecdaee436db975f87479dea0e4ef9339310720f63e7c108d4f950e5
+- services/cover_extractor.py:34bf855051aec3ffc94bacd9a2ce0cc1527aa895b36bf9c25eb17044aae76d8d
+- services/catalog_compression.py:0bfe14c27186e19177bf4b726a7b1158686ee1445523cc04cc6fbf7b2f620d91
+
+Corrected exact final files and predecessors staged individually (no recursive
+copy ambiguity) at catalog-release-v2/install.py for the next scoped root update.
+No automatic service disruption performed for this follow-up. Actual installed
+candidate passed the user's public probes; final-source local regression remains
+221 tests and107 iOS tests. Adaptive-preview IPA run43902437289 is still building.
+Provider inventory independently confirms only media.puuk.fun exists; no hidden
+cover/API resource creation, DNS switch or full-site CDN acceptance is claimed.
