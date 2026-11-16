@@ -12,8 +12,7 @@ Orca нужна, когда требуется координировать от
 
 | Способ | Что запускается | Где задаётся модель | Контроль |
 |---|---|---|---|
-| OpenCode `@junior-gemini` / `task` | Дочерняя сессия внутри OpenCode | `agent.junior-gemini.model` (`antigravity-manager/gemini-3.8-flash`) — для лёгких задач | Ответ инструмента, дочерняя сессия, проверка артефактов |
-| OpenCode `@junior-deepseek` / `task` | Дочерняя сессия внутри OpenCode | `agent.junior-deepseek.model` (`tundra/deepseek-v4.1-flash-1017`) — для стандартных junior-задач | Ответ инструмента, дочерняя сессия, проверка артефактов |
+| OpenCode `@junior-gemini` / `task` | Дочерняя сессия внутри OpenCode | `agent.junior-gemini.model` (`antigravity-manager/gemini-3.8-flash`) — единственная junior-модель AGY | Ответ инструмента, дочерняя сессия, проверка артефактов |
 | `opencode run` | Отдельная неинтерактивная сессия | `--model provider/model` | Код процесса, JSON-события, экспорт сессии, тесты |
 | Orca `terminal create` | Отдельный агент в текущем checkout | В `--command 'opencode --model …'` | Чтение терминала; само по себе без Task/Dispatch |
 | Orca `worker-start` | Попытка задачи с жизненным циклом | Для OpenCode — его конфигурация; для Codex — `--model` и `--effort` (Senior: `gpt-6.1-sol`, `high`) | Task/Dispatch, inbox, completion, cleanup |
@@ -63,23 +62,13 @@ permission:
 
 Модель в примере присутствует в локальном каталоге. Другие найденные варианты: `nyxos-claude/claude-haiku-4-5-20251001`, `nyxos-glm/glm-5.3-flash`, `nyxos-openai/gpt-6.1-sol`. Цены и сравнительная эффективность не проверялись.
 
-### Junior в puuk: `junior-gemini` и `junior-deepseek`
+### Junior в puuk: AGY Gemini 3.8 Flash
 
-В проекте настроены два младших subagent под разные уровни сложности задач:
+Для junior-задач используется одна модель AGY: **`antigravity-manager/gemini-3.8-flash`**. Ей назначаются ограниченные задачи с явными файлами, критериями приёмки и обязательным senior review. Сложные архитектурные и критичные для безопасности решения остаются за senior.
 
-1. **`junior-gemini`** (`.opencode/agents/junior-gemini.md`, модель `antigravity-manager/gemini-3.8-flash`):
-   - **Назначение:** простые, рутинные и лёгкие задачи (быстрые точечные правки, изолированные тесты, рутинные обновления импортов/путей).
-   - **Вызов:** `@junior-gemini <задача>` или `task` с `subagent_type: "junior-gemini"`.
-   - **В Orca:** `--command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build'`.
+В OpenCode её можно вызвать через `@junior-gemini` или `task` с `subagent_type: "junior-gemini"`, если агент доступен в текущей сессии. При запуске отдельного OpenCode указывайте `--model antigravity-manager/gemini-3.8-flash`. Проверяйте доступность через `opencode agent list` и `opencode debug agent junior-gemini`, а фактическую модель — через `opencode export <child-session-id> --sanitize`. Текстовый самоотчёт модели не является доказательством.
 
-2. **`junior-deepseek`** (`.opencode/agents/junior-deepseek.md`, модель `tundra/deepseek-v4.1-flash-1017` — DeepSeek V4.1 Flash 1017 через TundraLabs API):
-   - **Назначение:** стандартные самостоятельные junior-задачи с явными критериями приёмки, требующие строгого следования контрактам и валидации логики.
-   - **Вызов:** `@junior-deepseek <задача>` или `task` с `subagent_type: "junior-deepseek"`.
-   - **В Orca:** `--command 'opencode --model tundra/deepseek-v4.1-flash-1017 --agent build'`.
-
-Оба subagent используют `mode: subagent` и `permission.task: deny`. Промпты требуют соблюдать AGENTS.md, проверять observable acceptance и возвращать отчёт с фактами и блокерами. Агенты становятся доступны после полного перезапуска OpenCode; проверить — `opencode agent list` и `opencode debug agent junior-gemini` (или `junior-deepseek`).
-
-Модель `tundra/deepseek-v4.1-flash-1017` настроена в `~/.config/opencode/opencode.json` (провайдер `tundra`, baseURL `https://api.tundralabs.ru/v1`); проверена по `opencode models`. Фактическую модель дочерней сессии подтверждать через `opencode export <child-session-id> --sanitize`, а не по самоотчёту агента.
+**Состояние конфигурации:** в рабочем дереве всё ещё обнаружен `.opencode/agents/junior-deepseek.md`. Этот документ фиксирует выбор одного junior; отдельное изменение или удаление конфигурации выполняется только в рамках соответствующей задачи. Не назначайте задачи старому агенту.
 
 Если `model` у subagent не задана, по документации OpenCode он наследует модель вызывающего основного агента. **`small_model` не выбирает модель младших агентов:** это настройка вспомогательных действий, например генерации заголовка.
 
@@ -255,14 +244,14 @@ orca orchestration worker-start \
 
 ### OpenCode worker с другой моделью через собственный запуск
 
-Когда нужен per-call выбор модели OpenCode (например, для Junior DeepSeek), используйте готовый терминал:
+Когда нужен явный выбор модели OpenCode для junior AGY Gemini, используйте готовый терминал:
 
 ```bash
 orca orchestration run-create --objective '<общая цель>' --json
 orca terminal create \
   --worktree current \
-  --title 'junior-deepseek' \
-  --command 'opencode --model tundra/deepseek-v4.1-flash-1017 --agent build' \
+  --title 'junior-gemini' \
+  --command 'opencode --model antigravity-manager/gemini-3.8-flash --agent build' \
   --json
 orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
 orca orchestration worker-start \
@@ -359,7 +348,7 @@ orca orchestration check --ack <delivery-id> --json
 - `opencode --version`: 1.19.0.
 - `orca --version` и `orca status --json`: 1.4.220, runtime ready/reachable.
 - `opencode models`: подтверждены приведённые локальные ID моделей.
-- `opencode agent list`: в OpenCode настроены subagents `junior-gemini` (`antigravity-manager/gemini-3.8-flash` для лёгких задач) и `junior-deepseek` (`tundra/deepseek-v4.1-flash-1017`, TundraLabs API для стандартных junior-задач). Роль senior вынесена исключительно в Codex (`gpt-6.1-sol`, reasoning effort `high`).
+- Историческая проверка `opencode agent list` относится к прежней конфигурации. Текущий выбор пользователя — один junior AGY Gemini 3.8 Flash; актуальную конфигурацию и доступность проверяйте перед запуском. Роль senior — Codex (`gpt-6.1-sol`, reasoning effort `high`).
 - Через временный `OPENCODE_CONFIG_CONTENT` и `opencode debug agent junior` проверялось, что JSON-определение с `mode: subagent`, `model: antigravity-manager/gemini-3.8-flash`, `permission.task: deny` принимается. Перед использованием проверьте модель в локальном `opencode models` и фактически разрешённую модель через `opencode debug agent junior`.
 - Прочитаны актуальная JSON Schema и справка `run`, `debug`, `export`, `worker-start`, `worker-show`, `dispatch`, `task-create`, `send`.
 - Загружены version-matched guides Orca и references `coordinator-loop`, `low-level-topology`, `recovery-and-cleanup`, `messaging-and-gates`.
