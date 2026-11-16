@@ -17,6 +17,7 @@ ADMIN = {'id': 1, 'role': 'admin'}
 def library(tmp_path, monkeypatch):
     db = tmp_path / 'library.db'
     monkeypatch.setenv('PUUK_DB_PATH', str(db))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     audio = tmp_path / 'audio.mp3'
     audio.write_bytes(b'audio fixture')
@@ -149,7 +150,7 @@ def test_undo_preserves_source_and_observed(library):
 def test_added_membership_invalidates_preview(library):
     source = artist_id_for_name('A/B')
     p = bulk.preview_artist_replacement(source, 'tracks', [], ADMIN)
-    tracks.add_or_update_track('three', '/absent/three', 'Song', None, 'A/B')
+    tracks.add_or_update_track('three', 'absent/three', 'Song', None, 'A/B')
     with pytest.raises(HTTPException) as ex:
         bulk.apply_artist_replacement(source, p['operation_id'], ADMIN)
     assert ex.value.detail['code'] == 'bulk_selection_changed'
@@ -213,7 +214,9 @@ def test_album_bulk_keeps_track_credits_and_audio(library, tmp_path):
     from repositories import albums
     from repositories.artist_credits import hydrate_album_credits
 
-    _, audio = library
+    _, original_audio = library
+    audio = tmp_path / 'album-audio.mp3'
+    audio.write_bytes(original_audio.read_bytes())
     second_audio = tmp_path / 'second.mp3'
     second_audio.write_bytes(b'another audio fixture')
     album_id = albums.resolve_album('Joint release', 'A/B')

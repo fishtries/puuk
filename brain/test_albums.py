@@ -3,6 +3,8 @@ import os
 import shutil
 import sys
 import unittest
+import tempfile
+import subprocess
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -264,12 +266,18 @@ class AlbumApiTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        global SAMPLE_MP3, AUDIO_DIR
         from fastapi.testclient import TestClient
         from api import app
         from security import hash_password
 
-        if not os.path.exists(SAMPLE_MP3):
-            raise unittest.SkipTest("Sample MP3 not found")
+        cls.audio_tmp = tempfile.TemporaryDirectory(prefix='puuk_album_audio_')
+        cls.old_music_dir = os.environ.get('MUSIC_DIR')
+        AUDIO_DIR = cls.audio_tmp.name
+        SAMPLE_MP3 = os.path.join(AUDIO_DIR, 'synthetic.mp3')
+        os.environ['MUSIC_DIR'] = AUDIO_DIR
+        subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i',
+                        'anullsrc=r=8000:cl=mono', '-t', '0.2', '-y', SAMPLE_MP3], check=True)
 
         cls.client = TestClient(app)
         for username, role in (("alb_admin", "admin"), ("alb_user", "user")):
@@ -282,6 +290,25 @@ class AlbumApiTest(unittest.TestCase):
         cls.admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
         cls.user_headers = {"Authorization": f"Bearer {user_login.json()['access_token']}"}
         cls.admin_id = db.get_user_by_username("alb_admin")["id"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.close()
+        if cls.old_music_dir is None:
+            os.environ.pop('MUSIC_DIR', None)
+        else:
+            os.environ['MUSIC_DIR'] = cls.old_music_dir
+        cls.audio_tmp.cleanup()
+
+    def setUp(self):
+        # These legacy tests reuse fixture filenames across separate cases.
+        # Reset only the fixture claims between cases, never during a test.
+        conn = db.get_connection()
+        try:
+            conn.execute("DELETE FROM track_path_claims WHERE rel_path LIKE 'alb_%.mp3'")
+            conn.commit()
+        finally:
+            conn.close()
 
     def _make_track(self, track_id, album_id, filename, *, owner=None):
         dest = os.path.join(AUDIO_DIR, filename)

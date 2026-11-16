@@ -14,12 +14,13 @@ from repositories import artists
 @pytest.fixture
 def catalog(tmp_path, monkeypatch):
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'review.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     db.init_db()
     return tmp_path
 
 
 def add_track(track_id, artist='DJ   Arbuz', album_id=None):
-    db.add_or_update_track(track_id=track_id, file_path=f'/test/{track_id}.mp3',
+    db.add_or_update_track(track_id=track_id, file_path=f'test/{track_id}.mp3',
                            title=track_id, artist=artist, album_id=album_id)
 
 

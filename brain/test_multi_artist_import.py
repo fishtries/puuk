@@ -103,6 +103,7 @@ def names(kind, entity_id):
 def test_scan_and_recovery_keep_independent_manual_credits(tagged_audio, tmp_path, monkeypatch, track_manual, album_manual):
     path, _, _ = tagged_audio
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     monkeypatch.setattr(library_service, 'get_effective_music_dir', lambda: str(tmp_path))
     monkeypatch.setattr(media_locations, 'get_effective_music_dir', lambda: str(tmp_path))
@@ -134,6 +135,7 @@ def test_bot_provider_survives_scan_and_redownload(tagged_audio, tmp_path, monke
     import bot
     path, _, _ = tagged_audio
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     monkeypatch.setattr(library_service, 'get_effective_music_dir', lambda: str(tmp_path))
     monkeypatch.setattr(library_service, '_deliver_embedding_queue', lambda: None)
@@ -180,6 +182,7 @@ def test_scanner_and_queue_use_sqlite_when_qdrant_is_down(tagged_audio, tmp_path
     from services.embedding_queue_service import _build_payload
     path, _, _ = tagged_audio
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     track_id = str(uuid.uuid5(uuid.NAMESPACE_URL, path.name))
     before = fingerprint(path)
@@ -207,6 +210,7 @@ def test_scanner_and_queue_use_sqlite_when_qdrant_is_down(tagged_audio, tmp_path
 
 def test_recovery_without_album_artist_reuses_legacy_identity(tmp_path, monkeypatch):
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     path = tmp_path / 'song.mp3'
     path.write_bytes(b'fixture')
@@ -244,6 +248,7 @@ def test_database_read_failure_does_not_trigger_qdrant_recovery(monkeypatch):
 def test_legacy_scanner_new_point_has_effective_credits(tmp_path, monkeypatch):
     import scan
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     path = tmp_path / 'song.mp3'
     path.write_bytes(b'fixture')

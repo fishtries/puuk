@@ -16,6 +16,7 @@ from routers.tracks import TrackEditPayload
 @pytest.fixture
 def library(tmp_path, monkeypatch):
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'library.db'))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     audio = tmp_path / 'audio.wav'
     with wave.open(str(audio), 'wb') as output:
@@ -83,7 +84,7 @@ def test_partial_album_split_keeps_manual_credits(library):
     from repositories.tracks import get_track
     admin = {'id': 1, 'role': 'admin'}
     album = library[1]
-    tracks.add_or_update_track('t2', '/missing/audio.wav', 'Song 2', album, 'A')
+    tracks.add_or_update_track('t2', 'missing/audio.wav', 'Song 2', album, 'A')
     from repositories.artist_credits import CreditSource, ingest_artist_credits
     from repositories.base import get_connection
     with get_connection() as conn:
@@ -151,7 +152,7 @@ def test_http_credits_rbac_validation_etag_and_album_membership(library):
 def test_real_old_web_payloads_keep_artists_out_of_audio_patches(tmp_path, monkeypatch):
     import base64
     import io
-    import shutil
+    import subprocess
     from pathlib import Path
     from PIL import Image
     from metadata import read_audio_metadata
@@ -159,14 +160,14 @@ def test_real_old_web_payloads_keep_artists_out_of_audio_patches(tmp_path, monke
     from services import track_metadata_service as metadata_service
     from services.album_service import update_album
     from routers.albums import AlbumEditPayload
-    sample = Path(__file__).parent / 'temp_audio' / 'Daft Punk - Around the World.mp3'
-    if not sample.exists():
-        pytest.skip('sample mp3 unavailable')
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'real.db'))
     monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     audio = tmp_path / 'sample.mp3'
-    shutil.copy2(sample, audio)
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i',
+                    'anullsrc=r=8000:cl=mono', '-t', '0.2', '-metadata', 'album=Release',
+                    '-metadata', 'artist=Fixture Artist', '-metadata', 'album_artist=Fixture Artist',
+                    '-y', str(audio)], check=True)
     meta = read_audio_metadata(str(audio))
     album = albums.resolve_album(meta.album or 'Release', meta.album_artist)
     track_repo.add_or_update_track('web', 'sample.mp3', meta.title, album, meta.artist,
@@ -245,7 +246,7 @@ def test_album_merge_conflict_rejects_before_cover_and_file(library):
     admin = {'id': 1, 'role': 'admin'}
     source = library[1]
     target = albums.resolve_album('Target', 'A')
-    tracks.add_or_update_track('other', '/missing/other.wav', 'Other', target, 'A')
+    tracks.add_or_update_track('other', 'missing/other.wav', 'Other', target, 'A')
     for album, name in [(source, 'First'), (target, 'Second')]:
         revision = get_credit_states('album', [album])[str(album)]['revision']
         set_album_artists(album, [{'name': name}], revision, admin, '')
@@ -326,7 +327,10 @@ def test_popularity_follows_current_memberships_and_deduplicates_events(library)
         assert detail['popular_tracks'][0]['play_count'] == 1
     set_track_artists('t', [], edited['artists_revision'], admin, '')
     assert artists.record_play_start(1, 't') == 'ignored'
-    assert artists.get_artist_detail(artists.artist_id_for_name('B'), '') is None
+    detail = artists.get_artist_detail(artists.artist_id_for_name('B'), '')
+    assert detail['artist']['id'] == artists.artist_id_for_name('B')
+    assert detail['artist']['track_count'] == 0
+    assert detail['popular_tracks'] == [] and detail['albums'] == []
 
 
 def test_concurrent_revision_rejects_lost_update(library):
@@ -355,7 +359,7 @@ def test_album_permission_requires_every_track_and_system_admin(library):
     album = library[1]
     revision = get_credit_states('album', [album])[str(album)]['revision']
     assert set_album_artists(album, [{'name': 'Owner'}], revision, owner, '')['album']['artist'] == 'Owner'
-    tracks.add_or_update_track('system', '/missing/system', 'System', album, 'A', added_by_user_id=None)
+    tracks.add_or_update_track('system', 'missing/system', 'System', album, 'A', added_by_user_id=None)
     revision = get_credit_states('album', [album])[str(album)]['revision']
     for user in (owner, foreign):
         with pytest.raises(HTTPException) as exc:
@@ -371,7 +375,7 @@ def test_legacy_missing_file_only_credit_edit(library):
     from repositories.base import get_connection
     admin = {'id': 1, 'role': 'admin'}
     with get_connection() as conn:
-        conn.execute("UPDATE tracks SET file_path='/missing/none.mp3' WHERE id='t'")
+        conn.execute("UPDATE tracks SET file_path='missing/none.mp3' WHERE id='t'")
     with patch('services.track_metadata_service.resolve_track_file_path', side_effect=AssertionError('file access')):
         dto = mutate_track_metadata('t', TrackEditPayload(artist='Solo'), admin)
     assert dto['artist'] == 'Solo'
@@ -383,8 +387,8 @@ def test_partial_merge_preserves_source_manual_in_both_albums(library):
     admin = {'id': 1, 'role': 'admin'}
     source = library[1]
     target = albums.resolve_album('Destination', 'A')
-    tracks.add_or_update_track('other', '/missing/other', 'Other', source, 'A')
-    tracks.add_or_update_track('existing', '/missing/existing', 'Existing', target, 'A')
+    tracks.add_or_update_track('other', 'missing/other', 'Other', source, 'A')
+    tracks.add_or_update_track('existing', 'missing/existing', 'Existing', target, 'A')
     revision = get_credit_states('album', [source])[str(source)]['revision']
     set_album_artists(source, [{'name': 'Manual'}], revision, admin, '')
     def mutate(track_id, *args, **kwargs):

@@ -87,7 +87,7 @@ def get_next_track(
 
     pick = random.choice(recommendations[:3])
     fav_ids = db.get_favorite_track_ids(current_user["id"])
-    return build_wave_track_payload(pick, base_url, fav_ids, include_album=True)
+    return build_wave_track_payload(pick, base_url, fav_ids)
 
 
 @router.get("/queue")

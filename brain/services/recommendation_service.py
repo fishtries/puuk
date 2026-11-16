@@ -479,7 +479,6 @@ def build_wave_track_payload(
     pick,
     base_url: str,
     fav_ids: set[str],
-    include_album: bool = False,
     db_track: Optional[dict] = None,
 ) -> dict:
     """Формирует JSON-ответ трека Волны из точки Qdrant с обогащением из SQLite.
@@ -490,13 +489,13 @@ def build_wave_track_payload(
     track_id = str(pick.id)
     if db_track is None:
         db_track = db.get_track(track_id)
+    if not db_track:
+        from services.media_locations import ensure_track_in_db
+        db_track = ensure_track_in_db(track_id, pick.payload)
     if db_track and "artists" not in db_track:
         hydrated = db.get_tracks_by_ids([track_id]).get(track_id)
         if hydrated:
             db_track = {**db_track, **hydrated}
-    if not db_track:
-        from services.media_locations import ensure_track_in_db
-        db_track = ensure_track_in_db(track_id, pick.payload)
     if not db_track:
         from services.media_locations import extract_full_metadata
         title, artist, _, _, duration = extract_full_metadata(pick.payload.get("file_path", ""))
@@ -515,6 +514,8 @@ def build_wave_track_payload(
         "title": title,
         "artist": artist,
         "artist_id": db_track.get("artist_id") if db_track else None,
+        "album_id": db_track.get("album_id") if db_track else None,
+        "album": db_track.get("album") if db_track else None,
         "artists": db_track.get("artists", []) if db_track else pick.payload.get("artists", []),
         "artists_revision": db_track.get("artists_revision", 0) if db_track else 0,
         "album_artists": db_track.get("album_artists", []) if db_track else [],
@@ -532,6 +533,4 @@ def build_wave_track_payload(
         "true_peak_db": db_track.get("true_peak_db") if db_track else pick.payload.get("true_peak_db"),
         "score": round(pick.score, 3),
     }
-    if include_album:
-        payload["album"] = None
     return payload

@@ -29,7 +29,7 @@ VARIOUS_LABELS = [
 def _add_track(track_id, title, artist, album_id=None):
     db.add_or_update_track(
         track_id=track_id,
-        file_path=f"/nonexistent/{track_id}.mp3",
+        file_path=f"nonexistent/{track_id}.mp3",
         title=title,
         album_id=album_id,
         artist=artist,

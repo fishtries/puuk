@@ -91,7 +91,7 @@ class SearchAlbumsArtistsTest(unittest.TestCase):
         ]:
             db.add_or_update_track(
                 track_id=track_id,
-                file_path=f"/nonexistent/{track_id}.mp3",
+                file_path=f"nonexistent/{track_id}.mp3",
                 title=title,
                 album_id=album_id,
                 artist=artist,
@@ -119,6 +119,7 @@ class SearchAlbumsArtistsTest(unittest.TestCase):
     def test_search_artists_expose_id_and_artist_id(self):
         artists_out = self._search("Search Solo Artist")["artists"]
         self.assertEqual(len(artists_out), 1)
+        self.assertEqual(artists_out[0]['share_id'], artists_out[0]['id'])
         item = artists_out[0]
         self.assertEqual(item["id"], item["artist_id"])
         self.assertEqual(item["artist_id"], artists.artist_id_for_name("Search Solo Artist"))

@@ -40,3 +40,6 @@ Thumbs.db
 
 # Durable Telegram import queue (server-local state)
 tg_music_bot/state/
+
+# Audio metadata mutation locks
+.mutation_locks/

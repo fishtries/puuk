@@ -21,12 +21,13 @@ from repositories.artist_credits import (
 def database(tmp_path, monkeypatch):
     path = tmp_path / 'library.db'
     monkeypatch.setenv('PUUK_DB_PATH', str(path))
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     schema.init_db()
     return path
 
 
 def add_track(track_id='t', artist='A', album_id=None, **kwargs):
-    tracks.add_or_update_track(track_id, '/missing/audio.mp3', 'Title', album_id, artist, **kwargs)
+    tracks.add_or_update_track(track_id, f'{track_id}.mp3', 'Title', album_id, artist, **kwargs)
     return track_id
 
 
