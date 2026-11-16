@@ -68,3 +68,19 @@ No RF/EU comparison, lower mobile start latency or complete rollout is claimed.
 Expanded regression:221 backend tests passed, one existing warning,44.26s.
 Initial expanded command referenced nonexistent test_share.py and ran no tests;
 the corrected explicit test set includes test_share_identity.py and all CDN modules.
+
+## Independent Germany/Netherlands network observations
+
+Globalping measurements2UevAlwAGrabGFu1P00021W18 (web /api/auth/me) and
+20N0iy6OIZRgQL6s800021W19 (media /), same four probes, unauthenticated GETs only.
+See EU_NETWORK_PROBES.json for sanitized timings. Three DE/NL probes completed
+web401 in295–307ms; one Amsterdam probe timed out at15000ms during TLS. The SAME
+Amsterdam probe also timed out during TLS to media. Thus CDN alone did not solve
+that probe's route. Three other media probes returned403 in171–511ms total, mostly
+DNS156–503ms; TCP+TLS was6–15ms. Do not omit DNS to claim total startup speedup.
+These are small denial responses, not authenticated audio or user-VPN throughput.
+They reveal reachability variance but do not establish why the user's exit is slow.
+
+Commit eb5cbc8 pushed; adaptive-cover iOS candidate CI run43902437289 started:
+https://github.com/fishtries/puuk/actions/runs/43902437289 . Compilation and installed
+acceptance remain pending. Backend transfer package is staged, not installed yet.

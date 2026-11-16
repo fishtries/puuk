@@ -1,0 +1,136 @@
+{
+  "date": "2026-11-16",
+  "web_measurement": "2UevAlwAGrabGFu1P00021W18",
+  "media_measurement": "20N0iy6OIZRgQL6s800021W19",
+  "scope": "Unauthenticated GET only; web401/media403. Same four probes, not user VPN or audio throughput.",
+  "results": [
+    {
+      "target": "web",
+      "country": "DE",
+      "city": "Falkenstein",
+      "asn": 24940,
+      "status": "finished",
+      "http_status": 401,
+      "timings_ms": {
+        "total": 307,
+        "dns": 68,
+        "tcp": 76,
+        "tls": 84,
+        "firstByte": 79,
+        "download": 0
+      }
+    },
+    {
+      "target": "web",
+      "country": "DE",
+      "city": "Nuremberg",
+      "asn": 24940,
+      "status": "finished",
+      "http_status": 401,
+      "timings_ms": {
+        "total": 295,
+        "dns": 64,
+        "tcp": 72,
+        "tls": 84,
+        "firstByte": 75,
+        "download": 0
+      }
+    },
+    {
+      "target": "web",
+      "country": "NL",
+      "city": "Amsterdam",
+      "asn": 31898,
+      "status": "finished",
+      "http_status": 401,
+      "timings_ms": {
+        "total": 295,
+        "dns": 59,
+        "tcp": 75,
+        "tls": 83,
+        "firstByte": 78,
+        "download": 0
+      }
+    },
+    {
+      "target": "web",
+      "country": "NL",
+      "city": "Amsterdam",
+      "asn": 214677,
+      "status": "failed",
+      "http_status": null,
+      "timings_ms": {
+        "total": 15000,
+        "dns": 250,
+        "tcp": 377,
+        "tls": null,
+        "firstByte": null,
+        "download": null
+      }
+    },
+    {
+      "target": "media",
+      "country": "DE",
+      "city": "Falkenstein",
+      "asn": 24940,
+      "status": "finished",
+      "http_status": 403,
+      "timings_ms": {
+        "total": 401,
+        "dns": 379,
+        "tcp": 5,
+        "tls": 10,
+        "firstByte": 7,
+        "download": 0
+      }
+    },
+    {
+      "target": "media",
+      "country": "DE",
+      "city": "Nuremberg",
+      "asn": 24940,
+      "status": "finished",
+      "http_status": 403,
+      "timings_ms": {
+        "total": 171,
+        "dns": 156,
+        "tcp": 4,
+        "tls": 7,
+        "firstByte": 4,
+        "download": 0
+      }
+    },
+    {
+      "target": "media",
+      "country": "NL",
+      "city": "Amsterdam",
+      "asn": 31898,
+      "status": "finished",
+      "http_status": 403,
+      "timings_ms": {
+        "total": 511,
+        "dns": 503,
+        "tcp": 1,
+        "tls": 5,
+        "firstByte": 2,
+        "download": 0
+      }
+    },
+    {
+      "target": "media",
+      "country": "NL",
+      "city": "Amsterdam",
+      "asn": 214677,
+      "status": "failed",
+      "http_status": null,
+      "timings_ms": {
+        "total": 15000,
+        "dns": 401,
+        "tcp": 48,
+        "tls": null,
+        "firstByte": null,
+        "download": null
+      }
+    }
+  ]
+}
