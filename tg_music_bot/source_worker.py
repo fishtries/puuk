@@ -13,6 +13,7 @@ import re
 
 from source_selection import (
     Candidate, POLICY_VERSION, assess, credited_title, normalized, duration_matches, rank_candidates, version_rejection,
+    without_remaster,
 )
 
 RECEIPT_TAG = 'PUUK_SOURCE_V1'
@@ -45,9 +46,15 @@ def find_candidates(song, client):
     queries = []
     if song.get('isrc'):
         queries.append(song['isrc'])
-    queries.append(' '.join([*song['artists'], credited_title(song['name'], song['artists'])]))
+    title = credited_title(song['name'], song['artists'])
+    queries.append(' '.join([*song['artists'], title]))
+    base_title = without_remaster(title)
+    if base_title != title:
+        queries.append(' '.join([*song['artists'], base_title, song.get('album_name') or '']).strip())
     candidates, errors = [], []
     for query in queries:
+        if base_title != title and query == queries[-1] and rank_candidates(song, candidates)[0]:
+            break
         try:
             rows = client.search(query, filter='songs', limit=20, ignore_spelling=True)
             candidates.extend(candidates_from_results(rows[:40]))

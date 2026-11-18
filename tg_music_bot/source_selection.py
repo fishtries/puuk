@@ -27,6 +27,15 @@ _VERSIONS = {
 _CLEAN = re.compile(r'\b(?:clean(?:\s+(?:version|edit))?|censored|цензур\w*|без\s+мата)\b')
 _UNCENSORED = re.compile(r'\b(?:uncensored|explicit|без\s+цензуры|нецензур\w*)\b')
 _PRESENTATION = re.compile(r'\b(?:official\s+(?:audio|video|music\s+video|lyric\s+video)|lyrics?|audio|hd|hq|4k|explicit|uncensored)\b')
+_REMASTER_SUFFIX = re.compile(
+    r'\s*(?:[-–—]\s*|[([]\s*)(?:(?:19|20)\d{2}\s+)?'
+    r'(?:remaster(?:ed)?|ремастер)(?:\s+(?:version|(?:19|20)\d{2})){0,2}\s*[)\]]?\s*$',
+    re.I,
+)
+
+
+def without_remaster(title: str) -> str:
+    return _REMASTER_SUFFIX.sub('', title)
 
 
 def normalized(value: str) -> str:
@@ -45,6 +54,8 @@ def is_clean(title: str) -> bool:
 
 
 def version_rejection(expected: str, actual: str) -> str | None:
+    if without_remaster(expected) != expected:
+        expected, actual = without_remaster(expected), without_remaster(actual)
     # Remove the literal requested title first: e.g. Live Forever / Clean are
     # song names, not versions. Parenthesized or appended markers remain.
     wanted, found = normalized(expected), normalized(actual)
@@ -117,7 +128,9 @@ def assess(song: dict, candidate: Candidate) -> tuple[float, str | None]:
     if reason:
         return 0, reason
     # Explicitly requested variants must not silently become the studio version.
-    if versions(expected_title) != versions(candidate.title):
+    expected_base = without_remaster(expected_title)
+    actual_base = without_remaster(candidate.title) if expected_base != expected_title else candidate.title
+    if versions(expected_base) != versions(actual_base):
         return 0, 'Не совпадает версия исходного трека'
     if not duration_matches(song.get('duration'), candidate.duration):
         return 0, 'Не совпадает длительность записи'
@@ -127,10 +140,16 @@ def assess(song: dict, candidate: Candidate) -> tuple[float, str | None]:
         wanted = ' '.join(_PRESENTATION.sub('', _UNCENSORED.sub('', wanted)).split())
         found = ' '.join(_PRESENTATION.sub('', _UNCENSORED.sub('', found)).split())
     title_score = SequenceMatcher(None, wanted, found).ratio()
+    album_match = bool(candidate.album) and normalized(song.get('album_name')) == normalized(candidate.album)
+    if expected_base != expected_title and wanted != found:
+        # Require the same album and song when the provider labels the mastering differently.
+        if (not album_match or normalized(credited_title(expected_base, song['artists']))
+                != normalized(credited_title(actual_base, song['artists']))):
+            return 0, 'Не подтверждена версия ремастера'
+        return .8 + .05 * (candidate.explicit is True), None
     if title_score < .94:
         return 0, 'Не совпадает название записи'
-    album_match = normalized(song.get('album_name')) == normalized(candidate.album)
-    return title_score + .1 * bool(album_match and candidate.album) + .05 * (candidate.explicit is True), None
+    return title_score + .1 * album_match + .05 * (candidate.explicit is True), None
 
 
 def rank_candidates(song: dict, candidates: list[Candidate]) -> tuple[list[Candidate], list[str]]:

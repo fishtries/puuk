@@ -183,6 +183,19 @@ def test_explicit_is_preferred_without_blocking_other_candidates():
     assert ranked == [candidate(),unknown]
 
 
+def test_remaster_fallback_requires_same_album_and_recording():
+    requested = {**song('Faith - Remastered', ['George Michael'], 193.2), 'album_name': 'Faith'}
+    original = Candidate('aaaaaaaaaaa', 'Faith', ('George Michael',), 194, 'Faith')
+    exact = replace(original, video_id='bbbbbbbbbbb', title='Faith (Remastered)')
+    assert rank_candidates(requested, [original, exact])[0] == [exact, original]
+    assert assess(requested, replace(original, title='Faith (2010 Remastered Version)'))[1] is None
+    for wrong in [replace(original, album='Twenty Five'), replace(original, duration=30),
+                  replace(original, title='Faith (Live)'), replace(original, title='Faith (Remix)'),
+                  replace(original, title='Faithful'), replace(original, artists=('Someone else',))]:
+        assert assess(requested, wrong)[1]
+    assert source_rejection(requested, {'title': 'Faith (2010 Remastered Version)', 'duration': 194}) is None
+
+
 def test_soundcloud_failure_uses_youtube_music(tmp_path):
     calls = []
     def primary(s):
