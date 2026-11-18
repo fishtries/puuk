@@ -25,6 +25,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import db
+from config import QDRANT_CONNECTION, QDRANT_URL
 from services.audio_genre_classifier import (
     AudioGenreClassifier,
     AUTO_GENRE_MIN_CONFIDENCE,
@@ -44,7 +45,6 @@ SERVER_USER = os.getenv("SERVER_USER", "fish")
 WORKER_REQUEST_TIMEOUT_SEC = float(os.getenv("WORKER_REQUEST_TIMEOUT_SEC", "30"))
 WORKER_SSH_TIMEOUT_SEC = float(os.getenv("WORKER_SSH_TIMEOUT_SEC", "30"))
 
-QDRANT_URL = os.getenv("QDRANT_URL", f"http://{SERVER_IP}:6333")
 COLLECTION_NAME = "tracks"
 
 REMOTE_MUSIC_DIR = os.getenv("REMOTE_MUSIC_DIR", "/mnt/data/projects/puuk/music")
@@ -1016,7 +1016,7 @@ def main():
     logger.info(f"Подключаюсь к Qdrant по адресу {QDRANT_URL}...")
     try:
         qdrant_client = QdrantClient(
-            url=QDRANT_URL,
+            **QDRANT_CONNECTION,
             timeout=WORKER_REQUEST_TIMEOUT_SEC,
         )
     except Exception as e:
@@ -1087,7 +1087,7 @@ def main():
                 pass
             try:
                 qdrant_client = QdrantClient(
-                    url=QDRANT_URL,
+                    **QDRANT_CONNECTION,
                     timeout=WORKER_REQUEST_TIMEOUT_SEC,
                 )
             except Exception as reconnect_error:

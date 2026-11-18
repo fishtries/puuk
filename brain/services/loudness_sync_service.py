@@ -39,7 +39,7 @@ import db
 from config import (
     COLLECTION_NAME,
     LOUDNESS_SYNC_QDRANT_TIMEOUT_SEC,
-    QDRANT_URL,
+    QDRANT_CONNECTION,
     get_effective_music_dir,
 )
 
@@ -58,7 +58,7 @@ def get_qdrant_client():
     """Creates a fresh Qdrant client with a bounded timeout (lazy import)."""
     from qdrant_client import QdrantClient
 
-    return QdrantClient(url=QDRANT_URL, timeout=LOUDNESS_SYNC_QDRANT_TIMEOUT_SEC)
+    return QdrantClient(**QDRANT_CONNECTION, timeout=LOUDNESS_SYNC_QDRANT_TIMEOUT_SEC)
 
 
 def _empty_counters() -> Dict[str, Any]:

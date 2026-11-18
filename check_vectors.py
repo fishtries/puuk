@@ -1,8 +1,9 @@
-import os
 from qdrant_client import QdrantClient
 from qdrant_client.models import RecommendQuery, RecommendInput
-SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
-client = QdrantClient(url=f"http://{SERVER_IP}:6333")
+
+from brain.config import QDRANT_CONNECTION
+
+client = QdrantClient(**QDRANT_CONNECTION)
 
 records, _ = client.scroll(collection_name="tracks", limit=3, with_vectors=True, with_payload=True)
 if not records:

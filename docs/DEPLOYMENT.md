@@ -8,7 +8,7 @@
 |---|---|---|
 | **FastAPI backend** | 192.168.1.117 `/home/fish/apps/puuk/puuk/brain/` | API на `127.0.0.1:8000` |
 | **Telegram bot** | 192.168.1.117 `/home/fish/apps/puuk/puuk/tg_music_bot/` | aiogram, загрузка треков |
-| **Qdrant** | 192.168.1.117 | Векторная БД, порт 6333 |
+| **Qdrant** | 192.168.1.117 | Векторная БД, HTTP на `127.0.0.1:6333`, с API-ключом |
 | **SQLite** | 192.168.1.117 `/home/fish/apps/puuk/puuk/brain/puuk.db` | Метаданные (WAL mode) |
 | **Музыкальная библиотека** | 192.168.1.117 `/mnt/data/projects/puuk/music/` | Плоская структура, ~3.5GB MP3 |
 | **Heavy worker** | Локально (эта машина) | `brain/heavy_worker.py` через SFTP |
@@ -74,6 +74,25 @@ python heavy_worker.py --mode genre     # жанры через Essentia
 ```
 
 Heavy worker работает через SFTP (порт 59348), скачивает аудио во временный каталог, обрабатывает, пишет результаты в удалённую SQLite.
+
+### Доступ к Qdrant
+
+Backend и бот используют `http://127.0.0.1:6333` на сервере. Compose в
+`~/apps/puuk/qdrant/` публикует HTTP только на loopback и передаёт Qdrant
+`QDRANT__SERVICE__API_KEY` из закрытого файла `qdrant-auth.env`.
+gRPC остаётся внутри Docker.
+
+На машине worker тот же локальный адрес ведёт через SSH. Проверить туннель
+можно через `systemctl --user status puuk-qdrant-tunnel`. Если нужен ручной запуск:
+
+```bash
+ssh -NT -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:6333:127.0.0.1:6333 -p 59348 fish@192.168.1.117
+```
+
+Python-клиенты читают ключ из `~/.config/puuk/qdrant.key` с правами `0600`.
+Для другого окружения можно задать `QDRANT_URL` и `QDRANT_API_KEY`. Ключ
+передаётся по HTTPS или по HTTP только на локальный адрес из примера.
 
 ## Проверки на сервере
 

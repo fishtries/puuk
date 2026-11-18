@@ -17,7 +17,7 @@ from auth import get_current_admin_user, get_current_user
 from user_profile import should_recompute_embedding, update_user_embedding_async
 from qdrant_client import QdrantClient
 
-from config import QDRANT_URL, SERVER_IP
+from config import QDRANT_CONNECTION, SERVER_IP
 
 router = APIRouter(prefix="/api/wave", tags=["wave"])
 
@@ -72,7 +72,7 @@ class WaveFeedbackRequest(BaseModel):
         return self
 
 def get_qdrant_client():
-    return QdrantClient(url=QDRANT_URL)
+    return QdrantClient(**QDRANT_CONNECTION)
 
 @router.put("/feedback")
 @router.post("/feedback")

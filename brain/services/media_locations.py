@@ -310,8 +310,11 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None, *, deadlin
                         return None
                     from qdrant_client import QdrantClient
                     import httpx
-                    from config import QDRANT_URL
-                    dedicated=QdrantClient(url=QDRANT_URL,timeout=1,check_compatibility=False,https=QDRANT_URL.startswith('https://'),transport=httpx.HTTPTransport(retries=0),trust_env=False)
+                    from config import QDRANT_CONNECTION
+                    dedicated = QdrantClient(
+                        **QDRANT_CONNECTION, timeout=1, check_compatibility=False,
+                        transport=httpx.HTTPTransport(retries=0),
+                    )
                 records=(dedicated or client).retrieve(collection_name=COLLECTION_NAME,ids=[point_id],with_payload=True)
                 if records and records[0].payload:
                     payload=records[0].payload

@@ -4,7 +4,9 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
-client = QdrantClient(url="http://localhost:6333")
+from config import QDRANT_CONNECTION
+
+client = QdrantClient(**QDRANT_CONNECTION)
 MUSIC_DIR = os.getenv("MUSIC_DIR", "/mnt/data/projects/puuk/music")
 
 try:

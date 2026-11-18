@@ -7,6 +7,8 @@ import librosa
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
+from config import QDRANT_CONNECTION, QDRANT_URL
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -15,16 +17,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
 MUSIC_DIR = os.getenv("MUSIC_DIR", "/mnt/data/projects/puuk/music")
-QDRANT_URL = os.getenv("QDRANT_URL", f"http://{SERVER_IP}:6333")
 COLLECTION_NAME = "tracks"
 VECTOR_SIZE = 400
 SUPPORTED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus'}
 
 def init_qdrant(reset: bool = False) -> QdrantClient:
     logger.info(f"Подключение к Qdrant по адресу {QDRANT_URL}...")
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(**QDRANT_CONNECTION)
     
     if reset and client.collection_exists(collection_name=COLLECTION_NAME):
         logger.warning(f"Флаг --reset передан! Удаляем коллекцию '{COLLECTION_NAME}'...")
@@ -131,7 +131,7 @@ def main():
         if args.reset or args.resync_loudness:
             raise
         logger.warning("Qdrant initialization failed; scanning SQLite: %s", exc)
-        client = QdrantClient(url=QDRANT_URL)
+        client = QdrantClient(**QDRANT_CONNECTION)
 
     if args.resync_loudness:
         resync_loudness_from_qdrant(client)

@@ -1,9 +1,23 @@
 """Central configuration: environment-driven settings and shared constants."""
 
 import os
+from pathlib import Path
+from urllib.parse import urlsplit
 
 SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
-QDRANT_URL = os.getenv("QDRANT_URL", f"http://{SERVER_IP}:6333")
+_LOCAL_QDRANT_URL = "http://127.0.0.1:6333"
+QDRANT_URL = os.getenv("QDRANT_URL", _LOCAL_QDRANT_URL)
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+if not QDRANT_API_KEY and QDRANT_URL.rstrip("/") == _LOCAL_QDRANT_URL:
+    try:
+        QDRANT_API_KEY = (Path.home() / ".config/puuk/qdrant.key").read_text().strip() or None
+    except FileNotFoundError:
+        pass
+if QDRANT_API_KEY:
+    _qdrant_endpoint = urlsplit(QDRANT_URL)
+    if _qdrant_endpoint.scheme != "https" and QDRANT_URL.rstrip("/") != _LOCAL_QDRANT_URL:
+        raise ValueError("Qdrant API keys require HTTPS or the local SSH tunnel")
+QDRANT_CONNECTION = {"url": QDRANT_URL, "api_key": QDRANT_API_KEY, "trust_env": False}
 COLLECTION_NAME = "tracks"
 MUSIC_DIR = os.getenv("MUSIC_DIR", "/mnt/data/projects/puuk/music")
 BASE_DIR = os.path.dirname(__file__)

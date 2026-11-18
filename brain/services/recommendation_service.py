@@ -12,10 +12,10 @@ from qdrant_client.models import RecommendQuery, RecommendInput, Filter, FieldCo
 import db
 from repositories.artist_credits import get_credit_states, artist_id_for_name
 from repositories.wave import get_recent_artist_counts
-from config import QDRANT_URL, COLLECTION_NAME, WAVE_PERSONALIZATION_WEIGHT, WAVE_EXPLORE_RATIO
+from config import QDRANT_CONNECTION, COLLECTION_NAME, WAVE_PERSONALIZATION_WEIGHT, WAVE_EXPLORE_RATIO
 from user_profile import get_or_compute_user_embedding
 
-qdrant_client = QdrantClient(url=QDRANT_URL)
+qdrant_client = QdrantClient(**QDRANT_CONNECTION)
 
 client = qdrant_client  # historical alias used by tests and internal callers
 

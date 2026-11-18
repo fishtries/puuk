@@ -32,7 +32,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from qdrant_client.models import PointStruct
 
 import db
-from config import COLLECTION_NAME, QDRANT_URL, get_effective_music_dir
+from config import COLLECTION_NAME, QDRANT_CONNECTION, get_effective_music_dir
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def get_qdrant_client():
     """Creates a fresh Qdrant client from configuration (lazy import)."""
     from qdrant_client import QdrantClient
 
-    return QdrantClient(url=QDRANT_URL)
+    return QdrantClient(**QDRANT_CONNECTION)
 
 
 def _value(track: Any, key: str, default: Any = None) -> Any:

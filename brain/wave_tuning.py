@@ -32,7 +32,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 import db
 import services.recommendation_service as reco_service
-from config import COLLECTION_NAME, QDRANT_URL, WAVE_EXPLORE_RATIO
+from config import COLLECTION_NAME, QDRANT_CONNECTION, QDRANT_URL, WAVE_EXPLORE_RATIO
 from services.recommendation_service import _ArtistResolver, get_smart_recommendations
 
 # Минимум разрешённых (существующих в Qdrant) лайков для «настоящего» профиля.
@@ -318,7 +318,7 @@ def build_verdict(rows: list[dict], profile_synthetic: bool = False) -> str:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(**QDRANT_CONNECTION)
     info = client.get_collection(COLLECTION_NAME)
 
     user_vec, sim_user_id, profile_note, dislike_ids = resolve_profile(client, args.user_id)

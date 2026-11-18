@@ -1,11 +1,8 @@
 from qdrant_client import QdrantClient
-import os
 
-SERVER_IP = os.getenv("SERVER_IP", "192.168.1.117")
-QDRANT_URL = os.getenv("QDRANT_URL", f"http://{SERVER_IP}:6333")
-COLLECTION_NAME = "tracks"
+from config import COLLECTION_NAME, QDRANT_CONNECTION
 
-client = QdrantClient(url=QDRANT_URL)
+client = QdrantClient(**QDRANT_CONNECTION)
 
 try:
     client.delete_collection(collection_name=COLLECTION_NAME)
