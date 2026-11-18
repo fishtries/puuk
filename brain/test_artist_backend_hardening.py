@@ -4,7 +4,7 @@ Covered contract points:
 - EV-3: catalog is computed by SQL aggregation (no full-table reads in Python);
 - EV-4: catalog and detail share one resolution path (`find_artist_by_id`);
 - EV-5: no track-cover fallback for artist artwork (`artwork_url is None`);
-- EV-6: `GET /api/artists/{id}/artwork` uses `get_cover_user` (Bearer and `?token=`);
+- EV-6: `GET /api/artists/{id}/artwork` uses `get_cover_user` (Bearer);
 - EV-7: play-start returns `ignored` for empty / Various Artists artists;
 - EV-8: repository exposes explicit public functions (no private import in routers);
 - EV-11: artwork error paths (404, 401, 304, 415, 400, 413, 403) covered;
@@ -331,7 +331,7 @@ class PlayStartStatusTest(_ArtistFixture):
 
 
 class ArtworkEndpointTest(_ArtistFixture):
-    """EV-6 / EV-11: artwork auth via Bearer and ?token=, plus error paths."""
+    """EV-6 / EV-11: artwork auth via Bearer, plus error paths."""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="puuk_artwork_")
@@ -353,7 +353,7 @@ class ArtworkEndpointTest(_ArtistFixture):
             headers=headers or self.admin,
         )
 
-    def test_put_get_bearer_and_query_token(self):
+    def test_put_get_bearer_and_reject_query_token(self):
         put = self._put()
         self.assertEqual(put.status_code, 200, put.text)
         version = put.json()["artwork_version"]
@@ -375,8 +375,7 @@ class ArtworkEndpointTest(_ArtistFixture):
         query = self.client.get(
             f"/api/artists/{self.artist_id}/artwork?token={bearer_token}"
         )
-        self.assertEqual(query.status_code, 200)
-        self.assertEqual(query.content, bearer.content)
+        self.assertEqual(query.status_code, 401)
 
     def test_if_none_match_returns_304(self):
         self._put()

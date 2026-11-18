@@ -1,6 +1,9 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Switch, Text } from 'react-native';
+import { Switch, Text, Alert } from 'react-native';
+import { clearOrdinaryAudioCache } from '../../../offline/availability';
+jest.mock('../../../offline/availability', () => ({ clearOrdinaryAudioCache: jest.fn() }));
+jest.mock('../OfflineSettings', () => () => null);
 import LoginModal from '../LoginModal';
 import { getSettings, updateSetting, addSettingsListener, t } from '../../../shared/storage/settings';
 
@@ -70,4 +73,30 @@ describe('LoginModal', () => {
 
     expect(getSettings().soundCheck).toBe(true);
   });
+  test.each([
+    ['complete', { freedBytes: 5000, failedFiles: 0 }, t('cacheCleared')],
+    ['partial', { freedBytes: 5000, failedFiles: 1 }, 'Cache partially cleared'],
+    ['no space freed', { freedBytes: 0, failedFiles: 1 }, 'Could not clear cache'],
+    ['protected or absent files', { freedBytes: 0, failedFiles: 0 }, t('cacheCleared')],
+    ['error', null, 'Could not clear cache'],
+  ])('cache confirmation reports the %s result', async (_scenario, result, message) => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    if (result) clearOrdinaryAudioCache.mockResolvedValueOnce(result);
+    else clearOrdinaryAudioCache.mockRejectedValueOnce(new Error('disk error'));
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(<LoginModal visible onClose={jest.fn()} />); });
+    const label = renderer.root.findAllByType(Text).find(node => node.props.children === t('clearCache'));
+    let control = label.parent;
+    while (control && typeof control.props.onPress !== 'function') control = control.parent;
+    expect(control).toBeTruthy();
+    await act(async () => control.props.onPress());
+    const confirm = alert.mock.calls[0][2].find(button => button.style === 'destructive');
+    expect(clearOrdinaryAudioCache).not.toHaveBeenCalled();
+    await act(async () => { await confirm.onPress(); });
+    expect(clearOrdinaryAudioCache).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[1][1]).toBe(message);
+    alert.mockRestore();
+    await act(async () => renderer.unmount());
+  });
+
 });

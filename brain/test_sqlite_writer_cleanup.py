@@ -30,7 +30,7 @@ def telemetry_db(tmp_path, monkeypatch):
                 track_id TEXT REFERENCES tracks(id), event_type TEXT,
                 listen_duration_ms INTEGER, track_duration_ms INTEGER,
                 event_id TEXT, occurred_at TEXT, context TEXT, client TEXT,
-                provenance TEXT DEFAULT 'listening');
+                provenance TEXT DEFAULT 'listening', playback_id TEXT);
             CREATE TABLE track_stats(
                 track_id TEXT PRIMARY KEY REFERENCES tracks(id),
                 play_count INTEGER, skip_count INTEGER, like_count INTEGER,
@@ -175,7 +175,7 @@ def test_artist_edit_keeps_playing_track_id_and_accepts_feedback(tmp_path, monke
     from services.artist_credit_service import set_track_artists
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'artist-edit.db'))
     schema.init_db()
-    tracks.add_or_update_track('playing', '/nonexistent/never-read.mp3', 'Song', None, 'Before')
+    tracks.add_or_update_track('playing', 'nonexistent/never-read.mp3', 'Song', None, 'Before')
     before = tracks.get_track('playing')
     revision = artist_credits.get_credit_states('track', ['playing'])['playing']['revision']
     result = set_track_artists('playing', [{'name': 'After'}, {'name': 'Guest'}],

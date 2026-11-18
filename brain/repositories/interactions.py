@@ -79,16 +79,69 @@ def get_favorites_fingerprint(user_id: int) -> str:
     conn.close()
     return f"{row['cnt']}-{row['max_added']}-{row['max_rowid']}"
 
-# --- История (History) ---
-
-def add_history(user_id: int, track_id: str):
+def set_track_rating(user_id: int, track_id: str, rating: str, operation_id: str) -> bool:
+    """Apply an explicit rating once. Keep receipts even when a track is deleted."""
+    if rating not in {'like', 'dislike', 'neutral'}:
+        raise ValueError('invalid rating')
     conn = get_connection()
+    key = (user_id, track_id)
     try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO user_history (user_id, track_id) VALUES (?, ?)", (user_id, track_id))
-        conn.commit()
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            old = conn.execute(
+                'SELECT track_id, rating FROM user_rating_operations WHERE user_id=? AND operation_id=?',
+                (user_id, operation_id),
+            ).fetchone()
+            if old:
+                if tuple(old) != (track_id, rating):
+                    raise ValueError('operation_id already used for a different rating')
+                return False
+            if conn.execute('SELECT 1 FROM tracks WHERE id=?', (track_id,)).fetchone() is None:
+                raise LookupError(track_id)
+
+            if rating == 'like':
+                conn.execute("""INSERT INTO user_favorites(user_id,track_id,provenance)
+                    VALUES (?,?,'manual') ON CONFLICT(user_id,track_id) DO UPDATE
+                    SET provenance='manual' WHERE user_favorites.provenance='import'""", key)
+            else:
+                conn.execute('DELETE FROM user_favorites WHERE user_id=? AND track_id=?', key)
+            if rating == 'dislike':
+                conn.execute("""INSERT INTO user_dislikes(user_id,track_id) VALUES (?,?)
+                    ON CONFLICT(user_id,track_id) DO NOTHING""", key)
+            else:
+                conn.execute('DELETE FROM user_dislikes WHERE user_id=? AND track_id=?', key)
+            conn.execute('INSERT INTO user_rating_operations VALUES (?,?,?,?)',
+                         (user_id, operation_id, track_id, rating))
+        return True
     finally:
         conn.close()
+
+
+# --- История (History) ---
+
+def add_history(user_id: int, track_id: str, *, playback_id=None, occurred_at=None, context=None):
+    conn = get_connection()
+    try:
+        with conn:
+            if playback_id is None:
+                conn.execute("INSERT INTO user_history (user_id, track_id) VALUES (?, ?)", (user_id, track_id))
+                return
+            conn.execute('BEGIN IMMEDIATE')
+            old = conn.execute("""SELECT track_id, played_at, context FROM user_history
+                WHERE user_id=? AND playback_id=?""", (user_id, playback_id)).fetchone()
+            if old:
+                if tuple(old) != (track_id, occurred_at, context):
+                    raise ValueError('playback_id already used for a different history event')
+                return
+            feedback = conn.execute("""SELECT track_id, occurred_at, context FROM user_wave_feedback
+                WHERE user_id=? AND playback_id=?""", (user_id, playback_id)).fetchone()
+            if feedback and tuple(feedback) != (track_id, occurred_at, context):
+                raise ValueError('playback_id already used for a different play')
+            conn.execute("""INSERT INTO user_history(user_id,track_id,playback_id,played_at,context,received_at)
+                VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)""", (user_id, track_id, playback_id, occurred_at, context))
+    finally:
+        conn.close()
+
 
 def get_user_history(user_id: int, limit: int = 50) -> list[dict]:
     conn = get_connection()
@@ -100,11 +153,12 @@ def get_user_history(user_id: int, limit: int = 50) -> list[dict]:
         LEFT JOIN albums a ON a.id = t.album_id
         WHERE uh.user_id = ?
           AND uh.id = (
-              SELECT MAX(uh2.id)
+              SELECT uh2.id
               FROM user_history uh2
               WHERE uh2.user_id = uh.user_id AND uh2.track_id = uh.track_id
+              ORDER BY julianday(uh2.played_at) DESC, uh2.id DESC LIMIT 1
           )
-        ORDER BY uh.played_at DESC, uh.id DESC
+        ORDER BY julianday(uh.played_at) DESC, uh.id DESC
         LIMIT ?
     """, (user_id, limit))
     history = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)

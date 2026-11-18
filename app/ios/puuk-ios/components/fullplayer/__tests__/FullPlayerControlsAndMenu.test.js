@@ -15,6 +15,8 @@ import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
 import { ActionSheetIOS, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Constants from 'expo-constants';
+import * as api from '../../../shared/api/api';
+import wordLyrics from '../lyrics/__tests__/fixtures/word_lyrics_synthetic.json';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -169,6 +171,30 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
     expect(renderer.root.findByType('AmbientBackground').props.currentTrack.id).toBeUndefined();
     expect(renderer.root.findByType('AppleLyricsView').props.currentTrack.id).toBeUndefined();
     await act(async () => renderer.unmount());
+  });
+
+  it('uses one online word-only result for the lyrics control and panel', async () => {
+    const fetch = jest.spyOn(api, 'authFetch').mockImplementation(async path => ({
+      ok: true, json: async () => path.endsWith('/lyrics') ? { lyrics: null, wordLyrics } : {},
+    }));
+    let renderer;
+    try {
+      await act(async () => {
+        renderer = TestRenderer.create(
+          <FullPlayerModal isPlayerVisible currentTrack={{ ...mockTrack, id: wordLyrics.trackId, has_lyrics: false }} />,
+        );
+      });
+      const controls = () => renderer.root.findByType('PlayerControls').props;
+      const lyrics = () => renderer.root.findByType('AppleLyricsView').props;
+      expect(controls().hasLyrics).toBe(true);
+      await act(async () => controls().onToggleLyrics());
+      expect(lyrics().isLyricsView).toBe(true);
+      expect(lyrics().lyricsResult).toMatchObject({ state: 'ready', payload: { wordLyrics } });
+      expect(fetch.mock.calls.filter(([path]) => path.endsWith('/lyrics'))).toHaveLength(1);
+    } finally {
+      if (renderer) await act(async () => renderer.unmount());
+      fetch.mockRestore();
+    }
   });
 
   it('renders the speed control between the loading badge and menu', async () => {

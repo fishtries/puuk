@@ -47,6 +47,7 @@
       ],
       "expo-status-bar",
       "expo-secure-store",
+      "./plugins/withPuukBackgroundDownloads",
       [
         "expo-image-picker",
         {

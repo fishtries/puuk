@@ -1,3 +1,4 @@
+import { jwtExpiry } from '../../offline/session';
 import {
   authFetch, SERVER_URL, getAuthSessionGeneration, getAuthToken,
   getCachedUser, getCachedAuthToken, addSessionListener,
@@ -25,22 +26,7 @@ export function mediaSession() {
   return { origin: new URL(SERVER_URL).origin, userId: user?.id == null ? null : String(user.id), generation: getAuthSessionGeneration() };
 }
 export function hasOfflineSession() {
-  try {
-    const token = getCachedAuthToken();
-    const segment = token.split('.')[1];
-    if (!segment || segment.length > 12000) return false;
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let bits = 0, value = 0, text = '';
-    for (const char of segment.replace(/-/g, '+').replace(/_/g, '/')) {
-      if (char === '=') break;
-      const digit = alphabet.indexOf(char);
-      if (digit < 0) return false;
-      value = (value << 6) | digit; bits += 6;
-      if (bits >= 8) { bits -= 8; text += String.fromCharCode((value >>> bits) & 255); }
-    }
-    const payload = JSON.parse(text);
-    return !!mediaSession().userId && String(payload.sub) === mediaSession().userId && typeof payload.exp === 'number' && payload.exp * 1000 > Date.now() && payload.scope !== 'media';
-  } catch { return false; }
+  return jwtExpiry(getCachedAuthToken(), mediaSession().userId) > Date.now();
 }
 const sessionKey = (s) => `${s.origin}|${s.userId}|${s.generation}`;
 export const isMediaSessionCurrent = (s) => sessionKey(s) === sessionKey(mediaSession());

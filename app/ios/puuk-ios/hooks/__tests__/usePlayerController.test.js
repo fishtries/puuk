@@ -1,16 +1,62 @@
 import React from 'react';
 import { DeviceEventEmitter } from 'react-native';
+import { getNetworkStateAsync } from 'expo-network';
+import { getNetworkPolicy } from '../../utils/networkPolicy';
 import TestRenderer, { act } from 'react-test-renderer';
 import usePlayerController, { normalizeTrackDto } from '../usePlayerController';
 import defaultPlaybackCoordinator from '../../utils/playbackCoordinator';
 import { authFetch } from '../../shared/api/api';
 import { updateSetting } from '../../shared/storage/settings';
 import { recordPlayStart } from '../../shared/api/artists';
+import { setLocalRating } from '../../offline/outbox/runtime';
+import { notifyOfflineIndex } from '../../offline/session';
+import { readWaveQueue, selectLocalWaveTracks } from '../../offline/wave';
 import { queueKey } from '../../utils/queueIdentity';
+
+const mockSession = { owner: { userId: 1, origin: 'https://puuk.app' }, activationId: 'a', generation: 1 };
+const mockOfflineListeners = new Set();
+const mockOfflineRatings = new Map();
+jest.mock('../../offline/session', () => ({
+  getOfflineSession: () => mockSession,
+  isOfflineSessionCurrent: (session) => session === mockSession,
+  notifyOfflineIndex: (event) => mockOfflineListeners.forEach((callback) => callback(event)),
+  subscribeOfflineIndex: (callback) => {
+    mockOfflineListeners.add(callback);
+    return () => mockOfflineListeners.delete(callback);
+  },
+}));
+jest.mock('../../offline/wave', () => ({
+  readWaveQueue: jest.fn(async () => null),
+  saveWaveQueue: jest.fn(async () => true),
+  selectLocalWaveTracks: jest.fn(async () => ({ reserve: [], library: [] })),
+  setWavePlaybackMode: jest.fn(),
+  waveTrackDuration: track => track.duration || 0,
+}));
+jest.mock('../../offline/outbox/runtime', () => ({
+  startOutboxSync: () => () => {},
+  getRatingOverlay: jest.fn(async () => [...mockOfflineRatings.values()]),
+  getLocalDislikeIds: async () => new Set([...mockOfflineRatings.values()]
+    .filter(entry => entry.rating === 'dislike').map(entry => entry.trackId)),
+  overlayDislikeIds: (dislikes, ratings) => {
+    const ids = new Set(dislikes);
+    for (const { trackId, rating } of ratings)
+      if (rating === 'dislike') ids.add(trackId);
+      else ids.delete(trackId);
+    return ids;
+  },
+  setLocalRating: jest.fn(),
+  recordStarted: jest.fn(),
+  recordOutcome: jest.fn(),
+}));
 
 const mockCoordinatorListeners = new Set();
 const mockAuthListeners = new Set();
 let mockAudioStatus;
+
+jest.mock('expo-network', () => ({
+  getNetworkStateAsync: jest.fn(async () => ({ isConnected: true, type: 'WIFI' })),
+  addNetworkStateListener: jest.fn(() => ({ remove() {} })),
+}));
 
 jest.mock('../playbackStatus', () => ({
   usePlaybackState: () => mockAudioStatus,
@@ -138,6 +184,19 @@ describe('usePlayerController', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockOfflineRatings.clear();
+    getNetworkStateAsync.mockResolvedValue({ isConnected: true, type: 'WIFI' });
+    await getNetworkPolicy();
+    readWaveQueue.mockResolvedValue(null);
+    selectLocalWaveTracks.mockResolvedValue({ reserve: [], library: [] });
+    setLocalRating.mockImplementation(async (session, track, rating) => {
+      const trackId = String(track.id);
+      const revision = (mockOfflineRatings.get(trackId)?.revision || 0) + 1;
+      const entry = { trackId, track, rating, state: 'pending', revision, operationId: `${trackId}-${revision}` };
+      mockOfflineRatings.set(trackId, entry);
+      notifyOfflineIndex({ type: 'rating', session, entry });
+      return entry;
+    });
     mockAudioStatus = {
       playing: false,
       currentTime: 0,
@@ -239,18 +298,16 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.id).toBe(1);
     expect(controller.currentTrack.is_liked).toBe(false);
     expect(controller.dislikeIds.has('1')).toBe(true);
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/1/dislike', { method: 'POST' });
+    expect(setLocalRating).toHaveBeenCalledWith(mockSession, expect.objectContaining({ id: 1 }), 'dislike');
     await act(async () => controller.handleToggleDislike(controller.currentTrack));
     expect(controller.dislikeIds.has('1')).toBe(false);
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/1/dislike', { method: 'DELETE' });
+    expect(setLocalRating).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({ id: 1 }), 'neutral');
   });
 
   test('failed dislike preserves the like and queue', async () => {
     await act(async () => controller.playTrackList([{ id: 1, is_liked: true }, { id: 2 }]));
-    authFetch.mockResolvedValueOnce({ ok: false, status: 503 });
-    await act(async () => {
-      await expect(controller.handleToggleDislike(controller.currentTrack)).rejects.toThrow('503');
-    });
+    setLocalRating.mockRejectedValueOnce(new Error('SQLite unavailable'));
+    await act(async () => controller.handleToggleDislike(controller.currentTrack));
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(controller.dislikeIds.has('1')).toBe(false);
     expect(controller.dislikePending).toBe(false);
@@ -433,11 +490,11 @@ describe('usePlayerController', () => {
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
     authFetch.mockClear();
     await act(async () => { await remoteFavorite()({ favoriteSelectionId: token }); });
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/41/like', { method: 'POST' });
+    expect(setLocalRating).toHaveBeenCalledWith(mockSession, expect.objectContaining({ id: 41 }), 'like');
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
     await act(async () => { await controller.handleToggleLike(controller.currentTrack); });
-    expect(authFetch).toHaveBeenLastCalledWith('/api/tracks/41/like', { method: 'DELETE' });
+    expect(setLocalRating).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({ id: 41 }), 'neutral');
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
   });
 
@@ -456,73 +513,56 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.is_liked).toBe(false);
   });
 
-  test('a slow favorite request keeps the command enabled and failure restores state', async () => {
-    await act(async () => { controller.playTrackList([{ id: 41, is_liked: false }], 0); });
+  test('a slow local commit keeps the command enabled and applies only after commit', async () => {
+    await act(async () => controller.playTrackList([{ id: 41, is_liked: false }]));
     const token = selection();
     let finish;
-    authFetch.mockClear();
-    mockPlayerInstance.setFavoriteState.mockClear();
-    authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const save = setLocalRating.getMockImplementation();
+    setLocalRating.mockImplementationOnce(async (...args) => {
+      await new Promise((resolve) => { finish = resolve; });
+      return save(...args);
+    });
     await act(async () => {
       remoteFavorite()({ favoriteSelectionId: token });
       remoteFavorite()({ favoriteSelectionId: token });
     });
-    expect(authFetch).toHaveBeenCalledTimes(1);
+    expect(setLocalRating).toHaveBeenCalledTimes(1);
+    expect(controller.currentTrack.is_liked).toBe(false);
+    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
+    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, true);
+    await act(async () => { finish(); });
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
-    expect(mockPlayerInstance.setFavoriteState.mock.calls.every(([, , enabled]) => enabled)).toBe(true);
-    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, true);
-    await act(async () => { finish({ ok: false, status: 500 }); });
-    expect(controller.currentTrack.is_liked).toBe(false);
-    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
     expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, false);
   });
 
-  test('an app favorite change stays enabled until the server confirms it', async () => {
-    await act(async () => { controller.playTrackList([{ id: 41, is_liked: true }], 0); });
-    const token = selection();
-    let finish;
-    authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    mockPlayerInstance.setFavoriteState.mockClear();
-    await act(async () => { controller.handleToggleLike(controller.currentTrack); });
-    expect(controller.currentTrack.is_liked).toBe(false);
-    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
-    expect(mockPlayerInstance.setFavoriteState.mock.calls.every(([, , enabled]) => enabled)).toBe(true);
-    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, true);
-    await act(async () => { finish({ ok: true }); });
-    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, true);
-    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(token, false);
-  });
-
-  test('an older binary retains its pending acknowledgment until completion', async () => {
+  test('an older binary disables the command while the local commit is pending', async () => {
     const setFavoritePending = mockPlayerInstance.setFavoritePending;
     delete mockPlayerInstance.setFavoritePending;
     try {
-      await act(async () => { controller.playTrackList([{ id: 41 }], 0); });
+      await act(async () => controller.playTrackList([{ id: 41 }]));
       const token = selection();
       let finish;
-      authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+      const save = setLocalRating.getMockImplementation();
+      setLocalRating.mockImplementationOnce(async (...args) => {
+        await new Promise((resolve) => { finish = resolve; });
+        return save(...args);
+      });
       await act(async () => { remoteFavorite()({ favoriteSelectionId: token }); });
-      expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, false);
-      await act(async () => { finish({ ok: true }); });
+      expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, false, false);
+      await act(async () => { finish(); });
       expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
     } finally {
       mockPlayerInstance.setFavoritePending = setFavoritePending;
     }
   });
 
-  test('a failed favorite request for the previous track leaves the new track unchanged', async () => {
-    await act(async () => { controller.playTrackList([{ id: 41 }, { id: 42, is_liked: true }], 0); });
-    let finish;
-    authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    await act(async () => { remoteFavorite()({ favoriteSelectionId: selection() }); });
-    await act(async () => { await controller.fetchNextTrack(); });
-    const nextToken = selection();
-    await act(async () => { finish({ ok: false, status: 500 }); });
-    expect(controller.currentTrack.id).toBe(42);
+  test('a pending rating overrides stale DTOs when switching tracks', async () => {
+    await act(async () => controller.playTrackList([{ id: 41 }, { id: 42, is_liked: true }]));
+    await act(async () => controller.handleToggleLike(controller.currentTrack));
+    await act(async () => controller.fetchNextTrack());
+    await act(async () => controller.playTrack({ id: 41, is_liked: false }));
     expect(controller.currentTrack.is_liked).toBe(true);
-    expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(nextToken, true, true);
-    expect(mockPlayerInstance.setFavoritePending).toHaveBeenLastCalledWith(nextToken, false);
   });
 
   test('reselecting the same track gets a new token and rejects its earlier command', async () => {
@@ -536,10 +576,10 @@ describe('usePlayerController', () => {
     expect(authFetch).not.toHaveBeenCalled();
   });
 
-  test('failed removal restores the favorite and dismissal disables the command', async () => {
+  test('failed local removal preserves the favorite and dismissal disables the command', async () => {
     await act(async () => { controller.playTrackList([{ id: 41, is_liked: true }], 0); });
     const token = selection();
-    authFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+    setLocalRating.mockRejectedValueOnce(new Error('SQLite unavailable'));
     await act(async () => { remoteFavorite()({ favoriteSelectionId: token }); });
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith(token, true, true);
@@ -547,16 +587,20 @@ describe('usePlayerController', () => {
     expect(mockPlayerInstance.setFavoriteState).toHaveBeenLastCalledWith('', false, false);
   });
 
-  test.each([true, false])('a late favorite response after unmount never touches the released player (ok=%s)', async (ok) => {
+  test('a late local commit after unmount never touches the released player', async () => {
     await act(async () => { controller.playTrackList([{ id: 41, is_liked: false }], 0); });
     let finish;
-    authFetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const save = setLocalRating.getMockImplementation();
+    setLocalRating.mockImplementationOnce(async (...args) => {
+      await new Promise((resolve) => { finish = resolve; });
+      return save(...args);
+    });
     await act(async () => { remoteFavorite()({ favoriteSelectionId: selection() }); });
     await act(async () => { renderer.unmount(); });
     mockPlayerInstance.setFavoriteState.mockClear();
     mockPlayerInstance.setFavoritePending.mockClear();
     setTracksMock.mockClear();
-    await act(async () => { finish({ ok, status: ok ? 200 : 500 }); });
+    await act(async () => { finish(); });
     expect(mockPlayerInstance.setFavoriteState).not.toHaveBeenCalled();
     expect(mockPlayerInstance.setFavoritePending).not.toHaveBeenCalled();
     expect(setTracksMock).not.toHaveBeenCalled();
@@ -1014,7 +1058,8 @@ describe('usePlayerController', () => {
     expect(controller.dislikeIds.has('999')).toBe(true);
     let resolve;
     const response = new Promise((done) => { resolve = done; });
-    authFetch.mockImplementationOnce(() => response);
+    const save = setLocalRating.getMockImplementation();
+    setLocalRating.mockImplementationOnce(async (...args) => { await response; return save(...args); });
     let pending;
     await act(async () => { pending = controller.handleToggleDislike(controller.currentTrack); });
     expect(controller.dislikePending).toBe(true);
@@ -1023,6 +1068,98 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.id).toBe(7);
     expect(controller.currentTrack.is_liked).toBe(true);
     expect(queueIds()).toEqual([8]);
+  });
+
+  test('drain replaces only recommendations and never restarts the current audio', async () => {
+    let candidates = [{ id: 'old' }];
+    authFetch.mockImplementation(async (url) => ({
+      ok: true,
+      json: async () => url.includes('/wave/next') ? { id: 'now' } : candidates,
+    }));
+    await act(async () => controller.startWave());
+    await act(async () => controller.queueControls.enqueue({ id: 'manual' }));
+    expect(queueIds()).toEqual(['old', 'manual']);
+    await act(async () => controller.handleToggleDislike({ id: 'unavailable' }));
+    candidates = [{ id: 'unavailable' }, { id: 'fresh' }];
+    const plays = defaultPlaybackCoordinator.play.mock.calls.length;
+    const token = selection();
+    await act(async () => notifyOfflineIndex({ type: 'interactions-drained', session: mockSession }));
+    expect(queueIds()).toEqual(['manual', 'fresh']);
+    expect(controller.currentTrack.id).toBe('now');
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays);
+    expect(selection()).toBe(token);
+  });
+
+  test('brain failure plays the verified reserve then a downloaded collection and reconnect refreshes at the boundary', async () => {
+    readWaveQueue.mockResolvedValue({
+      current: { id: 'wave-current' },
+      future: [{ id: 'wave-missing' }, { id: 'wave-ready' }],
+      history: [],
+    });
+    authFetch.mockImplementation(async (url) => ({
+      ok: !url.includes('/wave/queue'),
+      status: url.includes('/wave/queue') ? 503 : 200,
+      json: async () => [],
+    }));
+    selectLocalWaveTracks
+      .mockResolvedValueOnce({ reserve: [{ id: 'wave-ready' }], library: [] })
+      .mockResolvedValueOnce({ reserve: [], library: [{ id: 'downloaded' }] });
+    await act(async () => controller.startWave());
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe('wave-ready');
+    expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).toMatchObject({ offlineOnly: true });
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe('downloaded');
+    expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).toMatchObject({ offlineOnly: true });
+
+    authFetch.mockImplementation(async () => ({
+      ok: true, json: async () => [{ id: 'new-after-drain', duration: 3600 }],
+    }));
+    const before = defaultPlaybackCoordinator.play.mock.calls.length;
+    await act(async () => notifyOfflineIndex({ type: 'interactions-drained', session: mockSession }));
+    expect(controller.currentTrack.id).toBe('downloaded');
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(before);
+    expect(controller.upNextQueue[0].id).toBe('new-after-drain');
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe('new-after-drain');
+    expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).not.toHaveProperty('offlineOnly');
+  });
+
+  test('network reachability cannot refresh Wave before S4 drain and never replaces the current source', async () => {
+    const current = { id: 'offline-now' };
+    const ready = { id: 'offline-next', duration: 3600 };
+    const fresh = { id: 'recommended-after-drain', duration: 3600 };
+    readWaveQueue.mockResolvedValue({ current, future: [ready], history: [] });
+    let reconciled = false;
+    authFetch.mockImplementation(async (path) => ({
+      ok: true,
+      json: async () => path.includes('/wave/queue') ? (reconciled ? [fresh] : []) : {},
+    }));
+    await act(async () => controller.startWave());
+    const plays = defaultPlaybackCoordinator.play.mock.calls.length;
+    authFetch.mockClear();
+
+    getNetworkStateAsync.mockResolvedValue({ isConnected: false, type: 'NONE' });
+    await act(async () => getNetworkPolicy());
+    getNetworkStateAsync.mockResolvedValue({ isConnected: true, type: 'WIFI' });
+    await act(async () => getNetworkPolicy());
+    expect(authFetch.mock.calls.some(([path]) => path.includes('/wave/queue'))).toBe(false);
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays);
+
+    selectLocalWaveTracks.mockResolvedValueOnce({ reserve: [ready], library: [] });
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe(ready.id);
+    expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).toMatchObject({ offlineOnly: true });
+    expect(authFetch.mock.calls.some(([path]) => path.includes('/wave/queue'))).toBe(false);
+
+    reconciled = true;
+    await act(async () => notifyOfflineIndex({ type: 'interactions-drained', session: mockSession }));
+    expect(authFetch.mock.calls.some(([path]) => path.includes('/wave/queue'))).toBe(true);
+    expect(controller.currentTrack.id).toBe(ready.id);
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays + 1);
+    await act(async () => controller.fetchNextTrack({ finished: true }));
+    expect(controller.currentTrack.id).toBe(fresh.id);
+    expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays + 2);
   });
 
   test('late initial wave response cannot replace a collection', async () => {
@@ -1093,31 +1230,11 @@ describe('usePlayerController', () => {
     expect(controller.upNextQueue.map((t) => t.id)).toEqual([202]);
   });
 
-  test('fetchNextTrack sends wave feedback with skip when track not finished', async () => {
-    const list = [
-      { id: 10, title: 'Track 10' },
-      { id: 20, title: 'Track 20' },
-    ];
-
-    await act(async () => {
-      controller.playTrackList(list, 0);
-    });
-
-    await act(async () => {
-      await controller.fetchNextTrack();
-    });
-
+  test('leaving an unplayed selection creates no history or feedback', async () => {
+    await act(async () => controller.playTrackList([{ id: 10 }, { id: 20 }]));
+    await act(async () => controller.fetchNextTrack());
     expect(controller.currentTrack.id).toBe(20);
-    expect(authFetch).toHaveBeenCalledWith(
-      '/api/wave/feedback',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.objectContaining({
-          track_id: 10,
-          event_type: 'skip',
-        }),
-      }),
-    );
+    expect(authFetch.mock.calls.some(([url]) => /history|feedback/.test(url))).toBe(false);
   });
 
   test('rapid consecutive fetchNextTrack calls advance only once (debounced by lock)', async () => {
@@ -1201,7 +1318,7 @@ describe('usePlayerController', () => {
     });
   });
 
-  describe('Playback initiation order and history deduplication', () => {
+  describe('Playback initiation', () => {
     test('handles asynchronous playback rejection without an unhandled promise', async () => {
       const originalError = console.error;
       console.error = jest.fn();
@@ -1223,344 +1340,22 @@ describe('usePlayerController', () => {
       console.error = originalError;
     });
 
-    test('playTrack invokes playback immediately and deduplicates history POSTs within cooldown', async () => {
-      const track = { id: 88, title: 'Rapid Track' };
-
-      await act(async () => {
-        controller.playTrack(track);
-      });
-
-      // Playback initiated immediately via coordinator
-      expect(defaultPlaybackCoordinator.play).toHaveBeenCalledWith(
-        expect.anything(),
-        track,
-        expect.objectContaining({ headers: expect.any(Object) }),
-      );
-
-      // History was sent once
-      const historyCallsFirst = authFetch.mock.calls.filter((c) =>
-        c[0].includes('/api/tracks/88/history'),
-      );
-      expect(historyCallsFirst.length).toBe(1);
-
-      // Re-triggering playTrack with same track within 30 seconds should NOT send history again
-      await act(async () => {
-        controller.playTrack(track);
-      });
-
-      const historyCallsSecond = authFetch.mock.calls.filter((c) =>
-        c[0].includes('/api/tracks/88/history'),
-      );
-      expect(historyCallsSecond.length).toBe(1);
-    });
-
-    test('execution order contract: coordinator.play is called strictly before fetchQueue and history/telemetry', async () => {
+    test('starts playback before requesting future recommendations', async () => {
       const events = [];
-      defaultPlaybackCoordinator.play.mockImplementation(
-        async (player, track) => {
-          events.push(`coordinator.play:${track?.id}`);
-          return { isLocal: false, uri: 'mock://stream' };
-        },
-      );
-      authFetch.mockImplementation(async (url) => {
-        const path = url.split('?')[0];
-        events.push(`authFetch:${path}`);
-        if (path.includes('/api/wave/queue')) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => [{ id: 99, title: 'Next In Wave' }],
-          };
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
+      defaultPlaybackCoordinator.play.mockImplementationOnce(async () => {
+        events.push('play');
+        return { uri: 'mock://stream' };
       });
-
-      const track = { id: 77, title: 'Ordered Track' };
-      await act(async () => {
-        controller.playTrack(track, { source: 'search' });
+      authFetch.mockImplementation(async (path) => {
+        if (path.includes('/wave/queue')) events.push('queue');
+        return { ok: true, json: async () => [] };
       });
-
-      // coordinator.play was executed first before network calls
-      expect(events[0]).toBe('coordinator.play:77');
-      expect(events).toContain('authFetch:/api/wave/queue');
-      expect(events).toContain('authFetch:/api/tracks/77/history');
-      expect(events.indexOf('coordinator.play:77')).toBeLessThan(
-        events.indexOf('authFetch:/api/wave/queue'),
-      );
-      expect(events.indexOf('coordinator.play:77')).toBeLessThan(
-        events.indexOf('authFetch:/api/tracks/77/history'),
-      );
-
-      // Also verify order in fetchNextTrack: coordinator.play must precede feedback and history
-      events.length = 0;
-      await act(async () => {
-        await controller.fetchNextTrack();
-      });
-
-      expect(events[0]).toBe('coordinator.play:99');
-      expect(events).toContain('authFetch:/api/wave/feedback');
-      expect(events).toContain('authFetch:/api/tracks/99/history');
-      expect(events.indexOf('coordinator.play:99')).toBeLessThan(
-        events.indexOf('authFetch:/api/wave/feedback'),
-      );
-      expect(events.indexOf('coordinator.play:99')).toBeLessThan(
-        events.indexOf('authFetch:/api/tracks/99/history'),
-      );
-    });
-
-    test('history dedup incorporates user and resets when user changes via addAuthListener', async () => {
-      const track = { id: 101, title: 'User Track' };
-
-      await act(async () => {
-        controller.playTrack(track);
-      });
-
-      const callsUser1 = authFetch.mock.calls.filter((c) =>
-        c[0].includes('/api/tracks/101/history'),
-      );
-      expect(callsUser1.length).toBe(1);
-
-      // Replay in same user session is deduplicated
-      await act(async () => {
-        controller.playTrack(track);
-      });
-      expect(
-        authFetch.mock.calls.filter((c) =>
-          c[0].includes('/api/tracks/101/history'),
-        ).length,
-      ).toBe(1);
-
-      // Switch user via auth listener callback
-      await act(async () => {
-        for (const cb of mockAuthListeners) {
-          cb({ id: 2, username: 'another_user' });
-        }
-      });
-
-      // Under new user, history is sent again
-      await act(async () => {
-        controller.playTrack(track);
-      });
-      expect(
-        authFetch.mock.calls.filter((c) =>
-          c[0].includes('/api/tracks/101/history'),
-        ).length,
-      ).toBe(2);
-    });
-
-    test('loadAndPlay passes getHeadersAsync and invokes coordinator.play synchronously without blocking', async () => {
-      const track = { id: 55, title: 'Sync Start Track' };
-      await act(async () => {
-        controller.playTrack(track);
-      });
-
-      expect(defaultPlaybackCoordinator.play).toHaveBeenCalledWith(
-        expect.anything(),
-        track,
-        expect.objectContaining({
-          headers: expect.any(Object),
-          getHeadersAsync: expect.any(Function),
-        }),
-      );
-    });
-
-    test('buffers failed background telemetry and retries when network becomes good', async () => {
-      const originalWarn = console.warn;
-      console.warn = jest.fn();
-
-      authFetch.mockImplementation(async (url) => {
-        if (url.includes('/api/wave/feedback')) {
-          throw new Error('Network failure');
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
-      });
-
-      const list = [
-        { id: 10, title: 'T10' },
-        { id: 20, title: 'T20' },
-      ];
-
-      await act(async () => {
-        controller.playTrackList(list, 0);
-      });
-
-      // Trigger next track which attempts wave feedback
-      await act(async () => {
-        await controller.fetchNextTrack();
-      });
-
-      // The background event failed and was logged
-      expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          '[usePlayerController] Background event failed (/api/wave/feedback):',
-        ),
-        expect.any(String),
-      );
-
-      // Now network recovers: mock authFetch succeeds
-      authFetch.mockImplementation(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-      }));
-
-      // Notify good network status to coordinator listeners
-      await act(async () => {
-        for (const listener of mockCoordinatorListeners) {
-          listener({ networkStatus: 'good' });
-        }
-      });
-
-      // Flushed retry succeeded
-      const retriedFeedbackCalls = authFetch.mock.calls.filter((c) =>
-        c[0].includes('/api/wave/feedback'),
-      );
-      expect(retriedFeedbackCalls.length).toBeGreaterThanOrEqual(2);
-
-      console.warn = originalWarn;
-    });
-
-    test('retry buffer flushes via timer even if coordinator networkStatus does not change', async () => {
-      jest.useFakeTimers();
-      const originalWarn = console.warn;
-      console.warn = jest.fn();
-
-      let attempts = 0;
-      authFetch.mockImplementation(async (url) => {
-        if (url.includes('/api/wave/feedback')) {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new Error('Network timeout');
-          }
-          return { ok: true, status: 200, json: async () => ({}) };
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
-      });
-
-      const list = [
-        { id: 10, title: 'T10' },
-        { id: 20, title: 'T20' },
-      ];
-
-      await act(async () => {
-        controller.playTrackList(list, 0);
-      });
-
-      await act(async () => {
-        await controller.fetchNextTrack();
-      });
-
-      expect(attempts).toBe(1);
-
-      // Advance timer by 5000ms: timer should trigger flushPendingBackgroundEvents
-      await act(async () => {
-        jest.advanceTimersByTime(5000);
-      });
-
-      expect(attempts).toBe(2);
-
-      console.warn = originalWarn;
-      jest.useRealTimers();
-    });
-
-    test('does not requeue an in-flight retry after auth user changes', async () => {
-      const originalWarn = console.warn;
-      console.warn = jest.fn();
-      let feedbackAttempts = 0;
-      let resolveRetry;
-      authFetch.mockImplementation(async (url) => {
-        if (url.includes('/api/wave/feedback')) {
-          feedbackAttempts += 1;
-          if (feedbackAttempts === 1) throw new Error('Network timeout');
-          return new Promise((resolve) => {
-            resolveRetry = resolve;
-          });
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
-      });
-
-      await act(async () => {
-        controller.playTrackList([{ id: 10 }, { id: 20 }], 0);
-      });
-      await act(async () => {
-        await controller.fetchNextTrack();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(feedbackAttempts).toBe(1);
-
-      let flushPromise;
-      await act(async () => {
-        for (const listener of mockCoordinatorListeners) {
-          listener({ networkStatus: 'good' });
-        }
-        await Promise.resolve();
-        flushPromise = Promise.resolve();
-      });
-      expect(feedbackAttempts).toBe(2);
-      const feedbackCalls = authFetch.mock.calls.filter(([url]) => url.includes('/api/wave/feedback'));
-      expect(feedbackCalls[0][1].body.event_id).toBeTruthy();
-      expect(feedbackCalls[1][1].body.event_id).toBe(feedbackCalls[0][1].body.event_id);
-      expect(feedbackCalls[1][1].body.occurred_at).toBe(feedbackCalls[0][1].body.occurred_at);
-
-      await act(async () => {
-        for (const listener of mockAuthListeners) {
-          listener({ id: 2, username: 'new_user' });
-        }
-        resolveRetry({ ok: true, status: 200, json: async () => ({}) });
-        await flushPromise;
-        await Promise.resolve();
-      });
-
-      expect(feedbackAttempts).toBe(2);
-      console.warn = originalWarn;
-    });
-
-    test('retry buffer discards permanent HTTP errors (400, 401, 404) without buffering', async () => {
-      const originalWarn = console.warn;
-      console.warn = jest.fn();
-
-      let attempts = 0;
-      authFetch.mockImplementation(async (url) => {
-        if (url.includes('/api/wave/feedback')) {
-          attempts += 1;
-          return {
-            ok: false,
-            status: 400,
-            json: async () => ({ error: 'Bad Request' }),
-          };
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
-      });
-
-      const list = [
-        { id: 10, title: 'T10' },
-        { id: 20, title: 'T20' },
-      ];
-
-      await act(async () => {
-        controller.playTrackList(list, 0);
-      });
-
-      await act(async () => {
-        await controller.fetchNextTrack();
-      });
-
-      expect(attempts).toBe(1);
-
-      // Coordinator emits 'good' network status
-      await act(async () => {
-        for (const listener of mockCoordinatorListeners) {
-          listener({ networkStatus: 'good' });
-        }
-      });
-
-      // Because 400 is not retryable, it was discarded and NOT retried
-      expect(attempts).toBe(1);
-
-      console.warn = originalWarn;
+      await act(async () => controller.playTrack({ id: 77 }, { source: 'search' }));
+      expect(events).toEqual(['play', 'queue']);
+      expect(authFetch.mock.calls.some(([url]) => /history|feedback/.test(url))).toBe(false);
     });
   });
+
 
   describe('dismissPlayer', () => {
     it('stops audio playback, clears queue, resets currentTrack, and deactivates lock screen', async () => {

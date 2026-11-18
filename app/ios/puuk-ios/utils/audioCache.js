@@ -2,6 +2,9 @@
  * are committed with SDK's synchronous rename-to-absent operation. No existing
  * manifest is overwritten, and no network capability is persisted. */
 import { File, Directory, Paths } from 'expo-file-system';
+import { getOfflineSession } from '../offline/session';
+import { reserveCacheTransfer, setBudgetCache } from '../offline/budget';
+import { acquirePlayable } from '../offline';
 import { authFetch, addSessionListener } from '../shared/api/api';
 import { mediaSession, hasOfflineSession, isMediaSessionCurrent, validateMediaUrl,
   boundedMediaOperation, monotonicNow, MediaDeliveryError } from '../shared/api/media';
@@ -140,6 +143,8 @@ export class AudioCache {
     this._nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     this._counter = 0;
     this.reservedBytes = 0;
+    this.pinned = new Map();
+    this.useOfflineBudget = options.useOfflineBudget === true;
   }
   revoke() {
     this.generation++;
@@ -148,6 +153,7 @@ export class AudioCache {
   }
   setForeground(active) { this.foreground = active; this.revoke(); }
   setOnline(online) { if (online && !this.online) this.validated.clear(); this.online = online; }
+  setActiveTrackId(id) { this.activeTrackId = id; }
   setProtectedTrackIds(ids) { this.protectedTrackIds = new Set((ids || []).map(String)); }
   async init() {
     if (this.isInitialized) return this;
@@ -209,7 +215,7 @@ export class AudioCache {
       if (generation !== this.generation || JSON.stringify(s) !== JSON.stringify(this.session())) return;
       this.validated.set(key, { version: dto.content_version ?? null, until: this.now() + 30000 });
       while (this.validated.size > 200) this.validated.delete(this.validated.keys().next().value);
-      for (const [k, e] of Object.entries(this.manifest)) if (e.origin === s.origin && e.userId === s.userId && e.trackId === id && e.contentVersion !== dto.content_version) {
+      for (const [k, e] of Object.entries(this.manifest)) if (e.origin === s.origin && e.userId === s.userId && e.trackId === id && e.trackId !== this.activeTrackId && !this.pinned.has(e.uri) && e.contentVersion !== dto.content_version) {
         safeDelete(new File(e.uri)); delete this.manifest[k];
       }
     } catch { /* no metadata proof => online cache remains inaccessible */ }
@@ -234,11 +240,15 @@ export class AudioCache {
   getOngoingPromise(id) { return this.ongoingDownloads.get(String(id))?.promise || null; }
   getOrFetch(trackId, descriptor, options = {}) {
     const id = String(trackId);
-    if (this.ongoingDownloads.has(id)) return this.ongoingDownloads.get(id).publicPromise || this.ongoingDownloads.get(id).promise;
-    if (!this.foreground || this.ongoingDownloads.size >= 2) return Promise.reject(new MediaDeliveryError('busy'));
+    const existing = this.ongoingDownloads.get(id);
     const s = this.session(), generation = this.generation;
+    const identity = keyOf(s || {}, id, descriptor?.contentVersion);
+    if (existing) return identity === existing.identity && generation === existing.generation
+      ? existing.publicPromise || existing.promise
+      : Promise.reject(new MediaDeliveryError('busy'));
+    if (!this.foreground || this.ongoingDownloads.size >= 2) return Promise.reject(new MediaDeliveryError('busy'));
     let controller = new AbortController();
-    const r = { cancelled: false, task: null, promise: null, cancel: () => { r.cancelled = true; controller.abort(); try { r.task?.cancel(); } catch {} } };
+    const r = { identity, generation, cancelled: false, task: null, promise: null, cancel: () => { r.cancelled = true; controller.abort(); try { r.task?.cancel(); } catch {} } };
     const stale = () => r.cancelled || options.signal?.aborted || !this.foreground || !this.sessionValid() || generation !== this.generation || JSON.stringify(s) !== JSON.stringify(this.session());
     const guard = () => { if (stale()) throw createCancelledError(); };
     const cancel = () => r.cancel();
@@ -252,7 +262,7 @@ export class AudioCache {
       for (let attempt = 0; attempt < 2; attempt++) {
         controller = new AbortController();
         const deadline = this.now() + this.totalTimeoutMs;
-        let temp, final, task, timer, inactivity, admissionTimer, reserved = 0, bytes = 0, failed = false;
+        let temp, final, task, timer, inactivity, admissionTimer, globalReservation, reserved = 0, bytes = 0, failed = false;
         const expire = () => { failed = true; r.cancelled = true; rejectPublic(new MediaDeliveryError('timeout')); controller.abort(); try { task?.cancel(); } catch {} };
         const check = () => { guard(); if (failed || this.now() >= deadline) throw new MediaDeliveryError('timeout'); };
         try {
@@ -265,7 +275,20 @@ export class AudioCache {
             JSON.stringify(d.session) !== JSON.stringify(s) || this.now() >= d.reuseUntil ||
             d.downloadBinding !== (d.delivery === 'cdn' ? 'immutable-path' : 'if-match')) throw new MediaDeliveryError('stream_only');
           validateMediaUrl(d.uri, { origin: s.origin, trackId: id, delivery: d.delivery, contentVersion: d.contentVersion });
-          if (Paths.availableDiskSpace < d.contentLength + this.safetyMarginBytes) throw new MediaDeliveryError('space');
+          if (this.useOfflineBudget) {
+            const session = getOfflineSession();
+            const durable = await acquirePlayable(session, id, d.contentVersion);
+            if (durable) {
+              durable.release();
+              guard();
+              return durable.uri;
+            }
+            globalReservation = await reserveCacheTransfer(session, s, id, d.contentVersion, d.contentLength, () => !stale());
+            if (!globalReservation) throw new MediaDeliveryError('space');
+            check();
+          } else if (Paths.availableDiskSpace < d.contentLength + this.safetyMarginBytes) {
+            throw new MediaDeliveryError('space');
+          }
           // Reserve aggregate bytes before native IO; two concurrent transfers
           // cannot each consume the full cache capacity. Evict across namespaces.
           const reservation = this._publication.catch(() => {}).then(() => {
@@ -273,7 +296,7 @@ export class AudioCache {
             let total = Object.values(this.manifest).reduce((n, e) => n + e.size, 0) + this.reservedBytes + d.contentLength;
             for (const [key, e] of Object.entries(this.manifest).sort((a,b) => a[1].lastAccessed - b[1].lastAccessed)) {
               if (total <= this.maxSizeBytes) break;
-              if (this.protectedTrackIds.has(e.trackId)) continue;
+              if (this.pinned.has(e.uri) || e.trackId === this.activeTrackId || this.protectedTrackIds.has(e.trackId)) continue;
               safeDelete(new File(e.uri)); delete this.manifest[key]; total -= e.size;
             }
             if (total > this.maxSizeBytes) throw new MediaDeliveryError('space');
@@ -284,6 +307,7 @@ export class AudioCache {
           const name = `${this._nonce}-${++this._counter}`;
           temp = new File(this.tempDir, `object-${name}.part`);
           final = new File(this.cacheDir, `object-${name}.mp3`);
+          globalReservation?.setFiles(temp, final);
           // CDN gets a new EMPTY object; direct conditional GET binds the bytes.
           const headers = d.delivery === 'cdn' ? {} : { 'If-Match': `"sha256-${d.contentVersion}"` };
           timer = setTimeout(expire, this.totalTimeoutMs);
@@ -291,7 +315,11 @@ export class AudioCache {
           arm();
           task = File.createDownloadTask(d.uri, temp, { headers, signal: controller.signal, sessionType: 'foreground', onProgress: p => {
             if (stale() || failed) return;
-            if (Number.isFinite(p.bytesWritten) && p.bytesWritten > bytes) { bytes = p.bytesWritten; arm(); }
+            if (Number.isFinite(p.bytesWritten) && p.bytesWritten > bytes) {
+              bytes = p.bytesWritten;
+              globalReservation?.recordProgress(bytes);
+              arm();
+            }
           } });
           r.task = task;
           // Retain slot/temp until the actual SDK promise ends, even after abort.
@@ -300,7 +328,8 @@ export class AudioCache {
           if (!result || result.uri !== temp.uri || !result.exists || result.size !== d.contentLength) throw new MediaDeliveryError('partial');
           const admissionDeadline = Math.min(deadline, this.now() + 5000);
           admissionTimer = setTimeout(expire, Math.max(1, admissionDeadline - this.now()));
-          await result.move(final, { overwrite: false }); check();
+          await result.move(final, { overwrite: false });
+          check();
           if (!final.exists || final.size !== d.contentLength) throw new MediaDeliveryError('partial');
           const entry = { origin: s.origin, userId: s.userId, trackId: id, contentVersion: d.contentVersion,
             uri: final.uri, size: d.contentLength, expectedLength: d.contentLength, mime: 'audio/mpeg',
@@ -316,7 +345,7 @@ export class AudioCache {
           // Native SDK errors have no supported status accessor. Fresh resolution
           // is the only bounded retry, including a possible precondition failure.
           if (attempt || !options.resolveFresh || ['stream_only', 'space'].includes(error?.code) || error?.terminal) throw new MediaDeliveryError(error instanceof MediaDeliveryError ? error.code : 'download');
-        } finally { this.reservedBytes -= reserved; clearTimeout(timer); clearTimeout(inactivity); clearTimeout(admissionTimer); try { task?.release?.(); } catch {} r.task = null; }
+        } finally { globalReservation?.release(); this.reservedBytes -= reserved; clearTimeout(timer); clearTimeout(inactivity); clearTimeout(admissionTimer); try { task?.release?.(); } catch {} r.task = null; }
       }
       throw new MediaDeliveryError('download');
     })().finally(() => { options.signal?.removeEventListener('abort', cancel); if (this.ongoingDownloads.get(id) === r) this.ongoingDownloads.delete(id); });
@@ -334,7 +363,7 @@ export class AudioCache {
       const evict = [];
       for (const [k, e] of Object.entries(next).sort((a, b) => a[1].lastAccessed - b[1].lastAccessed)) {
         if (total <= this.maxSizeBytes) break;
-        if (k === key || this.protectedTrackIds.has(e.trackId)) continue;
+        if (k === key || this.pinned.has(e.uri) || e.trackId === this.activeTrackId || this.protectedTrackIds.has(e.trackId)) continue;
         delete next[k]; total -= e.size; evict.push(e.uri);
       }
       if (total > this.maxSizeBytes) throw new MediaDeliveryError('space');
@@ -370,10 +399,80 @@ export class AudioCache {
     for (const [key, e] of Object.entries(this.manifest)) if (e.origin === s.origin && e.userId === s.userId && e.trackId === String(id) && (!expectedUri || e.uri === expectedUri)) { safeDelete(new File(e.uri)); delete this.manifest[key]; }
   }
   remove(id) { this.cancel(id); return this.invalidate(id); }
-  async clear() { this.revoke(); this.manifest = {}; for (const f of this.cacheDir.list()) if (f.name !== TEMP_DIR_NAME) safeDelete(f); }
+  borrowVersion(owner, trackId, contentVersion) {
+    const key = keyOf(owner, String(trackId), contentVersion);
+    const entry = this.manifest[key];
+    if (!this._validEntry(entry, key)) return null;
+    const uri = entry.uri;
+    this.pinned.set(uri, (this.pinned.get(uri) || 0) + 1);
+    let released = false;
+    return {
+      file: new File(uri),
+      discard: () => {
+        if (released || this.pinned.get(uri) !== 1 || this.activeTrackId === entry.trackId ||
+            this.manifest[key]?.uri !== uri) return;
+        const file = new File(uri);
+        safeDelete(file);
+        if (!file.exists) delete this.manifest[key];
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        const remaining = this.pinned.get(uri) - 1;
+        if (remaining) this.pinned.set(uri, remaining);
+        else this.pinned.delete(uri);
+      },
+    };
+  }
+  budgetFiles() {
+    const sizes = new Map();
+    for (const dir of [this.cacheDir, this.tempDir]) {
+      if (!dir.exists) continue;
+      for (const file of dir.list()) {
+        if (file instanceof File && file.exists) sizes.set(file.uri, Number(file.size) || 0);
+      }
+    }
+    return sizes;
+  }
+  async evictForBudget(fits, { clear = false } = {}) {
+    await this._evict(fits, clear);
+  }
+  async _evict(fits, ignoreProtectedTracks) {
+    await this.init();
+    const operation = this._publication.catch(() => {}).then(() => {
+      let freedBytes = 0;
+      let failedFiles = 0;
+      for (const [key, entry] of Object.entries(this.manifest).sort((a, b) =>
+        a[1].lastAccessed - b[1].lastAccessed)) {
+        if (fits(freedBytes)) break;
+        if (this.pinned.has(entry.uri) || this.activeTrackId === entry.trackId ||
+            (!ignoreProtectedTracks && this.protectedTrackIds.has(entry.trackId))) continue;
+        const file = new File(entry.uri);
+        const bytes = file.exists ? Number(file.size) || 0 : 0;
+        safeDelete(file);
+        if (file.exists) {
+          failedFiles++;
+          continue;
+        }
+        delete this.manifest[key];
+        freedBytes += bytes;
+      }
+      return { freedBytes, failedFiles };
+    });
+    this._publication = operation;
+    return operation;
+  }
+  async clear() {
+    this.revoke();
+    return this._evict(() => false, true);
+  }
   async getSize() { await this.init(); return Object.values(this.manifest).reduce((n, e) => n + e.size, 0); }
   async setMaxSize(size) { this.maxSizeBytes = Math.min(size, DEFAULT_MAX_SIZE_BYTES); }
 }
-const defaultAudioCache = new AudioCache();
+const defaultAudioCache = new AudioCache({ useOfflineBudget: true });
+setBudgetCache({
+  files: () => defaultAudioCache.budgetFiles(),
+  evict: fits => defaultAudioCache.evictForBudget(fits, { clear: true }),
+});
 if (typeof addSessionListener === 'function') addSessionListener(() => defaultAudioCache.revoke());
 export default defaultAudioCache;

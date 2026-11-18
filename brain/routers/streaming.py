@@ -9,6 +9,7 @@ import db
 from auth import (
     MEDIA_TICKET_TTL_SECONDS,
     create_media_ticket_with_expiry,
+    create_cover_ticket,
     get_cover_user,
     get_current_user,
     get_stream_user,
@@ -159,6 +160,12 @@ def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
     return etag in candidates or "*" in candidates
 
 
+@router.post("/api/cover/{track_id}/ticket")
+def issue_cover_ticket(track_id: uuid.UUID, response: Response, user: dict = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return {"ticket": create_cover_ticket(user, str(track_id))}
+
+
 @router.get("/api/cover/{track_id}")
 def get_cover_art(
     track_id: str,
@@ -213,7 +220,7 @@ def get_cover_art(
 def get_track_color(
     track_id: str,
     request: Request,
-    current_user: dict = Depends(get_cover_user),
+    current_user: dict = Depends(get_stream_user),
 ):
     """Возвращает доминирующий цвет обложки в HEX-формате с кешированием в SQLite."""
     try:

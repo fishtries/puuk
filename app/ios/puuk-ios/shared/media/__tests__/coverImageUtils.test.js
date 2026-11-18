@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import CoverImage, {
   isServerCoverUri,
   isArtistArtworkUri,
-  hasMediaTicket,
+  resolveLockScreenCover,
   resolveCoverUri,
   prefetchCover,
   NeutralPlaceholder,
@@ -22,11 +22,11 @@ describe('components/CoverImage and utils', () => {
   });
 
   it('keeps preview authorization and version while leaving artist artwork alone', () => {
-    const uri = new URL(resolveCoverUri('/api/cover/example?v=7', 'private', { size: 256 }));
+    const uri = new URL(resolveCoverUri('/api/cover/example?v=7', { size: 256 }));
     expect(uri.searchParams.get('v')).toBe('7');
-    expect(uri.searchParams.get('token')).toBe('private');
+    expect(uri.searchParams.has('token')).toBe(false);
     expect(uri.searchParams.get('size')).toBe('256');
-    expect(resolveCoverUri('/api/artists/example/artwork', null, { size: 256 })).not.toContain('size=');
+    expect(resolveCoverUri('/api/artists/example/artwork', { size: 256 })).not.toContain('size=');
   });
   const originalServerUrl = api.SERVER_URL;
 
@@ -63,19 +63,6 @@ describe('components/CoverImage and utils', () => {
       expect(isArtistArtworkUri(undefined)).toBe(false);
       expect(isArtistArtworkUri(12345)).toBe(false);
       expect(isArtistArtworkUri({})).toBe(false);
-    });
-  });
-
-  describe('hasMediaTicket', () => {
-    it('detects media ticket query parameter (?mt= or &mt=)', () => {
-      expect(hasMediaTicket('/api/stream/123?mt=ticket_token')).toBe(true);
-      expect(hasMediaTicket('https://web.puuk.fun/api/artists/art_1/artwork?v=1&mt=ticket_token')).toBe(true);
-    });
-
-    it('returns false when no media ticket is present', () => {
-      expect(hasMediaTicket('/api/artists/art_1/artwork?v=1')).toBe(false);
-      expect(hasMediaTicket('/api/cover/123')).toBe(false);
-      expect(hasMediaTicket(null)).toBe(false);
     });
   });
 
@@ -122,17 +109,28 @@ describe('components/CoverImage and utils', () => {
       expect(resolved).toBe(`${api.SERVER_URL}/api/cover/test-uuid`);
     });
 
-    it('appends token parameter with proper separator for cover paths', () => {
-      const withParams = resolveCoverUri('/api/cover/test?v=1', 'my_jwt_token');
-      expect(withParams).toBe(`${api.SERVER_URL}/api/cover/test?v=1&token=my_jwt_token`);
+    it('removes historical account tokens from cover URLs', () => {
+      expect(resolveCoverUri('/api/cover/test?token=old&v=1&token=older', 'account-secret')).toBe(`${api.SERVER_URL}/api/cover/test?v=1`);
+    });
 
-      const withoutParams = resolveCoverUri('/api/cover/test', 'my_jwt_token');
-      expect(withoutParams).toBe(`${api.SERVER_URL}/api/cover/test?token=my_jwt_token`);
+    it('only requests a narrowly scoped permission for native artwork', async () => {
+      const fetch = jest.spyOn(api, 'authFetch').mockResolvedValue({
+        ok: true, json: async () => ({ ticket: 'cover-only' }),
+      });
+      try {
+        const uri = await resolveLockScreenCover('/api/cover/abcd?v=1&token=old');
+        expect(fetch).toHaveBeenCalledWith('/api/cover/abcd/ticket', expect.objectContaining({ method: 'POST' }));
+        expect(uri).toBe(`${api.SERVER_URL}/api/cover/abcd?v=1&ct=cover-only`);
+      } finally { fetch.mockRestore(); }
+    });
+
+    it('does not trust hosts that start with the API origin', () => {
+      expect(isServerCoverUri(api.SERVER_URL + '.untrusted.test/image')).toBe(false);
     });
 
     it('does not touch external URLs and does not leak token to them', () => {
       const external = 'https://e-cdns-images.dzcdn.net/images/cover/12345.jpg';
-      const resolved = resolveCoverUri(external, 'secret_token');
+      const resolved = resolveCoverUri(external);
       expect(resolved).toBe(external);
       expect(resolved).not.toContain('secret_token');
     });
@@ -144,13 +142,13 @@ describe('components/CoverImage and utils', () => {
     });
 
     it('never builds a raw token query for artist artwork', () => {
-      const resolved = resolveCoverUri('/api/artists/art_123/artwork', 'my_secret_token');
+      const resolved = resolveCoverUri('/api/artists/art_123/artwork');
       expect(resolved).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork`);
       expect(resolved).not.toContain('token=');
     });
 
     it('strips pre-existing token parameter from artist artwork URLs', () => {
-      const resolved = resolveCoverUri('/api/artists/art_123/artwork?token=leaked&v=2', 'another_token');
+      const resolved = resolveCoverUri('/api/artists/art_123/artwork?token=leaked&v=2');
       expect(resolved).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork?v=2`);
       expect(resolved).not.toContain('token=');
     });
@@ -161,10 +159,10 @@ describe('components/CoverImage and utils', () => {
     });
 
     it('busts cache when version option is provided', () => {
-      const resolvedNoVersion = resolveCoverUri('/api/artists/art_123/artwork', null, 2);
+      const resolvedNoVersion = resolveCoverUri('/api/artists/art_123/artwork', 2);
       expect(resolvedNoVersion).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork?v=2`);
 
-      const resolvedUpdateVersion = resolveCoverUri('/api/artists/art_123/artwork?v=1', null, { artwork_version: 3 });
+      const resolvedUpdateVersion = resolveCoverUri('/api/artists/art_123/artwork?v=1', { artwork_version: 3 });
       expect(resolvedUpdateVersion).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork?v=3`);
     });
   });
@@ -174,22 +172,11 @@ describe('components/CoverImage and utils', () => {
       jest.restoreAllMocks();
     });
 
-    it('triggers Image.prefetch with resolved URL and token for covers', () => {
-      const prefetchSpy = jest.spyOn(Image, 'prefetch').mockImplementation(() => Promise.resolve(true));
-      prefetchCover('/api/cover/track-123', 'token_abc');
-      expect(prefetchSpy).toHaveBeenCalledWith(`${api.SERVER_URL}/api/cover/track-123?token=token_abc`);
-    });
-
-    it('triggers Image.prefetch without token for artist artwork', () => {
-      const prefetchSpy = jest.spyOn(Image, 'prefetch').mockImplementation(() => Promise.resolve(true));
-      prefetchCover('/api/artists/art_123/artwork?v=1', 'token_abc');
-      expect(prefetchSpy).toHaveBeenCalledWith(`${api.SERVER_URL}/api/artists/art_123/artwork?v=1`);
-    });
-
-    it('respects version option when prefetching artist artwork', () => {
-      const prefetchSpy = jest.spyOn(Image, 'prefetch').mockImplementation(() => Promise.resolve(true));
-      prefetchCover('/api/artists/art_123/artwork', null, 4);
-      expect(prefetchSpy).toHaveBeenCalledWith(`${api.SERVER_URL}/api/artists/art_123/artwork?v=4`);
+    it('loads protected covers into the native loader with authorization headers', () => {
+      jest.spyOn(api, 'getCachedAuthHeaders').mockReturnValue({ Authorization: 'Bearer token_abc' });
+      const load = jest.spyOn(Image, 'getSizeWithHeaders').mockResolvedValue({width: 10, height: 10});
+      prefetchCover('/api/cover/track-123');
+      expect(load).toHaveBeenCalledWith(`${api.SERVER_URL}/api/cover/track-123`, { Authorization: 'Bearer token_abc' });
     });
 
     it('gracefully ignores empty or invalid inputs', () => {
@@ -329,24 +316,6 @@ describe('components/CoverImage and utils', () => {
       expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork?v=2`);
     });
 
-    it('loads artist artwork with media ticket even when auth headers are not yet cached', () => {
-      jest.spyOn(api, 'getCachedAuthHeaders').mockReturnValue(null);
-
-      let renderer;
-      act(() => {
-        renderer = TestRenderer.create(
-          <CoverImage
-            artwork_url="/api/artists/art_123/artwork?mt=valid_ticket&v=1"
-            style={{ width: 100, height: 100 }}
-          />
-        );
-      });
-
-      const image = renderer.root.findByType(Image);
-      expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/artists/art_123/artwork?mt=valid_ticket&v=1`);
-      expect(image.props.source.uri).not.toContain('token=');
-    });
-
     it('falls back to neutral placeholder on error for artist artwork (never track cover)', () => {
       jest.spyOn(api, 'getCachedAuthHeaders').mockReturnValue({ Authorization: 'Bearer test_jwt' });
 
@@ -379,7 +348,7 @@ describe('components/CoverImage and utils', () => {
       expect(renderer.root.findAllByType(NeutralPlaceholder).length).toBe(0);
     });
 
-    it('does not regress existing cover behavior: appends token to track cover URLs', () => {
+    it('sends track cover credentials only in the header', () => {
       jest.spyOn(api, 'getCachedAuthHeaders').mockReturnValue({ Authorization: 'Bearer token_123' });
       jest.spyOn(api, 'getCachedAuthToken').mockReturnValue('token_123');
 
@@ -391,7 +360,7 @@ describe('components/CoverImage and utils', () => {
       });
 
       const image = renderer.root.findByType(Image);
-      expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/cover/track-456?size=128&token=token_123`);
+      expect(image.props.source.uri).toBe(`${api.SERVER_URL}/api/cover/track-456?size=128`);
       expect(image.props.source.headers).toEqual({ Authorization: 'Bearer token_123' });
     });
   });

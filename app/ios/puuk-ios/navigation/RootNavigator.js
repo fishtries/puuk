@@ -5,6 +5,7 @@ import MainTabsScreen from './MainTabs';
 import AlbumScreen from '../features/albums/AlbumScreen';
 import AlbumEditScreen from '../features/albums/AlbumEditScreen';
 import PlaylistScreen from '../features/playlists/PlaylistScreen';
+import DownloadedScreen from '../features/downloads/DownloadedScreen';
 import TrackEditScreen from '../features/library/TrackEditScreen';
 import ArtistScreen from '../features/artists/ArtistScreen';
 import ArtistCreditBulkScreen from '../features/artists/ArtistCreditBulkScreen';
@@ -99,6 +100,9 @@ const RootNavigator = React.memo(function RootNavigator({
         {(props) => (
           <PlaylistScreen {...props} onPlayTrackList={playTrackList} onPressEllipsis={setTrackToManage} />
         )}
+      </Stack.Screen>
+      <Stack.Screen name="Downloaded">
+        {(props) => <DownloadedScreen {...props} onPlayTrackList={playTrackList} onOpenAuthModal={onOpenAuthModal} />}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>

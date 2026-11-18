@@ -9,6 +9,34 @@ import {
   authFetch,
 } from '../../shared/api/api';
 import { recordPlayStart } from '../../shared/api/artists';
+import { recordOutcome, recordStarted } from '../../offline/outbox/runtime';
+import { createOfflineId } from '../../offline/session';
+
+const mockSession = { owner: { userId: 1, origin: 'https://puuk.app' }, activationId: 'a', generation: 1 };
+let mockActiveSession;
+const mockAcquirePlayable = jest.fn();
+jest.mock('../../offline', () => ({
+  ...jest.requireActual('../../offline'),
+  acquirePlayable: (...args) => mockAcquirePlayable(...args),
+}));
+jest.mock('../../offline/session', () => ({
+  getOfflineSession: () => mockActiveSession,
+  isOfflineSessionCurrent: (session) => !!session && session === mockActiveSession,
+  subscribeOfflineIndex: () => () => {},
+  createOfflineId: jest.fn(),
+}));
+jest.mock('../../offline/outbox/runtime', () => ({
+  startOutboxSync: () => () => {},
+  getLocalDislikeIds: async () => new Set(),
+  recordStarted: jest.fn().mockResolvedValue(),
+  recordOutcome: jest.fn().mockResolvedValue(),
+}));
+jest.mock('../../offline/wave', () => ({
+  readWaveQueue: jest.fn(),
+  selectLocalWaveTracks: jest.fn(),
+  saveWaveQueue: async () => true,
+  setWavePlaybackMode: () => {},
+}));
 
 let mockCoordinator;
 let mockPlayer;
@@ -210,9 +238,13 @@ describe('usePlayerController with accepted real coordinator', () => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     mockAuthListeners.clear();
+    mockActiveSession = mockSession;
+    mockAcquirePlayable.mockResolvedValue(null);
+    let playId = 0;
+    createOfflineId.mockImplementation(() => `play-${++playId}`);
     getAuthHeaders.mockResolvedValue({ Authorization: 'Bearer synthetic' });
     getCachedAuthHeaders.mockReturnValue({ Authorization: 'Bearer synthetic' });
-    authFetch.mockResolvedValue({ ok: true, json: async () => [] });
+    authFetch.mockReset().mockResolvedValue({ ok: true, json: async () => [] });
     mockStatus = {
       playing: false,
       currentTime: 0,
@@ -248,8 +280,63 @@ describe('usePlayerController with accepted real coordinator', () => {
   });
   afterEach(async () => {
     if (renderer) await act(async () => renderer.unmount());
+    renderer = null;
     mockCoordinator.destroy();
     jest.useRealTimers();
+  });
+
+  test('terminal Wave fallback keeps the confirmed start and closes the failed listening episode without an outcome', async () => {
+    const { readWaveQueue, selectLocalWaveTracks } = require('../../offline/wave');
+    readWaveQueue.mockResolvedValueOnce({ current: track('A'), future: [], history: [] });
+    selectLocalWaveTracks.mockResolvedValueOnce({ reserve: [track('B')], library: [] });
+    mockAcquirePlayable.mockImplementation(async (_session, id) =>
+      id === 'B' ? { uri: 'file:///B', release() {} } : null,
+    );
+    await act(async () => { await controller.startWave(); await flush(); });
+    expect(controller.currentTrack.id).toBe('A');
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenCalledWith(mockSession, expect.objectContaining({
+      trackId: 'A', context: 'wave',
+    }));
+    await act(async () => {
+      mockCoordinator._terminateWithError(new PlaybackError('fixture', { type: 'play_error' }));
+      await flush();
+    });
+    expect(controller.currentTrack.id).toBe('B');
+    expect(recordOutcome).not.toHaveBeenCalled();
+    expect(recordStarted).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['unmounted', 'replaced', 'current'])('queue rejection for %s selection is reported only while current', async (state) => {
+    let rejectQueue;
+    let signal;
+    authFetch.mockImplementationOnce((_url, options) => new Promise((_, reject) => {
+      rejectQueue = reject;
+      signal = options.signal;
+    }));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await act(async () => { controller.playTrack(track('A'), { source: 'search' }); await flush(); });
+      expect(rejectQueue).toEqual(expect.any(Function));
+      await act(async () => {
+        if (state === 'unmounted') {
+          renderer.unmount();
+          renderer = null;
+        } else if (state === 'replaced') {
+          controller.playTrack(track('B'));
+        }
+        await flush();
+      });
+      expect(signal.aborted).toBe(state !== 'current');
+      await act(async () => {
+        rejectQueue(new Error('queue offline'));
+        await flush();
+      });
+      const queueWarnings = warn.mock.calls.filter(([label]) => label === 'Failed to load queue:');
+      expect(queueWarnings).toEqual(state === 'current' ? [['Failed to load queue:', 'queue offline']] : []);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('subscription precedes commands; pending, snapshot and loaded are not start, real progress starts once', async () => {
@@ -320,11 +407,11 @@ describe('usePlayerController with accepted real coordinator', () => {
 
   test('current Retry replaces source, joins double taps, waits loaded/true seek ack, preserves logical history/start', async () => {
     await select();
+    await progress(0.1);
     await progress(4);
     const request = controller.currentPlayback.requestId;
     const oldAttempt = mockPlayer.attempt;
-    const histories = () =>
-      authFetch.mock.calls.filter(([url]) => url.endsWith('/history'));
+    const histories = () => recordStarted.mock.calls;
     expect(histories()).toHaveLength(1);
     mockPlayer.ackSeek = false;
     let one, two;
@@ -373,6 +460,11 @@ describe('usePlayerController with accepted real coordinator', () => {
     await progress(5);
     expect(recordPlayStart).toHaveBeenCalledTimes(1);
     expect(histories()).toHaveLength(1);
+    await select('B');
+    expect(recordOutcome).toHaveBeenCalledWith(mockSession, expect.objectContaining({
+      playbackId: histories()[0][1].playbackId,
+      outcome: 'skip',
+    }));
   });
 
   test.each(['native-pause', 'logout', 'track'])('terminal Retry fences %s while ticket is pending', async action => {
@@ -782,29 +874,81 @@ describe('usePlayerController with accepted real coordinator', () => {
     expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
   });
 
-  test('direct accepted completion reports original finish position and duration', async () => {
-    await act(async () => {
-      controller.playTrackList([track('A'), track('B')]);
-      await flush();
-    });
-    await act(async () => {
-      mockPlayer.emit({
-        nativeEvent: 'finish',
-        didJustFinish: true,
-        currentTime: 99,
-        duration: 100,
+  test('finish with no next track closes the episode and replay creates a new ID', async () => {
+    await select();
+    await progress(0.1);
+    const [, first] = recordStarted.mock.calls[0];
+    const finish = async () => {
+      await act(async () => {
+        mockPlayer.emit({ nativeEvent: 'finish', playing: false, didJustFinish: true, currentTime: 100 });
+        await flush();
       });
+    };
+    await finish();
+    await finish();
+    expect(controller.currentTrack.id).toBe('A');
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(recordOutcome).toHaveBeenCalledWith(mockSession, {
+      ...first, outcome: 'finish', listenDurationMs: 100, trackDurationMs: 100000,
+    });
+    await act(async () => { await controller.togglePlayPause(); await flush(); });
+    expect(recordStarted).toHaveBeenCalledTimes(1);
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({ playbackId: 'play-2' }));
+  });
+
+  test('repeat-one ends the first episode before starting another from native progress', async () => {
+    await select();
+    await act(async () => { controller.queueControls.cycleRepeatMode(); controller.queueControls.cycleRepeatMode(); });
+    expect(controller.queueControls.repeatMode).toBe('one');
+    await progress(0.1);
+    await act(async () => {
+      mockPlayer.emit({ nativeEvent: 'finish', playing: false, didJustFinish: true, currentTime: 100 });
       await flush();
     });
-    const feedback = authFetch.mock.calls.find(
-      ([url]) => url === '/api/wave/feedback',
-    );
-    expect(feedback[1].body).toEqual(
-      expect.objectContaining({
-        event_type: 'finish',
-        listen_duration_ms: 99000,
-      }),
-    );
+    expect(recordOutcome).toHaveBeenCalledWith(mockSession, expect.objectContaining({ playbackId: 'play-1', outcome: 'finish' }));
+    expect(recordStarted).toHaveBeenCalledTimes(1);
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({ playbackId: 'play-2' }));
+  });
+
+  test('skip counts only observed progress and ignores seek, pause, buffering and stale sources', async () => {
+    await act(async () => { controller.playTrackList([track('A'), track('B')]); await flush(); });
+    await act(async () => { await controller.seekTo(70); });
+    expect(createOfflineId).not.toHaveBeenCalled();
+    await progress(70.1);
+    await act(async () => controller.togglePlayPause());
+    await progress(80);
+    await act(async () => controller.togglePlayPause());
+    await act(async () => {
+      mockPlayer.position = 90;
+      mockPlayer.emit({ nativeEvent: 'progress', isBuffering: true });
+      mockPlayer.emit({ nativeEvent: 'progress', sourceAttemptId: 'previous', currentTime: 95 });
+      await flush();
+    });
+    await progress(90.1);
+    await progress(90.2);
+    await act(async () => { await controller.fetchNextTrack(); await flush(); });
+    expect(recordStarted).toHaveBeenCalledTimes(1);
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(recordOutcome).toHaveBeenCalledWith(mockSession, {
+      ...recordStarted.mock.calls[0][1], outcome: 'skip', listenDurationMs: 200, trackDurationMs: 100000,
+    });
+  });
+
+  test('restored metadata and a closed session cannot manufacture listening outcomes', async () => {
+    await act(async () => controller.setCurrentTrack(track('A')));
+    expect(createOfflineId).not.toHaveBeenCalled();
+    await act(async () => { await controller.togglePlayPause(); await flush(); });
+    expect(createOfflineId).not.toHaveBeenCalled();
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenCalledWith(mockSession, expect.objectContaining({ trackId: 'A', playbackId: 'play-1' }));
+    mockActiveSession = { ...mockSession, owner: { ...mockSession.owner, userId: 2 }, activationId: 'b', generation: 2 };
+    await act(async () => { for (const callback of mockAuthListeners) callback({ id: 2 }); });
+    expect(recordOutcome).not.toHaveBeenCalled();
+    await select('B');
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenLastCalledWith(mockActiveSession, expect.objectContaining({ trackId: 'B', playbackId: 'play-2' }));
   });
 
   test('finish before installation is ignored; installed finish advances the selected queue', async () => {
@@ -953,10 +1097,9 @@ describe('usePlayerController with accepted real coordinator', () => {
     );
     expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(2);
     expect(recordPlayStart).not.toHaveBeenCalled();
-    expect(
-      authFetch.mock.calls.filter(([url]) => url.endsWith('/history')),
-    ).toHaveLength(1);
-    await progress(1);
+    expect(recordStarted).not.toHaveBeenCalled();
+    await progress(0.1);
+    expect(recordStarted).toHaveBeenCalledTimes(1);
     expect(recordPlayStart).toHaveBeenCalledTimes(1);
   });
 });

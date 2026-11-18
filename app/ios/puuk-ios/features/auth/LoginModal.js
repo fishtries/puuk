@@ -25,6 +25,8 @@ import {
   t,
 } from '../../shared/storage/settings';
 import styles from './loginModalStyles';
+import OfflineSettings from './OfflineSettings';
+import { clearOrdinaryAudioCache } from '../../offline/availability';
 
 const ACCENT_COLORS = [
   { id: 'peach', hex: '#FFDAB9', name: 'Peach' },
@@ -171,8 +173,20 @@ export default React.memo(function LoginModal({ visible, onClose, currentUser, o
       {
         text: t('clear', lang),
         style: 'destructive',
-        onPress: () => {
-          Alert.alert(t('clearCache', lang), t('cacheCleared', lang));
+        onPress: async () => {
+          const failureMessage = lang === 'ru' ? 'Не удалось очистить кэш' : 'Could not clear cache';
+          try {
+            const { freedBytes, failedFiles } = await clearOrdinaryAudioCache();
+            let message = t('cacheCleared', lang);
+            if (failedFiles && freedBytes) {
+              message = lang === 'ru' ? 'Кэш очищен частично' : 'Cache partially cleared';
+            } else if (failedFiles) {
+              message = failureMessage;
+            }
+            Alert.alert(t('clearCache', lang), message);
+          } catch {
+            Alert.alert(t('clearCache', lang), failureMessage);
+          }
         },
       },
     ]);
@@ -417,6 +431,8 @@ export default React.memo(function LoginModal({ visible, onClose, currentUser, o
                     />
                   </View>
                 </View>
+
+                <OfflineSettings settings={settings} lang={lang} accent={accent} visible={visible} />
 
                 {/* ── 4. Network & Storage Section ── */}
                 <Text style={styles.sectionHeader}>{t('sectionNetwork', lang).toUpperCase()}</Text>

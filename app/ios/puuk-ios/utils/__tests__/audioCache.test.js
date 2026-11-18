@@ -152,14 +152,7 @@ jest.mock('expo-file-system', () => {
     Directory: function (...args) {
       return new MockDirectory(...args);
     },
-    File: Object.assign(
-      function (...args) {
-        return new MockFile(...args);
-      },
-      {
-        createDownloadTask: (...args) => MockFile.createDownloadTask(...args),
-      },
-    ),
+    File: MockFile,
     Paths: {
       get document() {
         return new MockDirectory('file:///mock/documents');
@@ -349,4 +342,75 @@ describe('additional publication/capacity faults',()=>{
   jest.spyOn(MockFile.prototype,'move').mockImplementation(async function(dest){if(dest.name.startsWith('object-'))await gate.promise;return original.call(this,dest);});
   const job=cache.getOrFetch(ID,descriptor());job.catch(()=>{});await ticks();session={...session,userId:'99',generation:2};gate.resolve();await expect(job).rejects.toThrow();await job.settled;expect(Object.keys(cache.manifest)).toHaveLength(0);expect(cache.getCachedUri(ID)).toBeNull();
  });
+});
+
+describe('ordinary cache clearing', () => {
+  test('preserves a file that fails to delete, frees its neighbor, and retries only the remaining file', async () => {
+    const blockedUri = await cache.getOrFetch(ID, descriptor());
+    const removableUri = await cache.getOrFetch(ID2, descriptor(ID2));
+    const originalDelete = MockFile.prototype.delete;
+    const deleteFile = jest.spyOn(MockFile.prototype, 'delete').mockImplementation(function () {
+      if (this.uri === blockedUri) throw new Error('simulated filesystem delete failure');
+      return originalDelete.call(this);
+    });
+    cache.setOnline(false);
+
+    await expect(cache.clear()).resolves.toEqual({ freedBytes: 5000, failedFiles: 1 });
+    expect(deleteFile.mock.contexts.map(file => file.uri)).toEqual([blockedUri, removableUri]);
+    expect(cache.getCachedUri(ID)).toBe(blockedUri);
+    expect(cache.getCachedUri(ID2)).toBeNull();
+    expect(mockFs.has(removableUri)).toBe(false);
+    expect(cache.budgetFiles().get(blockedUri)).toBe(5000);
+    expect(cache.budgetFiles().has(removableUri)).toBe(false);
+    await expect(cache.getSize()).resolves.toBe(5000);
+
+    const restarted = new AudioCache(options());
+    await restarted.init();
+    restarted.setOnline(false);
+    expect(restarted.getCachedUri(ID)).toBe(blockedUri);
+    expect(restarted.getCachedUri(ID2)).toBeNull();
+
+    deleteFile.mockClear();
+    await expect(restarted.clear()).resolves.toEqual({ freedBytes: 0, failedFiles: 1 });
+    expect(deleteFile.mock.contexts.map(file => file.uri)).toEqual([blockedUri]);
+    deleteFile.mockRestore();
+    await expect(restarted.clear()).resolves.toEqual({ freedBytes: 5000, failedFiles: 0 });
+    expect(restarted.budgetFiles().has(blockedUri)).toBe(false);
+    await expect(restarted.getSize()).resolves.toBe(0);
+    await expect(restarted.clear()).resolves.toEqual({ freedBytes: 0, failedFiles: 0 });
+  });
+
+  test.each(['borrowed', 'active'])('skips a %s file until it is released', async protection => {
+    const retainedUri = await cache.getOrFetch(ID, descriptor());
+    let borrow;
+    if (protection === 'borrowed') {
+      borrow = cache.borrowVersion(session, ID, HASH);
+      expect(borrow.file.uri).toBe(retainedUri);
+    } else {
+      cache.setActiveTrackId(ID);
+    }
+    const deleteFile = jest.spyOn(MockFile.prototype, 'delete');
+
+    await expect(cache.clear()).resolves.toEqual({ freedBytes: 0, failedFiles: 0 });
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(cache.budgetFiles().get(retainedUri)).toBe(5000);
+
+    borrow?.release();
+    cache.setActiveTrackId(null);
+    await expect(cache.clear()).resolves.toEqual({ freedBytes: 5000, failedFiles: 0 });
+  });
+
+  test('budget eviction stays best effort and checks the target against bytes actually freed', async () => {
+    const blockedUri = await cache.getOrFetch(ID, descriptor());
+    const removableUri = await cache.getOrFetch(ID2, descriptor(ID2));
+    const originalDelete = MockFile.prototype.delete;
+    jest.spyOn(MockFile.prototype, 'delete').mockImplementation(function () {
+      if (this.uri === blockedUri) throw new Error('simulated filesystem delete failure');
+      return originalDelete.call(this);
+    });
+
+    await expect(cache.evictForBudget(bytes => bytes >= 5000, { clear: true })).resolves.toBeUndefined();
+    expect(cache.budgetFiles().get(blockedUri)).toBe(5000);
+    expect(cache.budgetFiles().has(removableUri)).toBe(false);
+  });
 });

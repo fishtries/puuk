@@ -863,7 +863,7 @@ describe('PlaybackCoordinator', () => {
           title: 'Instant Metadata Song',
           artist: 'Instant Artist',
           albumTitle: 'Instant Album',
-          artworkUrl: expect.stringContaining('/api/cover/999'),
+          artworkUrl: undefined,
         }),
         expect.any(Object),
       );
@@ -1230,7 +1230,7 @@ describe('PlaybackCoordinator', () => {
         replaceWithAttempt: jest.fn(() => true),
         playForAttempt: jest.fn(() => true),
         seekForAttempt: jest.fn(() => true),
-        replace: jest.fn(() => Promise.resolve()),
+        replace: jest.fn((source) => source === null ? undefined : Promise.resolve()),
         play: jest.fn(() => Promise.resolve()),
         pause: jest.fn(() => Promise.resolve()),
         seekTo: jest.fn(() => Promise.resolve()),

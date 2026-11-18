@@ -1,4 +1,9 @@
 import * as SecureStore from 'expo-secure-store';
+import {
+  closeOfflineSession, createOfflineId, getOfflineSession, jwtExpiry,
+  openOfflineSession, persistOfflineActivation, revokeOfflineActivation,
+} from '../../offline/session';
+import { reconcileTransfers } from '../../offline';
 
 export const DEFAULT_SERVER_URL =
   process.env.EXPO_PUBLIC_API_URL || 'https://web.puuk.fun';
@@ -12,6 +17,7 @@ export const addSessionListener = (listener) => {
 };
 const advanceSession = (reason) => {
   authSessionGeneration += 1;
+  closeOfflineSession();
   // Revoke byte access synchronously, before any SecureStore await/auth gate.
   for (const listener of sessionListeners) {
     try { listener(reason); } catch { /* one listener cannot defer revocation */ }
@@ -19,7 +25,7 @@ const advanceSession = (reason) => {
 };
 export const getAuthSessionGeneration = () => authSessionGeneration;
 
-export const setServerUrl = (url) => {
+export const setServerUrl = (url, { bootstrap = false } = {}) => {
   if (typeof url !== 'string' || !url) return;
   const trimmed = url.trim().replace(/\/+$/, '');
   let parsed;
@@ -27,11 +33,25 @@ export const setServerUrl = (url) => {
   if (!['https:', 'http:'].includes(parsed.protocol) || parsed.origin !== trimmed || parsed.username || parsed.password || /[\\\x00-\x20?#]/.test(trimmed)) return;
   if (trimmed !== SERVER_URL) {
     SERVER_URL = trimmed;
-    advanceSession('server');
+    if (!bootstrap || cachedToken || cachedUser) {
+      clearAuth('server').catch(() => console.warn('[Auth] Failed to persist server change'));
+    } else {
+      advanceSession('server');
+    }
   }
 };
 const TOKEN_KEY = 'puuk_auth_token';
 const USER_KEY = 'puuk_auth_user';
+const SESSION_KEY = 'puuk_auth_session_v1';
+const REVOKED = '{"revoked":true}';
+let authWrites = Promise.resolve();
+let envelope;
+
+function writeAuth(action) {
+  const pending = authWrites.then(action);
+  authWrites = pending.catch(() => {});
+  return pending;
+}
 
 const SECURE_STORE_OPTIONS = {
   keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
@@ -65,24 +85,7 @@ export const getCachedAuthHeaders = () => {
 
 export const getCachedUser = () => cachedUser;
 
-export const getAuthToken = async () => {
-  if (cachedToken) return cachedToken;
-  const generation = authSessionGeneration;
-  try {
-    const token = await SecureStore.getItemAsync(
-      TOKEN_KEY,
-      SECURE_STORE_OPTIONS,
-    );
-    if (generation !== authSessionGeneration) return null;
-    if (token) {
-      cachedToken = token;
-      return token;
-    }
-  } catch (e) {
-    console.warn('[SecureStore read error]');
-  }
-  return null;
-};
+export const getAuthToken = async () => cachedToken;
 
 export const setAuthToken = async (token) => {
   if (token !== cachedToken) {
@@ -100,21 +103,7 @@ export const setAuthToken = async (token) => {
   }
 };
 
-export const getSavedUser = async () => {
-  if (cachedUser) return cachedUser;
-  const generation = authSessionGeneration;
-  try {
-    const raw = await SecureStore.getItemAsync(USER_KEY, SECURE_STORE_OPTIONS);
-    if (generation !== authSessionGeneration) return null;
-    if (raw) {
-      cachedUser = JSON.parse(raw);
-      return cachedUser;
-    }
-  } catch (e) {
-    console.warn('[SecureStore user read error]');
-  }
-  return null;
-};
+export const getSavedUser = async () => cachedUser;
 
 export const setSavedUser = async (user) => {
   if (cachedUser?.id != null && String(cachedUser.id) !== String(user?.id)) advanceSession('account');
@@ -135,11 +124,73 @@ export const setSavedUser = async (user) => {
   notifyAuthChange(user);
 };
 
-export const logout = async () => {
-  advanceSession('logout');
-  await setAuthToken(null);
-  await setSavedUser(null);
-};
+function clearAuth(reason) {
+  const previous = closeOfflineSession();
+  const needsDurableRevoke = Boolean(envelope || previous);
+  envelope = null;
+  cachedToken = null;
+  advanceSession(reason);
+  notifyAuthChange(null);
+  return writeAuth(async () => {
+    const results = await Promise.allSettled([
+      SecureStore.setItemAsync(SESSION_KEY, REVOKED, SECURE_STORE_OPTIONS),
+      needsDurableRevoke ? revokeOfflineActivation(previous) : Promise.resolve(),
+    ]);
+    await Promise.all([
+      SecureStore.deleteItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS),
+      SecureStore.deleteItemAsync(USER_KEY, SECURE_STORE_OPTIONS),
+    ]);
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
+  });
+}
+
+export const logout = () => clearAuth('logout');
+
+const authChanged = () => new ApiError('Session changed', { type: 'abort' });
+
+function activateEnvelope(saved, generation) {
+  const session = { owner: saved.owner, activationId: saved.activationId, generation };
+  const current = () => generation === authSessionGeneration && saved.owner.origin === SERVER_URL;
+  return openOfflineSession(session, jwtExpiry(saved.token, saved.owner.userId), current, () => {
+    if (current()) clearAuth('expired').catch(() => console.warn('[Auth] Failed to persist expiration'));
+  });
+}
+
+function confirmSession(token, user, generation, origin, newLogin = false) {
+  if (generation !== authSessionGeneration || origin !== SERVER_URL) throw authChanged();
+  const userId = user?.id == null ? null : String(user.id);
+  if (jwtExpiry(token, userId) <= Date.now()) throw new ApiError('Invalid session', { type: 'auth' });
+  const active = getOfflineSession();
+  const reuse = !newLogin && active?.owner.userId === userId && active.owner.origin === origin;
+  if (!reuse) {
+    cachedToken = null;
+    advanceSession(newLogin ? 'login' : 'account');
+    generation = authSessionGeneration;
+    notifyAuthChange(null);
+  }
+  const saved = {
+    owner: { origin, userId }, token, user,
+    activationId: reuse ? active.activationId : createOfflineId(),
+    confirmedAt: Date.now(),
+  };
+  return writeAuth(async () => {
+    const check = () => {
+      if (generation !== authSessionGeneration || origin !== SERVER_URL) throw authChanged();
+    };
+    check();
+    if (!reuse) await persistOfflineActivation(saved);
+    check();
+    await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(saved), SECURE_STORE_OPTIONS);
+    check();
+    if (!reuse && !await activateEnvelope(saved, generation)) throw authChanged();
+    check();
+    envelope = saved;
+    cachedToken = token;
+    notifyAuthChange(user);
+    check();
+    return user;
+  });
+}
 
 export const authHandlers = {
   logout: () => logout(),
@@ -152,7 +203,7 @@ const AUTH_EXEMPT_PATHS = [
 ];
 let unauthorizedPromise = null;
 
-const handleUnauthorized = async (url) => {
+const handleUnauthorized = async (url, generation, token) => {
   const path = url.replace(/^https?:\/\/[^/]+/, '');
   const isAuthPath = AUTH_EXEMPT_PATHS.some((p) => path.startsWith(p));
   if (isAuthPath) return;
@@ -162,9 +213,7 @@ const handleUnauthorized = async (url) => {
     return;
   }
 
-  // If session is already cleared, do not repeat logout
-  const token = cachedToken || (await getAuthToken());
-  if (!token) return;
+  if (!token || token !== cachedToken || generation !== authSessionGeneration) return;
 
   console.warn('[Auth] 401 — сбрасываем авторизацию.');
   unauthorizedPromise = (async () => {
@@ -535,7 +584,7 @@ export const authFetch = async (endpoint, options = {}) => {
 
     if (response.status === 401) {
       try {
-        await handleUnauthorized(url);
+        await handleUnauthorized(url, generation, token);
       } catch (authErr) {
         console.error(
           '[Auth] Error during unauthorized handling/logout:',
@@ -586,57 +635,64 @@ export const parseApiErrorMessage = (
   return fallback;
 };
 
-export const loginWithPassword = async (username, password) => {
-  const res = await fetch(`${SERVER_URL}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+async function login(endpoint, body, fallbackMessage) {
+  const generation = authSessionGeneration;
+  const origin = SERVER_URL;
+  const res = await fetch(`${origin}${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), redirect: 'error', credentials: 'omit',
   });
-
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    throw new Error(parseApiErrorMessage(errData, 'Authentication error'));
+    throw new Error(parseApiErrorMessage(errData, fallbackMessage));
   }
-
   const data = await res.json();
-  await setAuthToken(data.access_token);
-  await setSavedUser(data.user);
-  return data.user;
-};
+  return confirmSession(data.access_token, data.user, generation, origin, true);
+}
 
-export const loginWithCode = async (code) => {
-  const res = await fetch(`${SERVER_URL}/api/auth/verify-code`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: code.trim() }),
-  });
+export const loginWithPassword = (username, password) =>
+  login('/api/auth/login', { username, password }, 'Authentication error');
 
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(parseApiErrorMessage(errData, 'Invalid or expired code'));
-  }
-
-  const data = await res.json();
-  await setAuthToken(data.access_token);
-  await setSavedUser(data.user);
-  return data.user;
-};
+export const loginWithCode = (code) =>
+  login('/api/auth/verify-code', { code: code.trim() }, 'Invalid or expired code');
 
 export const restoreLocalSession = async () => {
-  const token = await getAuthToken();
-  if (!token) {
-    cachedUser = null;
-    return { token: null, user: null, hasToken: false, hasUser: false };
-  }
-  const user = await getSavedUser();
-  if (!user) {
+  const generation = authSessionGeneration;
+  const origin = SERVER_URL;
+  const empty = { token: null, user: null, hasToken: false, hasUser: false };
+  await authWrites;
+  if (generation !== authSessionGeneration || origin !== SERVER_URL) return empty;
+  const raw = await SecureStore.getItemAsync(SESSION_KEY, SECURE_STORE_OPTIONS);
+  if (generation !== authSessionGeneration || origin !== SERVER_URL) return empty;
+  if (!raw) {
+    // Upgrade: the legacy token can verify online, but its saved profile has no owner binding.
+    const token = await SecureStore.getItemAsync(TOKEN_KEY, SECURE_STORE_OPTIONS);
+    if (!token || generation !== authSessionGeneration) return empty;
+    cachedToken = token;
     return { token, user: null, hasToken: true, hasUser: false };
   }
-  return { token, user, hasToken: true, hasUser: true };
+
+  const saved = JSON.parse(raw);
+  if (saved.owner?.origin !== origin || String(saved.user?.id) !== saved.owner.userId) return empty;
+  if (jwtExpiry(saved.token, saved.owner.userId) <= Date.now()) {
+    envelope = saved;
+    await clearAuth('expired');
+    return empty;
+  }
+  if (!await activateEnvelope(saved, generation)) return empty;
+  if (generation !== authSessionGeneration) return empty;
+  envelope = saved;
+  cachedToken = saved.token;
+  notifyAuthChange(saved.user);
+  const session = getOfflineSession();
+  await reconcileTransfers(session, { foregroundOnly: true }).catch(() => {});
+  return generation === authSessionGeneration
+    ? { token: saved.token, user: saved.user, hasToken: true, hasUser: true } : empty;
 };
 
 export const verifySession = async (options = {}) => {
   const currentGen = authSessionGeneration;
+  const origin = SERVER_URL;
   const token = cachedToken || (await getAuthToken());
   if (!token) {
     return {
@@ -663,8 +719,7 @@ export const verifySession = async (options = {}) => {
       if (authSessionGeneration !== currentGen || cachedToken !== token) {
         return { success: false, aborted: true };
       }
-      await setSavedUser(freshUser);
-      notifyAuthChange(freshUser);
+      await confirmSession(token, freshUser, currentGen, origin);
       return { success: true, user: freshUser, status: res.status };
     }
 
@@ -673,7 +728,6 @@ export const verifySession = async (options = {}) => {
         '[verifySession] Сессия отклонена сервером (401), сбрасываем авторизацию.',
       );
       await logout();
-      notifyAuthChange(null);
       return {
         success: false,
         status: 401,
@@ -733,7 +787,6 @@ export const checkAuth = async () => {
     return local.user || null;
   } catch (e) {
     console.warn('[checkAuth network error, preserving session]', e);
-    const savedUser = await getSavedUser();
-    return savedUser || null;
+    return getOfflineSession() ? cachedUser : null;
   }
 };

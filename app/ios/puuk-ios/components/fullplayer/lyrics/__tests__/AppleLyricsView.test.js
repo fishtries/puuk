@@ -1,7 +1,9 @@
 import React from 'react';
 import { View, Text, AccessibilityInfo, Dimensions } from 'react-native';
 import TestRenderer, { act } from 'react-test-renderer';
-import AppleLyricsView from '../AppleLyricsView';
+import LyricsView from '../AppleLyricsView';
+import usePlayerLyrics from '../usePlayerLyrics';
+import { getOfflineSession, readMediaKey, readLyrics } from '../../../../offline';
 import AnimatedLyricLine from '../AnimatedLyricLine';
 import { authFetch } from '../../../../shared/api/api';
 
@@ -15,7 +17,23 @@ jest.mock('expo-blur', () => ({
 
 jest.mock('../../../../shared/api/api', () => ({
   authFetch: jest.fn(),
+  addSessionListener: () => () => {},
+  getAuthSessionGeneration: () => 0,
 }));
+
+jest.mock('../../../../offline', () => ({
+  getOfflineSession: jest.fn(() => null),
+  isOfflineSessionCurrent: () => true,
+  readMediaKey: jest.fn(),
+  readLyrics: jest.fn(),
+  saveLyricsResult: jest.fn(),
+  subscribeOfflineIndex: () => () => {},
+}));
+
+function AppleLyricsView(props) {
+  const lyricsResult = usePlayerLyrics(props.currentTrack);
+  return <LyricsView {...props} lyricsResult={lyricsResult} />;
+}
 
 let lastPanGesture = {};
 let mockScrollReaction;
@@ -97,6 +115,7 @@ describe('AppleLyricsView', () => {
   });
 
   afterEach(() => {
+    getOfflineSession.mockReturnValue(null);
     jest.useRealTimers();
   });
 
@@ -130,6 +149,42 @@ describe('AppleLyricsView', () => {
     onExitCompactMode: jest.fn(),
     onLyricsCompactChange: jest.fn(),
   };
+
+  it('renders stored plain lyrics without contacting the server', async () => {
+    const owner = { origin: 'https://library.example', userId: '42' };
+    getOfflineSession.mockReturnValue({ owner, activationId: 'offline', generation: 1 });
+    readMediaKey.mockResolvedValue({ owner, trackId: '42', contentVersion: 'a'.repeat(64) });
+    readLyrics.mockResolvedValue({ state: 'ready', payload: { plainLyrics: 'Stored plain text' } });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} />);
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain('Stored plain text');
+    expect(authFetch).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
+  it('highlights the stored LRC line after forward and backward seeks', async () => {
+    const owner = { origin: 'https://library.example', userId: '42' };
+    getOfflineSession.mockReturnValue({ owner, activationId: 'offline', generation: 1 });
+    readMediaKey.mockResolvedValue({ owner, trackId: '42', contentVersion: 'a'.repeat(64) });
+    readLyrics.mockResolvedValue({ state: 'ready', payload: {
+      lyrics: '[00:01.00]First line\n[00:04.50]Second line', isSynced: true,
+    } });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={2} />);
+    });
+    const activeLine = () => renderer.root.findAllByType(AnimatedLyricLine)
+      .find(row => row.props.isActive).props.text;
+    expect(activeLine()).toBe('First line');
+    act(() => renderer.update(<AppleLyricsView {...defaultProps} currentTime={5} />));
+    expect(activeLine()).toBe('Second line');
+    act(() => renderer.update(<AppleLyricsView {...defaultProps} currentTime={2} />));
+    expect(activeLine()).toBe('First line');
+    expect(authFetch).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
 
   it('bounds animated rows, preserves measured heights, and follows manual scrolling and backward seeks', async () => {
     const lrc = Array.from({ length: 80 }, (_, i) =>
@@ -401,8 +456,7 @@ describe('AppleLyricsView', () => {
     });
 
     expect(authFetch).toHaveBeenCalledWith(
-      '/api/tracks/legacy-track-99/lyrics',
-    );
+      '/api/tracks/legacy-track-99/lyrics', expect.objectContaining({ signal: expect.anything() }));
     const lyricLines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lyricLines).toHaveLength(1);
   });
@@ -429,7 +483,7 @@ describe('AppleLyricsView', () => {
       jest.runAllTimers();
     });
 
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics');
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics', expect.objectContaining({ signal: expect.anything() }));
     const lyricLines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lyricLines).toHaveLength(1);
   });
@@ -460,7 +514,7 @@ describe('AppleLyricsView', () => {
       jest.runAllTimers();
     });
 
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/fallback-77/lyrics');
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/fallback-77/lyrics', expect.objectContaining({ signal: expect.anything() }));
   });
 
   it('resets and re-fetches lyrics when currentTrack changes between legacy IDs and id 0', async () => {
@@ -485,7 +539,7 @@ describe('AppleLyricsView', () => {
       jest.runAllTimers();
     });
 
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/leg-first/lyrics');
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/leg-first/lyrics', expect.objectContaining({ signal: expect.anything() }));
 
     authFetch.mockResolvedValueOnce({
       json: async () => ({
@@ -507,7 +561,7 @@ describe('AppleLyricsView', () => {
       jest.runAllTimers();
     });
 
-    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics');
+    expect(authFetch).toHaveBeenCalledWith('/api/tracks/0/lyrics', expect.objectContaining({ signal: expect.anything() }));
   });
 
   it('does not invoke onClose when panning or ending pan on synced lyrics', async () => {

@@ -161,22 +161,20 @@ class TestClosedAccess(unittest.TestCase):
         resp = self.client.post("/api/library/scan", headers=self.admin_headers)
         self.assertEqual(resp.status_code, 200)
 
-    def test_07_cover_and_color_support_query_token(self):
-        """Маршруты cover и color принимают JWT через ?token= (для iOS Lock Screen / нативных плееров)."""
-        token = self.user_token
-        tid = self.track_id
-        
-        # Без токена -> 401
-        self.assertEqual(self.client.get(f"/api/cover/{tid}").status_code, 401)
-        self.assertEqual(self.client.get(f"/api/color/{tid}").status_code, 401)
-
-        # С query-параметром ?token= -> 200
-        resp_cover = self.client.get(f"/api/cover/{tid}?token={token}")
-        self.assertEqual(resp_cover.status_code, 200)
-
-        resp_color = self.client.get(f"/api/color/{tid}?token={token}")
-        self.assertEqual(resp_color.status_code, 200)
-        self.assertIn("color", resp_color.json())
+    def test_07_cover_ticket_is_bound_to_one_cover(self):
+        cover = f"/api/cover/{self.track_id}"
+        issue = self.client.post(cover + "/ticket", headers=self.user_headers)
+        self.assertEqual(issue.status_code, 200)
+        self.assertEqual(issue.headers["cache-control"], "no-store")
+        ticket = issue.json()["ticket"]
+        self.assertEqual(self.client.get(cover, params={"ct": ticket}).status_code, 200)
+        self.assertEqual(self.client.get(cover, headers=self.user_headers).status_code, 200)
+        for path in (cover, f"/api/color/{self.track_id}"):
+            self.assertEqual(self.client.get(path, params={"token": self.user_token}).status_code, 401)
+        self.assertEqual(self.client.post(cover + "/ticket").status_code, 401)
+        self.assertEqual(self.client.get(f"/api/cover/{uuid.uuid4()}", params={"ct": ticket}).status_code, 401)
+        self.assertEqual(self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {ticket}"}).status_code, 401)
+        self.assertEqual(self.client.get(f"/api/stream/{self.track_id}", params={"mt": ticket}).status_code, 401)
 
     @classmethod
     def tearDownClass(cls):

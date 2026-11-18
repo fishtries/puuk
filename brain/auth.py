@@ -200,41 +200,39 @@ def get_stream_user(
     )
 
 
-def get_cover_user(
-    request: Request,
-    token: Optional[str] = Depends(oauth2_scheme),
-) -> dict:
-    """
-    Аутентификация для обложек и цвета: заголовок Authorization: Bearer,
-    либо query-параметр ?token= (для системных медиа-загрузчиков вроде iOS Lock Screen),
-    либо media-тикет (?mt=).
-    """
+def create_cover_ticket(user: dict, track_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode({
+        "aud": "track-cover", "sub": str(user["id"]), "tid": track_id,
+        "exp": now + timedelta(minutes=2),
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_cover_user(request: Request, token: Optional[str] = Depends(oauth2_scheme)) -> dict:
     if token:
         return get_current_user(token)
 
-    query_token = request.query_params.get("token")
-    if query_token:
-        return get_current_user(query_token)
-
+    ticket = request.query_params.get("ct")
+    track_id = request.path_params["track_id"]
     media_ticket = request.query_params.get("mt")
     if media_ticket:
-        payload = decode_access_token(media_ticket)
-        if payload and payload.get("scope") == MEDIA_TICKET_SCOPE and "sub" in payload:
-            try:
-                user_id = int(payload["sub"])
-                user = db.get_user_by_id(user_id)
-                if user:
-                    user_dict = dict(user)
-                    user_dict["is_authenticated"] = True
-                    return user_dict
-            except (ValueError, TypeError):
-                pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Требуется авторизация",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+        user = verify_media_ticket(media_ticket, track_id)
+        if user:
+            return {**user, "is_authenticated": True}
+    if ticket:
+        try:
+            claims = jwt.decode(ticket, JWT_SECRET, algorithms=[JWT_ALGORITHM],
+                                audience="track-cover", options={"require": ["sub", "exp", "tid"]})
+            if claims["tid"] == track_id:
+                user_id = int(claims["sub"])
+                if 0 < user_id <= 2**63 - 1:
+                    user = db.get_user_by_id(user_id)
+                    if user:
+                        return {**user, "is_authenticated": True}
+        except (jwt.PyJWTError, ValueError, TypeError):
+            pass
+    raise HTTPException(status_code=401, detail="Требуется авторизация",
+                        headers={"WWW-Authenticate": "Bearer"})
 
 
 def get_optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[dict]:

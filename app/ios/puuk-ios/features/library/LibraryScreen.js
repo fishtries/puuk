@@ -1,3 +1,16 @@
+import { saveRatingWithFeedback, showRatingError } from '../downloads/ratingFeedback';
+import { overlayFavorites } from '../../offline/collections/runtime';
+import {
+  projectFavoriteTracks,
+  getRatingOverlay,
+  waitForOutboxDrain,
+} from '../../offline/outbox/runtime';
+import {
+  FAVORITES_COLLECTION,
+  getOfflineSession,
+  isOfflineSessionCurrent,
+  readCollection,
+} from '../../offline';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -206,6 +219,7 @@ export default function LibraryScreen({
   }, []);
 
   // Загрузка данных библиотеки (избранное, плейлисты, история) со Stale-While-Revalidate кэшированием
+
   const fetchLibraryData = useCallback(
     async (forceRefresh = false) => {
       if (!currentUser) {
@@ -230,9 +244,32 @@ export default function LibraryScreen({
       const controller = new AbortController();
       libraryAbortRef.current = controller;
 
+      const session = getOfflineSession();
+      const canUpdate = () =>
+        !controller.signal.aborted &&
+        userGenerationRef.current === currentGeneration &&
+        getOfflineSession() === session &&
+        (!session || isOfflineSessionCurrent(session));
+      if (session) {
+        const snapshot = await readCollection(
+          session,
+          FAVORITES_COLLECTION,
+        ).catch(() => null);
+        if (!canUpdate()) return;
+        if (snapshot) {
+          const projected = overlayFavorites(snapshot.tracks, await getRatingOverlay(session));
+          if (!canUpdate()) return;
+          setFavorites(projected);
+          setIsLoading(false);
+        }
+      }
+
       try {
         await Promise.allSettled([
-          fetchCatalogWithCache('/api/favorites', {
+          (async () => {
+            if (session) await waitForOutboxDrain(session);
+            if (!canUpdate()) return;
+            return fetchCatalogWithCache('/api/favorites', {
             key: 'favorites',
             userId: currentUser.id,
             serverUrl: SERVER_URL,
@@ -240,16 +277,20 @@ export default function LibraryScreen({
             forceRefresh,
             signal: controller.signal,
             transform: normalizeTracks,
-            onData: (data) => {
-              if (
-                !controller.signal.aborted &&
-                userGenerationRef.current === currentGeneration
-              ) {
-                setFavorites(Array.isArray(data) ? data : []);
+            onData: async (data) => {
+              const projected = session
+                ? overlayFavorites(
+                    Array.isArray(data) ? data : [],
+                    await getRatingOverlay(session),
+                  )
+                : data;
+              if (canUpdate()) {
+                setFavorites(Array.isArray(projected) ? projected : []);
                 setIsLoading(false);
               }
             },
-          }),
+            });
+          })(),
           fetchCatalogWithCache('/api/playlists', {
             key: 'playlists',
             userId: currentUser.id,
@@ -259,10 +300,7 @@ export default function LibraryScreen({
             signal: controller.signal,
             transform: normalizePlaylists,
             onData: (data) => {
-              if (
-                !controller.signal.aborted &&
-                userGenerationRef.current === currentGeneration
-              ) {
+              if (canUpdate()) {
                 setPlaylists(Array.isArray(data) ? data : []);
                 setIsLoading(false);
               }
@@ -277,10 +315,7 @@ export default function LibraryScreen({
             signal: controller.signal,
             transform: normalizeTracks,
             onData: (data) => {
-              if (
-                !controller.signal.aborted &&
-                userGenerationRef.current === currentGeneration
-              ) {
+              if (canUpdate()) {
                 setHistory(Array.isArray(data) ? data : []);
                 setIsLoading(false);
               }
@@ -298,7 +333,7 @@ export default function LibraryScreen({
           );
         }
       } finally {
-        if (userGenerationRef.current === currentGeneration) {
+        if (canUpdate()) {
           setIsLoading(false);
           setIsRefreshing(false);
         }
@@ -529,13 +564,18 @@ export default function LibraryScreen({
         serverUrl: SERVER_URL,
       }).catch(() => {});
       try {
-        await authFetch(
-          `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
-          { method: 'DELETE' },
-        );
+        const session = getOfflineSession();
+        if (session) await saveRatingWithFeedback(session, track, 'neutral');
+        else
+          await authFetch(
+            `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+            { method: 'DELETE' },
+          );
       } catch (e) {
         console.warn('Failed to remove favorite:', e);
-        fetchLibraryData(true);
+        setFavorites(favorites);
+        setCachedCatalog('favorites', favorites, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        showRatingError();
       }
     } else {
       const updated = [
@@ -548,13 +588,18 @@ export default function LibraryScreen({
         serverUrl: SERVER_URL,
       }).catch(() => {});
       try {
-        await authFetch(
-          `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
-          { method: 'POST' },
-        );
+        const session = getOfflineSession();
+        if (session) await saveRatingWithFeedback(session, track, 'like');
+        else
+          await authFetch(
+            `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+            { method: 'POST' },
+          );
       } catch (e) {
         console.warn('Failed to add favorite:', e);
-        fetchLibraryData(true);
+        setFavorites(favorites);
+        setCachedCatalog('favorites', favorites, { userId: currentUser?.id, serverUrl: SERVER_URL }).catch(() => {});
+        showRatingError();
       }
     }
   };
@@ -639,6 +684,9 @@ export default function LibraryScreen({
             />
           }
         >
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={getSettings().language === 'ru' ? 'Скачанное' : 'Downloaded'} onPress={() => navigation.navigate('Downloaded')} style={{ minHeight: 48, justifyContent: 'center', marginBottom: 12 }}>
+            <Text style={styles.sectionTitle}>{getSettings().language === 'ru' ? 'Скачанное' : 'Downloaded'} ›</Text>
+          </TouchableOpacity>
           {/* ─── Section: Playlists ─── */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Playlists</Text>

@@ -218,15 +218,19 @@ describe('AlbumScreen - Stage 8 Slice 5 track normalization & identity', () => {
       (node) => node.type === 'Text' && node.props.children === 'Artist A',
     )[0];
     let artistControl = albumArtist.parent;
-    while (artistControl && artistControl.type !== TouchableOpacity) {
+    while (artistControl && artistControl.props.accessibilityLabel !== 'Страница артиста Artist A') {
       artistControl = artistControl.parent;
     }
-    expect(artistControl).toBeDefined();
+    expect(artistControl).not.toBeNull();
     expect(artistControl.props.accessibilityRole).toBe('button');
     expect(artistControl.props.accessibilityLabel).toBe(
       'Страница артиста Artist A',
     );
-    await act(async () => artistControl.props.onPress());
+    let menu = artistControl.parent;
+    while (menu && !menu.props.actions) menu = menu.parent;
+    expect(menu).not.toBeNull();
+    expect(menu.props.actions).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'artist:art_123' })]));
+    await act(async () => menu.props.onPressAction({ nativeEvent: { event: 'artist:art_123' } }));
 
     expect(mockNavigation.navigate).toHaveBeenCalledWith('ArtistDetail', {
       artistId: 'art_123',

@@ -6,7 +6,7 @@ from collections import defaultdict
 from threading import Lock
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime, timezone, timedelta
 from repositories.wave import record_listening_event
 
@@ -51,6 +51,7 @@ class WaveFeedbackRequest(BaseModel):
     track_duration_ms: int = Field(default=0, ge=0, le=86400000)
     event_id: str | None = Field(default=None, min_length=1, max_length=128)
     occurred_at: datetime | None = None
+    playback_id: str | None = Field(default=None, min_length=1, max_length=128)
     context: Literal['wave', 'manual', 'unknown'] = 'unknown'
     client: str | None = Field(default=None, max_length=64)
 
@@ -63,9 +64,17 @@ class WaveFeedbackRequest(BaseModel):
             return value.astimezone(timezone.utc)
         return value
 
+    @model_validator(mode='after')
+    def validate_playback_identity(self):
+        if self.playback_id is not None:
+            if self.event_id != self.playback_id or self.occurred_at is None or self.event_type == 'like':
+                raise ValueError('playback_id requires a matching event_id, occurred_at and skip or finish')
+        return self
+
 def get_qdrant_client():
     return QdrantClient(url=QDRANT_URL)
 
+@router.put("/feedback")
 @router.post("/feedback")
 def record_wave_feedback(
     request: Request,
@@ -77,6 +86,8 @@ def record_wave_feedback(
     Записывает телеметрию действий пользователя в Волне ('like', 'skip', 'finish').
     Используется для построения персонального вектора вкусов и агрегированной статистики.
     """
+    if request.method == "PUT" and feedback.playback_id is None:
+        raise HTTPException(status_code=422, detail="PUT requires playback_id")
     user_id = current_user["id"]
     client_ip = request.client.host if request.client else "unknown"
     rate_key = f"user_{user_id}_{client_ip}"
@@ -84,7 +95,8 @@ def record_wave_feedback(
     if not feedback_rate_limiter.is_allowed(rate_key):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Слишком много запросов фидбека. Пожалуйста, подождите."
+            detail="Слишком много запросов фидбека. Пожалуйста, подождите.",
+            headers={"Retry-After": str(feedback_rate_limiter.window_seconds)},
         )
 
     # 1. Сохраняем событие в user_wave_feedback
@@ -97,7 +109,7 @@ def record_wave_feedback(
             track_duration_ms=feedback.track_duration_ms,
             event_id=feedback.event_id,
             occurred_at=feedback.occurred_at.isoformat() if feedback.occurred_at else None,
-            context=feedback.context, client=feedback.client,
+            context=feedback.context, client=feedback.client, playback_id=feedback.playback_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -109,16 +121,18 @@ def record_wave_feedback(
             raise HTTPException(status_code=404, detail="Трек не найден") from exc
         raise
 
-    if not inserted:
-        return {"status": "ok"}
-
-    # 4. Проверяем триггер пересчета профиля вкусов (10 треков, 24 часа или немедленный лайк)
-    needs_recompute = (feedback.event_type == "like") or should_recompute_embedding(user_id, threshold=10, hours=24)
+    # A retry can arrive after the event committed but before recompute was scheduled.
+    needs_recompute = (inserted and feedback.event_type == "like") or should_recompute_embedding(
+        user_id, threshold=10, hours=24,
+    )
     if needs_recompute:
         qdrant = get_qdrant_client()
         background_tasks.add_task(update_user_embedding_async, user_id, qdrant)
 
-    return {"status": "ok"}
+    result = {"status": "ok"}
+    if feedback.playback_id is not None:
+        result.update(playback_id=feedback.playback_id, track_id=feedback.track_id)
+    return result
 
 @router.get("/profile-stats")
 def get_profile_statistics(current_user: dict = Depends(get_current_user)):

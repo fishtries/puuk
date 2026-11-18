@@ -1,5 +1,20 @@
-import { SHARE_LINKS_ENABLED, presentShareEntity } from '../../utils/shareLinks';
-import React, { useState, useCallback, useEffect } from 'react';
+import {
+  getOfflineSession,
+  isOfflineSessionCurrent,
+  readCollection,
+  subscribeOfflineIndex,
+} from '../../offline';
+import {
+  saveOfflineCollection,
+  removeOfflineCollection,
+  isCollectionSaved,
+  collectionProgress,
+} from '../../offline/collections';
+import {
+  SHARE_LINKS_ENABLED,
+  presentShareEntity,
+} from '../../utils/shareLinks';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,7 +30,10 @@ import CoverImage from '../../shared/media/CoverImage';
 import { subscribeArtistCreditsUpdated } from '../../shared/domain/artistCreditEvents';
 import { authFetch, SERVER_URL } from '../../shared/api/api';
 import { getTrackId, normalizeTrack } from '../../shared/domain/trackAdapter';
-import { normalizeAlbum, getSelectableArtists } from '../../shared/domain/artistCredits';
+import {
+  normalizeAlbum,
+  getSelectableArtists,
+} from '../../shared/domain/artistCredits';
 import ArtistSelector from '../../shared/components/ArtistSelector';
 
 export default function AlbumScreen({
@@ -25,40 +43,130 @@ export default function AlbumScreen({
   onPressEllipsis,
 }) {
   const { albumId, albumTitle, coverArt } = route.params;
+  const session = getOfflineSession();
+  const key = { kind: 'album', collectionId: albumId };
+  const [saved, setSaved] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [album, setAlbum] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
 
+  const requestRef = useRef(0);
+  const snapshotRevision = useRef(0);
+  useEffect(() => {
+    if (!session) return;
+    let active = true;
+    const unsubscribe = subscribeOfflineIndex((event) => {
+      if (event.type !== 'collection' || event.session !== session ||
+          event.kind !== 'album' || String(event.collectionId) !== String(albumId)) return;
+      const revision = ++snapshotRevision.current;
+      readCollection(session, { kind: 'album', collectionId: albumId }).then((snapshot) => {
+        if (!snapshot || !active || revision !== snapshotRevision.current || !isOfflineSessionCurrent(session)) return;
+        setTracks(snapshot.tracks.map((t) => normalizeTrack(t, { serverUrl: SERVER_URL })).filter(Boolean));
+        setErrorMessage(null);
+        setIsLoading(false);
+      }).catch(() => {});
+    });
+    return () => { active = false; snapshotRevision.current += 1; unsubscribe(); };
+  }, [session, albumId]);
+
+  useEffect(() => () => { requestRef.current += 1; }, [albumId, session]);
   const fetchAlbum = useCallback(async () => {
+    const request = ++requestRef.current;
+    const revision = snapshotRevision.current;
+    const current = () => revision === snapshotRevision.current && request === requestRef.current && (!session || isOfflineSessionCurrent(session));
     setIsLoading(true);
     setErrorMessage(null);
     try {
+      let snapshot = null;
+      if (session) {
+        snapshot = await readCollection(session, key);
+        if (!current()) return;
+        if (snapshot) {
+          setTracks(
+            snapshot.tracks
+              .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+              .filter(Boolean),
+          );
+          setIsLoading(false);
+        }
+      }
       const response = await authFetch(`/api/albums/${albumId}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      if (!Array.isArray(data.tracks))
+        throw new Error('Invalid album response');
+      if (!current()) return;
       setAlbum(normalizeAlbum(data.album));
-      const rawTracks = Array.isArray(data.tracks) ? data.tracks : [];
+      const rawTracks = data.tracks;
+      if (session && (await isCollectionSaved(session, key)))
+        await saveOfflineCollection(session, key, {
+          title: data.album?.title || albumTitle,
+          tracks: rawTracks,
+        }, { requireSaved: true, replaceSnapshot: true, expectedUpdatedAt: snapshot?.updatedAt ?? null });
+      if (!current()) return;
       const normalizedTracks = rawTracks
         .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
         .filter(Boolean);
       setTracks(normalizedTracks);
     } catch (error) {
+      if (!current()) return;
       console.error('Fetch album detail error:', error);
-      setErrorMessage('Не удалось загрузить альбом');
+      if ((!session || !(await readCollection(session, key))) && current())
+        setErrorMessage('Не удалось загрузить альбом');
     } finally {
-      setIsLoading(false);
+      if (current()) setIsLoading(false);
     }
-  }, [albumId]);
+  }, [albumId, session, albumTitle]);
 
   // Загрузка при открытии и обновление при возврате из редактора альбома.
   useFocusEffect(
     useCallback(() => {
       fetchAlbum();
+      return () => { requestRef.current += 1; };
     }, [fetchAlbum]),
   );
 
-  useEffect(() => subscribeArtistCreditsUpdated(() => fetchAlbum()), [fetchAlbum]);
+  useEffect(
+    () => subscribeArtistCreditsUpdated(() => fetchAlbum()),
+    [fetchAlbum],
+  );
+
+  useEffect(() => {
+    if (!session) return;
+    isCollectionSaved(session, key)
+      .then(setSaved)
+      .catch(() => {});
+  }, [session, albumId]);
+  useEffect(() => {
+    if (!session || !saved) return;
+    let active = true;
+    const refresh = () =>
+      collectionProgress(session, tracks)
+        .then((value) => {
+          if (active) setProgress(value);
+        })
+        .catch(() => {});
+    refresh();
+    const unsubscribe = subscribeOfflineIndex(({ type }) => {
+      if (['published', 'missing', 'collection'].includes(type)) refresh();
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [session, tracks, saved]);
+  const toggleCollection = async () => {
+    if (!session) return;
+    if (saved) await removeOfflineCollection(session, key);
+    else
+      await saveOfflineCollection(session, key, {
+        title: album?.title || albumTitle,
+        tracks,
+      });
+    if (isOfflineSessionCurrent(session)) setSaved(!saved);
+  };
 
   const renderTrack = ({ item, index }) => (
     <TouchableOpacity
@@ -90,7 +198,9 @@ export default function AlbumScreen({
 
   const resolvedTitle = album?.title || albumTitle;
   const resolvedCover = album?.coverArt || coverArt;
-  const albumArtist = album?.artists?.length ? album.artists.map((artist) => artist.name).join(', ') : (album?.album_artist || album?.artist);
+  const albumArtist = album?.artists?.length
+    ? album.artists.map((artist) => artist.name).join(', ')
+    : album?.album_artist || album?.artist;
   const selectableArtists = getSelectableArtists(album);
   const metaParts = [];
   if (albumArtist) metaParts.push(albumArtist);
@@ -122,7 +232,12 @@ export default function AlbumScreen({
           <Ionicons name="create-outline" size={22} color="#fff" />
         </TouchableOpacity>
         {SHARE_LINKS_ENABLED && album && !isLoading && !errorMessage && (
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Поделиться альбомом" onPress={() => presentShareEntity(album, 'album')} style={{ padding: 12 }}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Поделиться альбомом"
+            onPress={() => presentShareEntity(album, 'album')}
+            style={{ padding: 12 }}
+          >
             <Ionicons name="share-outline" size={22} color="#fff" />
           </TouchableOpacity>
         )}
@@ -143,15 +258,41 @@ export default function AlbumScreen({
       ) : (
         <FlatList
           data={tracks}
-          keyExtractor={(item, index) => String(getTrackId(item) ?? index)}
+          keyExtractor={(item, index) =>
+            `${getTrackId(item) ?? index}-${index}`
+          }
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.albumHeader}>
               <CoverImage source={resolvedCover} style={styles.coverImage} />
               <Text style={styles.albumTitleText}>{resolvedTitle}</Text>
+              {session && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={toggleCollection}
+                >
+                  <Text style={styles.albumMetaText}>
+                    {saved ? 'Удалить загрузку' : 'Скачать альбом'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {progress && (
+                <Text style={styles.albumMetaText}>
+                  Скачано {progress.ready} из {progress.total}
+                </Text>
+              )}
               {selectableArtists.length > 0 && albumArtist ? (
                 <View style={styles.albumMetaRow}>
-                  <ArtistSelector entity={album} identity={albumId} display={albumArtist} onSelect={(artistId) => navigation.navigate('ArtistDetail', { artistId })} controlStyle={styles.albumArtistControl} textStyle={styles.albumMetaText} />
+                  <ArtistSelector
+                    entity={album}
+                    identity={albumId}
+                    display={albumArtist}
+                    onSelect={(artistId) =>
+                      navigation.navigate('ArtistDetail', { artistId })
+                    }
+                    controlStyle={styles.albumArtistControl}
+                    textStyle={styles.albumMetaText}
+                  />
                   {secondaryMetaParts.map((part, idx) => (
                     <React.Fragment key={`${idx}-${part}`}>
                       <Text style={styles.albumMetaText}> · </Text>

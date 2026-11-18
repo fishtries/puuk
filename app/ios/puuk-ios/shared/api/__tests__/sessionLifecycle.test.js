@@ -9,9 +9,30 @@ import {
   getCachedAuthToken,
   logout,
   addAuthListener,
+  SERVER_URL,
 } from '../api';
 
 const mockStore = new Map();
+const jwt = (id) => `header.${Buffer.from(JSON.stringify({ sub: String(id), exp: Date.now() / 1000 + 60 })).toString('base64url')}.signature`;
+
+jest.mock('../../../offline/session', () => {
+  const actual = jest.requireActual('../../../offline/session');
+  let session;
+  return {
+    ...actual,
+    createOfflineId: jest.fn(() => 'activation'),
+    persistOfflineActivation: jest.fn(async () => {}),
+    revokeOfflineActivation: jest.fn(async () => {}),
+    getOfflineSession: () => session || null,
+    closeOfflineSession: () => { const previous = session; session = null; return previous; },
+    openOfflineSession: jest.fn(async (value, _expiry, current) => {
+      if (!current()) return false;
+      session = value;
+      return true;
+    }),
+  };
+});
+jest.mock('../../../offline', () => ({ reconcileTransfers: jest.fn(async () => {}) }));
 
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(async (key) => mockStore.get(key) || null),
@@ -38,12 +59,11 @@ describe('Session Lifecycle & Decoupled Launch', () => {
   });
 
   test('Сохранённая сессия открывает интерфейс, пока /api/auth/me ещё не завершён', async () => {
-    // 1. Помещаем токен и сохранённого пользователя в SecureStore
-    mockStore.set('puuk_auth_token', 'saved-jwt-token');
-    mockStore.set(
-      'puuk_auth_user',
-      JSON.stringify({ id: 42, username: 'tester' }),
-    );
+    const token = jwt(42);
+    mockStore.set('puuk_auth_session_v1', JSON.stringify({
+      token, user: { id: 42, username: 'tester' },
+      owner: { origin: SERVER_URL, userId: '42' }, activationId: 'existing',
+    }));
 
     // 2. Локальное восстановление сессии возвращает пользователя и токен мгновенно без сети
     global.fetch = jest.fn();
@@ -52,7 +72,7 @@ describe('Session Lifecycle & Decoupled Launch', () => {
     expect(localSession.hasToken).toBe(true);
     expect(localSession.hasUser).toBe(true);
     expect(localSession.user).toEqual({ id: 42, username: 'tester' });
-    expect(localSession.token).toBe('saved-jwt-token');
+    expect(localSession.token).toBe(token);
     // Сеть ещё не вызывалась!
     expect(global.fetch).not.toHaveBeenCalled();
 
@@ -65,7 +85,7 @@ describe('Session Lifecycle & Decoupled Launch', () => {
     global.fetch = jest.fn().mockImplementation(() => serverPromise);
 
     const backgroundVerification = verifySession();
-    await Promise.resolve();
+    while (!global.fetch.mock.calls.length) await Promise.resolve();
 
     // Интерфейс уже работает с локальным пользователем, пока запрос висит в фоне
     expect(localSession.user.username).toBe('tester');
@@ -193,6 +213,7 @@ describe('Session Lifecycle & Decoupled Launch', () => {
 
     // Запускаем фоновую проверку
     const verifyPromise = verifySession();
+    while (!resolveFetch) await Promise.resolve();
 
     // Пользователь нажимает «Выйти» во время фонового запроса
     await logout();
@@ -215,8 +236,10 @@ describe('Session Lifecycle & Decoupled Launch', () => {
   });
 
   test('Есть токен, но пользователь не сохранён: восстанавливает профиль или даёт ошибку с повтором', async () => {
-    await setAuthToken('token-only');
-    // Нет пользователя в SecureStore
+    mockStore.delete('puuk_auth_session_v1');
+    mockStore.set('puuk_auth_token', jwt(55));
+    mockStore.set('puuk_auth_user', JSON.stringify({ id: 99, username: 'unbound' }));
+    // An unbound saved profile can't open the offline index.
     const localSession = await restoreLocalSession();
     expect(localSession.hasToken).toBe(true);
     expect(localSession.hasUser).toBe(false);

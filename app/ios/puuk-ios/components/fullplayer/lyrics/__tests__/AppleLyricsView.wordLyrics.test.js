@@ -2,7 +2,9 @@ import React from 'react';
 import { View } from 'react-native';
 import MaskedView from '@react-native-masked-view/masked-view';
 import TestRenderer, { act } from 'react-test-renderer';
-import AppleLyricsView from '../AppleLyricsView';
+import LyricsView from '../AppleLyricsView';
+import usePlayerLyrics from '../usePlayerLyrics';
+import { getOfflineSession, readMediaKey, readLyrics } from '../../../../offline';
 import AnimatedLyricLine, { wordSweepProgress } from '../AnimatedLyricLine';
 import { authFetch } from '../../../../shared/api/api';
 import syntheticFixture from './fixtures/word_lyrics_synthetic.json';
@@ -17,7 +19,23 @@ jest.mock('expo-blur', () => ({
 
 jest.mock('../../../../shared/api/api', () => ({
   authFetch: jest.fn(),
+  addSessionListener: () => () => {},
+  getAuthSessionGeneration: () => 0,
 }));
+
+jest.mock('../../../../offline', () => ({
+  getOfflineSession: jest.fn(() => null),
+  isOfflineSessionCurrent: () => true,
+  readMediaKey: jest.fn(),
+  readLyrics: jest.fn(),
+  saveLyricsResult: jest.fn(),
+  subscribeOfflineIndex: () => () => {},
+}));
+
+function AppleLyricsView(props) {
+  const lyricsResult = usePlayerLyrics(props.currentTrack);
+  return <LyricsView {...props} lyricsResult={lyricsResult} />;
+}
 
 jest.mock('react-native-gesture-handler', () => {
   const { View } = require('react-native');
@@ -107,6 +125,7 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
   });
 
   afterEach(() => {
+    getOfflineSession.mockReturnValue(null);
     act(() => {
       jest.runOnlyPendingTimers();
     });
@@ -175,6 +194,25 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
       node.props.accessible === false && node.props.onLayout)).toBe(measuredWord);
     expect(renderer.root.findAllByType(MaskedView)).toHaveLength(0);
     act(() => { renderer.unmount(); });
+  });
+
+  it('renders a saved word-only snapshot with the original timings', async () => {
+    const owner = { origin: 'https://library.example', userId: '42' };
+    getOfflineSession.mockReturnValue({ owner, activationId: 'offline', generation: 1 });
+    readMediaKey.mockResolvedValue({
+      owner, trackId: syntheticFixture.trackId, contentVersion: syntheticFixture.audioSha256,
+    });
+    readLyrics.mockResolvedValue({ state: 'ready', payload: { lyrics: null, wordLyrics: syntheticFixture } });
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<AppleLyricsView {...defaultProps} currentTime={1.2} />);
+    });
+    const firstLine = renderer.root.findAllByType(AnimatedLyricLine)[0];
+    expect(firstLine.props).toMatchObject({ isActive: true, hasWordTimings: true });
+    expect(firstLine.props.playbackMs.value).toBe(1200);
+    expect(firstLine.props.segments.find(segment => segment.isWord)).toMatchObject({ startMs: 1000 });
+    expect(authFetch).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
   });
 
   it('renders word-level lyrics from synthetic fixture with 4 lines', async () => {

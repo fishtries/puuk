@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 
-from auth import get_current_admin_user, get_current_user, get_cover_user
+from auth import get_current_admin_user, get_current_user
 from config import ARTIST_ARTWORK_DIR, get_base_url
 from repositories import artists
 from serializers import serialize_track
@@ -86,7 +86,7 @@ def log_play_start(track_id: str, current_user: dict = Depends(get_current_user)
 
 
 @router.get("/artists/{artist_id}/artwork")
-def get_artist_artwork(artist_id: str, request: Request, current_user: dict = Depends(get_cover_user)):
+def get_artist_artwork(artist_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     _artist_or_404(artist_id)
     metadata = artists.get_artwork_metadata(artist_id)
     path = _artwork_path(artist_id)

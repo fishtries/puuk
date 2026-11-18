@@ -1,3 +1,4 @@
+import { acquirePlayable, getOfflineSession, isOfflineSessionCurrent, markMissing } from '../offline';
 /**
  * Playback Coordinator.
  * Coordinates AudioPlayer (expo-audio), AudioCache, and PreloadScheduler.
@@ -9,13 +10,11 @@
 import { mediaDelivery, boundedMediaOperation } from '../shared/api/media';
 import defaultAudioCache from './audioCache';
 import defaultPreloadScheduler, { TRACK_STATUS } from './preloadScheduler';
-import { resolveCoverUri, prefetchCover } from '../shared/media/CoverImage';
+import { isServerCoverUri, resolveCoverUri, resolveLockScreenCover, prefetchCover } from '../shared/media/CoverImage';
 import {
   SERVER_URL,
   addSessionListener,
   getAuthSessionGeneration,
-  getCachedAuthToken,
-  getAuthToken,
 } from '../shared/api/api';
 import { getSettings } from '../shared/storage/settings';
 import {
@@ -141,6 +140,7 @@ export {
 
 export class PlaybackCoordinator {
   constructor(options = {}) {
+    this._offlineLease = null;
     this.resolveMedia = options.resolveMedia || ((track, opts) => mediaDelivery.resolve(track, opts));
     this._mediaController = null;
     this._mediaDescriptor = null;
@@ -881,8 +881,7 @@ export class PlaybackCoordinator {
     this._terminalUnloaded = false;
     this._terminalUnloadFailed = false;
     try {
-      if (typeof this._player?.replace !== 'function') throw new Error('unload unavailable');
-      this._player.replace(null);
+      this._unloadSource(this._player);
       this._terminalUnloaded = true;
     } catch {
       this._terminalUnloadFailed = true;
@@ -1016,6 +1015,20 @@ export class PlaybackCoordinator {
     return [...this._diagnosticsRing];
   }
 
+  _unloadSource(player) {
+    if (typeof player?.replace !== 'function') throw new Error('unload unavailable');
+    const result = player.replace(null);
+    // Expo's replace is synchronous. A rejected or deferred command cannot
+    // establish that native playback has released the file.
+    if (typeof result?.then === 'function') {
+      Promise.resolve(result).catch(() => {});
+      throw new Error('unload unconfirmed');
+    }
+    if (result === false) throw new Error('unload rejected');
+    this._offlineLease?.release();
+    this._offlineLease = null;
+  }
+
   cancelCurrent(reason = 'superseded', player = null) {
     this._mediaController?.abort();
     this._mediaDescriptor = null;
@@ -1039,6 +1052,7 @@ export class PlaybackCoordinator {
     this.current.sourceAttemptId = null;
     this.current.trackId = null;
     this.current.status = 'idle';
+    this.current.source = null;
     this.current.intent = 'pause';
 
     this.currentTrack = null;
@@ -1071,7 +1085,9 @@ export class PlaybackCoordinator {
       } catch (e) {}
     }
 
-    try { p?.setActiveForLockScreen?.(false); p?.replace?.(null); } catch {}
+    try { p?.setActiveForLockScreen?.(false); } catch {}
+    try { this._unloadSource(p); } catch {}
+    this.cache?.setActiveTrackId?.(null);
     this._recordDiagnostic('cancelled');
     this._notifyState();
   }
@@ -1283,8 +1299,7 @@ export class PlaybackCoordinator {
     // Resolve terminal state before creating a retry token or mutating generations.
     if (this._terminalUnloadFailed) {
       try {
-        if (typeof player?.replace !== 'function') throw new Error('unload unavailable');
-        player.replace(null);
+        this._unloadSource(player);
         this._terminalUnloadFailed = false;
         this._terminalUnloaded = true;
       } catch {
@@ -1861,7 +1876,10 @@ export class PlaybackCoordinator {
 
       const isLocal = this.current.source === 'local';
       if (isLocal) {
-        if (
+        if (this._offlineLease) {
+          const { session, mediaKey } = this._offlineLease;
+          markMissing(session, mediaKey, 'native_source_failed').catch(() => {});
+        } else if (
           this.cache &&
           typeof this.cache.invalidate === 'function' &&
           this.currentPlayUri
@@ -2070,31 +2088,13 @@ export class PlaybackCoordinator {
       this._lastServerUrl = currentServerUrl;
     }
 
+    const offlineSession = getOfflineSession();
     // 1. Нормализация URL
-    const rawStreamUrl =
-      track.stream_url ||
-      `${currentServerUrl}/api/stream/${encodeURIComponent(trackIdStr)}`;
     const normalizedStreamUrl = normalizeStreamUrl(track, currentServerUrl);
-
-    if (
-      !normalizedStreamUrl ||
-      (!normalizedStreamUrl.startsWith('http://') &&
-        !normalizedStreamUrl.startsWith('https://'))
-    ) {
-      const urlErr = new PlaybackError(
-        'Invalid stream URL',
-        {
-          type: 'remote_replace_error',
-          trackId: trackIdStr,
-        },
-      );
-      this._error('[Coordinator][Stage 1: normalize_url FAILED]', urlErr);
-      throw urlErr;
-    }
 
     // 2. Проверка локального кеша
     let localUri = null;
-    if (this.bypassCache || options.bypassLocal) {
+    if (this.bypassCache || options.bypassLocal || options.offlineOnly) {
       this._log(
         '[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag',
       );
@@ -2146,11 +2146,12 @@ export class PlaybackCoordinator {
       Boolean(this.currentPlayUri);
 
     if (
-      (!options.force &&
+      (!offlineSession || this._offlineLease) &&
+      ((!options.force &&
         this.currentTrackId === trackIdStr &&
         this.currentPlayUri === expectedUri &&
         !serverChanged && !this._mediaWake && sameHeaders) ||
-      (isRerenderOfCurrent && expectedIsLocal === this.currentIsLocal && !serverChanged && sameHeaders && !this._mediaWake && (!this._mediaDescriptor || this.clock() < this._mediaDescriptor.usableUntil))
+      (isRerenderOfCurrent && expectedIsLocal === this.currentIsLocal && !serverChanged && sameHeaders && !this._mediaWake && (!this._mediaDescriptor || this.clock() < this._mediaDescriptor.usableUntil)))
     ) {
       this._log(
         '[Coordinator] Idempotent play() - same track, uri, and headers, resuming playback',
@@ -2219,6 +2220,7 @@ export class PlaybackCoordinator {
 
     this.currentTrack = track;
     this.currentTrackId = trackIdStr;
+    this.cache?.setActiveTrackId?.(trackIdStr);
     this._terminalUnloaded = false;
     this._terminalUnloadFailed = false;
 
@@ -2279,7 +2281,20 @@ export class PlaybackCoordinator {
     let isLocal = false;
     let playUri = null;
 
-    if (!this.bypassCache && !options.bypassLocal && this.cache.prepareTrack) {
+    let offlineLease = null;
+    if (offlineSession && !options.bypassLocal) {
+      offlineLease = await acquirePlayable(offlineSession, trackIdStr, track.content_version)
+        .catch(() => null);
+      if (!isCurrent() || !isOfflineSessionCurrent(offlineSession)) {
+        offlineLease?.release();
+        return { superseded: true, uri: null, isLocal: false };
+      }
+      if (offlineLease) {
+        localUri = offlineLease.uri;
+        this.current.source = 'local';
+      }
+    }
+    if (!offlineLease && !this.bypassCache && !options.bypassLocal && !options.offlineOnly && this.cache.prepareTrack) {
       await this.cache.prepareTrack(track, { signal: this._mediaController.signal });
       if (!isCurrent()) return { superseded: true, uri: null, isLocal: false };
       localUri = this.cache.getCachedUri(trackIdStr);
@@ -2304,7 +2319,8 @@ export class PlaybackCoordinator {
           requestServerEpoch,
           sourceAttemptId,
         );
-        if (replaceRes.superseded)
+        if (replaceRes.superseded) {
+          offlineLease?.release();
           return {
             isLocal: false,
             uri: null,
@@ -2313,7 +2329,15 @@ export class PlaybackCoordinator {
             confirmation: this.identityAvailable ? 'pending' : 'unavailable',
             superseded: true,
           };
+        }
+        this._offlineLease?.release();
+        this._offlineLease = offlineLease ? { ...offlineLease, session: offlineSession } : null;
       } catch (localErr) {
+        if (offlineLease) {
+          offlineLease.release();
+          markMissing(offlineSession, offlineLease.mediaKey, 'replace_failed').catch(() => {});
+          offlineLease = null;
+        }
         if (!isCurrent())
           return {
             isLocal: false,
@@ -2360,6 +2384,27 @@ export class PlaybackCoordinator {
     }
 
     if (!playUri) {
+      if (options.offlineOnly) {
+        const error = new PlaybackError('Local audio unavailable', { type: 'local_cache_error', trackId: trackIdStr });
+        this._terminateWithError(error);
+        throw error;
+      }
+      if (
+        !normalizedStreamUrl ||
+        (!normalizedStreamUrl.startsWith('http://') &&
+          !normalizedStreamUrl.startsWith('https://'))
+      ) {
+        const urlErr = new PlaybackError(
+          'Invalid stream URL',
+          {
+            type: 'remote_replace_error',
+            trackId: trackIdStr,
+          },
+        );
+        this._error('[Coordinator][Stage 1: normalize_url FAILED]', urlErr);
+        throw urlErr;
+      }
+
       isLocal = false;
       playUri = normalizedStreamUrl;
       this._log('[Coordinator][Stage 3: remote_replace]', {
@@ -2580,6 +2625,10 @@ export class PlaybackCoordinator {
     }
 
     // Сохраняем активный источник после успешного replace + play
+    if (!isLocal) {
+      this._offlineLease?.release();
+      this._offlineLease = null;
+    }
     this.currentPlayUri = playUri;
     this.currentIsLocal = isLocal;
     this._currentSourceHeaders = hasHeaders ? cleanHeaders : null;
@@ -2591,7 +2640,7 @@ export class PlaybackCoordinator {
     });
 
     try {
-      await this.updateLockScreenMetadata(player, track, isCurrent);
+      if (!offlineLease) await this.updateLockScreenMetadata(player, track, isCurrent);
     } catch (lockErr) {
       this._warn(
         '[Coordinator][Stage 5: lock_screen FAILED]',
@@ -2634,6 +2683,7 @@ export class PlaybackCoordinator {
    */
   updateQueue(currentTrack, upNextQueue = [], options = {}) {
     this.currentTrack = currentTrack;
+    if (!currentTrack) this.cache?.setActiveTrackId?.(null);
     this.upNextQueue = Array.isArray(upNextQueue) ? upNextQueue : [];
 
     // Защищаем текущий трек и очередь от LRU вытеснения из кеша
@@ -2729,18 +2779,15 @@ export class PlaybackCoordinator {
 
   /**
    * Немедленно применяет метаданные экрана блокировки (Now Playing Info) для трека.
-   * Синхронно устанавливает title, artist, albumTitle и artworkUrl (если токен уже закэширован в памяти).
-   * Если токен еще не был загружен в память, асинхронно дочитывает его и обновляет обложку.
+   * Защищённая обложка будет добавлена после получения короткого билета.
    */
   applyLockScreenMetadata(player, track, isCurrent = null) {
     if (!player || typeof player.setActiveForLockScreen !== 'function') return;
     if (isCurrent && !isCurrent()) return;
 
     try {
-      const token = getCachedAuthToken();
-      const artworkUrl = track?.coverArt
-        ? resolveCoverUri(track.coverArt, token)
-        : undefined;
+      const artworkUrl = track?.coverArt && !isServerCoverUri(track.coverArt)
+        ? resolveCoverUri(track.coverArt) : undefined;
       player.setActiveForLockScreen(
         true,
         {
@@ -2755,15 +2802,6 @@ export class PlaybackCoordinator {
           showSeekBackward: false,
         },
       );
-
-      if (!token) {
-        this.updateLockScreenMetadata(player, track, isCurrent).catch((err) => {
-          this._warn(
-            '[Coordinator] Async token lock screen update failed:',
-            err?.message,
-          );
-        });
-      }
     } catch (err) {
       this._warn(
         '[Coordinator] Failed to set immediate lock screen controls:',
@@ -2813,13 +2851,9 @@ export class PlaybackCoordinator {
     if (isCurrent && !isCurrent()) return;
 
     try {
-      let token = getCachedAuthToken();
-      if (!token) {
-        try {
-          token = await getAuthToken();
-        } catch {}
-      }
-
+      const generation = getAuthSessionGeneration();
+      const artworkUrl = await resolveLockScreenCover(track?.coverArt).catch(() => undefined);
+      if (generation !== getAuthSessionGeneration()) return;
       if (isCurrent && !isCurrent()) return;
 
       if (this.currentTrack && !areTrackIdsEqual(track, this.currentTrack)) {
@@ -2827,9 +2861,6 @@ export class PlaybackCoordinator {
         return;
       }
 
-      const artworkUrl = track?.coverArt
-        ? resolveCoverUri(track.coverArt, token)
-        : undefined;
       player.setActiveForLockScreen(
         true,
         {
@@ -2888,9 +2919,16 @@ export class PlaybackCoordinator {
         this.next.error?.kind || this.lastErrorType || 'network_error';
     }
 
+    const offlineSession = getOfflineSession();
+    const ticket = this._mediaDescriptor;
+    const mediaKey = this.current.source === 'local'
+      ? this._offlineLease?.mediaKey
+      : offlineSession && ticket?.contentVersion && ticket.trackId === this.current.trackId
+        ? { owner: offlineSession.owner, trackId: ticket.trackId, contentVersion: ticket.contentVersion }
+        : undefined;
     return {
       identityAvailable: this.identityAvailable,
-      current: { ...this.current },
+      current: { ...this.current, mediaKey },
       next: { ...this.next },
       networkStatus,
       nextTrackStatus: this.next.status,

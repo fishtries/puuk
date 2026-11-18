@@ -95,7 +95,8 @@ describe('actual authFetch transport/session integration',()=>{
  });
  test('SecureStore completion after logout cannot restore an old token',async()=>{
    await setAuthToken(null);const gate=deferred();jest.spyOn(SecureStore,'getItemAsync').mockImplementation(()=>gate.promise);
-   const p=authFetch('/api/media-ticket',{method:'POST',retry:0});await ticks();await logout();gate.resolve('old-token');await expect(p).rejects.toMatchObject({type:'abort'});expect(global.fetch).not.toHaveBeenCalled();
+   const { restoreLocalSession } = require('../../shared/api/api');
+   const p=restoreLocalSession();await ticks();await logout();gate.resolve('old-token');await expect(p).resolves.toMatchObject({hasToken:false,hasUser:false});expect(global.fetch).not.toHaveBeenCalled();
  });
  test('server switch after fetch cannot return the old response',async()=>{
    const gate=deferred();global.fetch.mockImplementation(()=>gate.promise);const p=authFetch('/api/media-ticket',{method:'POST',retry:0});await ticks();setServerUrl('https://other.test');gate.resolve(response(direct()));await expect(p).rejects.toMatchObject({type:'abort'});

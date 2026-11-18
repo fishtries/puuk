@@ -432,15 +432,15 @@ describe('utils/api - authFetch & transport reliability', () => {
         return { ok: false, status: 401 };
       });
 
-      const [res1, res2, res3] = await Promise.all([
+      const [res1, res2, res3] = await Promise.allSettled([
         authFetch('/api/tracks'),
         authFetch('/api/albums'),
         authFetch('/api/playlists'),
       ]);
 
-      expect(res1.status).toBe(401);
-      expect(res2.status).toBe(401);
-      expect(res3.status).toBe(401);
+      expect(res1).toMatchObject({ status: 'fulfilled', value: { status: 401 } });
+      expect(res2).toMatchObject({ status: 'rejected', reason: { type: 'abort' } });
+      expect(res3).toMatchObject({ status: 'rejected', reason: { type: 'abort' } });
 
       expect(logoutSpy).toHaveBeenCalledTimes(1);
       logoutSpy.mockRestore();

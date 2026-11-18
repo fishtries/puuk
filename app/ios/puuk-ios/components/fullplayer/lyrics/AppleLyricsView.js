@@ -16,12 +16,7 @@ import {
   AccessibilityInfo,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  parseLrc,
-  isLrcSynced,
-  extractPlainLyrics,
-} from '../../../utils/lrcParser';
-import { authFetch } from '../../../shared/api/api';
+import { parseLyricsResult } from '../../../offline/lyrics/provider';
 import { getTrackId } from '../../../shared/domain/trackAdapter';
 import { usePlaybackPosition } from '../../../hooks/playbackStatus';
 
@@ -43,10 +38,7 @@ import AnimatedLyricLine from './AnimatedLyricLine';
 import { TopBlurOverlay, BottomBlurOverlay } from '../BlurOverlays';
 import { computeActiveLyricIndex } from './lyricDepth';
 import { parsePlainLyrics } from './plainLyrics';
-import {
-  validateAndParseWordLyrics,
-  computeActiveWordLineIndex,
-} from './wordLyricsParser';
+import { computeActiveWordLineIndex } from './wordLyricsParser';
 
 const LyricSpacer = React.memo(function LyricSpacer({ index, height }) {
   return <View testID={`lyric-spacer-${index}`} accessible={false} style={{ height }} />;
@@ -156,6 +148,7 @@ const createLyricsStyles = ({
 });
 
 const AppleLyricsView = ({
+  lyricsResult,
   player,
   isLyricsView,
   isLyricsMounted,
@@ -190,14 +183,13 @@ const AppleLyricsView = ({
 }) => {
   const position = usePlaybackPosition(player, isPlayerVisible);
   const currentTime = player ? position.currentTime : fallbackTime;
-  const [lyrics, setLyrics] = useState([]);
-  const [plainLyricsText, setPlainLyricsText] = useState('');
-  const [hasSyncedLyrics, setHasSyncedLyrics] = useState(false);
-  const [hasWordLyrics, setHasWordLyrics] = useState(false);
+  const trackId = getTrackId(currentTrack);
+  const { lines: lyrics, plainText: plainLyricsText, isSynced: hasSyncedLyrics, hasWords: hasWordLyrics } =
+    useMemo(() => parseLyricsResult(lyricsResult, trackId), [lyricsResult, trackId]);
+  const isLoadingLyrics = lyricsResult?.state === 'loading';
   const isLyricsMountedRef = useRef(false);
   isLyricsMountedRef.current = isLyricsMounted;
 
-  const [isLoadingLyrics, setIsLoadingLyrics] = useState(false);
   const lyricsScrollRef = useRef(null);
   const { fontScale } = useWindowDimensions();
   const [isScreenReaderEnabled, setIsScreenReaderEnabled] = useState(false);
@@ -370,8 +362,7 @@ const AppleLyricsView = ({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  const trackId = getTrackId(currentTrack);
-  const layoutContext = `${trackId}:${width}:${fontScale}`;
+  const layoutContext = `${trackId}:${lyricsResult?.contentVersion}:${lyricsResult?.lyricsRevision}:${width}:${fontScale}`;
   if (lyricLayouts.current.context !== layoutContext) {
     lyricLayouts.current = { context: layoutContext, heights: {} };
   }
@@ -392,8 +383,6 @@ const AppleLyricsView = ({
       return layout;
     });
   }, [lyrics, layoutVersion, layoutContext, width, fontScale, insets?.top]);
-  const trackIdRef = useRef(trackId);
-  trackIdRef.current = trackId;
 
   // Reset flags and scroll positions on track change
   useEffect(() => {
@@ -442,96 +431,6 @@ const AppleLyricsView = ({
       if (layoutFrame.current !== null) cancelAnimationFrame(layoutFrame.current);
     };
   }, []);
-
-  // Fetch track lyrics with race-condition guard (A -> B -> A) and HTTP status check
-  useEffect(() => {
-    let isCancelled = false;
-    const currentTrackId = trackId;
-
-    if (
-      currentTrackId !== null &&
-      currentTrackId !== undefined &&
-      String(currentTrackId).trim() !== ''
-    ) {
-      setIsLoadingLyrics(true);
-      setLyrics([]);
-      setPlainLyricsText('');
-      setHasSyncedLyrics(false);
-      setHasWordLyrics(false);
-
-      authFetch(`/api/tracks/${encodeURIComponent(String(currentTrackId))}/lyrics`)
-        .then((res) => {
-          if (
-            res.ok === false ||
-            (res.status !== undefined && (res.status < 200 || res.status >= 300))
-          ) {
-            throw new Error(`HTTP ${res.status}`);
-          }
-          return res.json();
-        })
-        .then((data) => {
-          if (isCancelled || trackIdRef.current !== currentTrackId) {
-            return;
-          }
-
-          if (data && data.wordLyrics) {
-            const parsedWord = validateAndParseWordLyrics(data.wordLyrics, currentTrackId);
-            if (parsedWord) {
-              setHasWordLyrics(true);
-              setHasSyncedLyrics(true);
-              setLyrics(parsedWord.lines);
-              const plain =
-                data.plainLyrics || parsedWord.lines.map((l) => l.text).join('\n');
-              setPlainLyricsText(plain);
-              return;
-            }
-          }
-
-          setHasWordLyrics(false);
-          if (data && data.lyrics) {
-            const raw = data.lyrics;
-            const isSynced =
-              data.isSynced !== undefined ? data.isSynced : isLrcSynced(raw);
-            setHasSyncedLyrics(isSynced);
-
-            const parsed = parseLrc(raw);
-            setLyrics(parsed);
-
-            // Plain text fallback
-            const plain = data.plainLyrics || extractPlainLyrics(raw);
-            setPlainLyricsText(plain);
-          } else {
-            setLyrics([]);
-            setPlainLyricsText('');
-            setHasSyncedLyrics(false);
-          }
-        })
-        .catch(() => {
-          if (isCancelled || trackIdRef.current !== currentTrackId) {
-            return;
-          }
-          setLyrics([]);
-          setPlainLyricsText('');
-          setHasSyncedLyrics(false);
-          setHasWordLyrics(false);
-        })
-        .finally(() => {
-          if (!isCancelled && trackIdRef.current === currentTrackId) {
-            setIsLoadingLyrics(false);
-          }
-        });
-    } else {
-      setLyrics([]);
-      setPlainLyricsText('');
-      setHasSyncedLyrics(false);
-      setHasWordLyrics(false);
-      setIsLoadingLyrics(false);
-    }
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [trackId]);
 
   // Active lyric index computation (word-level or line-level)
   const activeIndex = useMemo(() => {

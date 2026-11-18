@@ -28,6 +28,7 @@ from repositories.interactions import (
     get_favorite_track_ids,
     get_favorites_fingerprint,
     add_history,
+    set_track_rating,
     get_user_history,
     add_dislike,
     remove_dislike,

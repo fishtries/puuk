@@ -4,6 +4,7 @@ Assembles routers, wires services, and keeps backwards-compatible exports
 used by the test suite (apply_diversity_penalty, get_smart_recommendations, ...).
 """
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -112,6 +113,8 @@ async def _loudness_sync_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Uvicorn access records include complete URLs, including native media permissions.
+    logging.getLogger("uvicorn.access").disabled = True
     db.init_db()
     config.validate_delivery_config()
     from services.delivery_service import startup as delivery_startup

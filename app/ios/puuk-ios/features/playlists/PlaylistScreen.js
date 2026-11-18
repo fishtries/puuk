@@ -1,4 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import { saveRatingWithFeedback, showRatingError } from '../downloads/ratingFeedback';
+import {
+  saveOfflineCollection,
+  removeOfflineCollection,
+  isCollectionSaved,
+  collectionProgress,
+} from '../../offline/collections';
+import { overlayFavorites } from '../../offline/collections/runtime';
+import { getRatingOverlay, waitForOutboxDrain } from '../../offline/outbox/runtime';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,8 +30,22 @@ import {
   normalizeTrack,
 } from '../../shared/domain/trackAdapter';
 import CoverImage from '../../shared/media/CoverImage';
+import {
+  FAVORITES_COLLECTION,
+  getOfflineSession,
+  isOfflineSessionCurrent,
+  readCollection,
+  readFavoriteDownloads,
+  subscribeOfflineIndex,
+} from '../../offline';
+import { saveFavoriteOffline } from '../../offline/foreground';
 
-export default function PlaylistScreen({ route, navigation, onPlayTrackList, onPressEllipsis }) {
+export default function PlaylistScreen({
+  route,
+  navigation,
+  onPlayTrackList,
+  onPressEllipsis,
+}) {
   const {
     playlistId,
     playlistName,
@@ -32,7 +55,8 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
     isReadOnly,
   } = route?.params || {};
   const isFavorites = playlistId === 'favorites';
-  const hasInitialTracks = Array.isArray(initialTracks) && initialTracks.length > 0;
+  const hasInitialTracks =
+    Array.isArray(initialTracks) && initialTracks.length > 0;
   const isCustomOrReadOnly = Boolean(isReadOnly || hasInitialTracks);
   const [tracks, setTracks] = useState(hasInitialTracks ? initialTracks : []);
   const [isLoading, setIsLoading] = useState(!hasInitialTracks);
@@ -47,30 +71,201 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
     return unsub;
   }, []);
 
+  const [savedIds, setSavedIds] = useState([]);
+  const [savingId, setSavingId] = useState(null);
+  const offlineSession = getOfflineSession();
+  const collectionKey = { kind: 'playlist', collectionId: playlistId };
+  const [savedCollection, setSavedCollection] = useState(false);
+  const [hasCompleteSnapshot, setHasCompleteSnapshot] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const snapshotRevision = useRef(0);
   useEffect(() => {
-    if (!hasInitialTracks) {
-      fetchPlaylist();
-    }
-  }, [playlistId, hasInitialTracks]);
+    if (!offlineSession || isCustomOrReadOnly) return;
+    let active = true;
+    const key = isFavorites ? FAVORITES_COLLECTION : { kind: 'playlist', collectionId: playlistId };
+    const unsubscribe = subscribeOfflineIndex((event) => {
+      if (event.type !== 'collection' || event.session !== offlineSession ||
+          event.kind !== key.kind || String(event.collectionId) !== String(key.collectionId)) return;
+      const revision = ++snapshotRevision.current;
+      (async () => {
+        const snapshot = await readCollection(offlineSession, key);
+        if (!snapshot) return;
+        const raw = isFavorites ? overlayFavorites(snapshot.tracks, await getRatingOverlay(offlineSession)) : snapshot.tracks;
+        if (!active || revision !== snapshotRevision.current || !isOfflineSessionCurrent(offlineSession)) return;
+        setTracks(raw.map((t) => normalizeTrack(t, { serverUrl: SERVER_URL })).filter(Boolean));
+        setHasCompleteSnapshot(true);
+        setIsLoading(false);
+      })().catch(() => {});
+    });
+    return () => { active = false; snapshotRevision.current += 1; unsubscribe(); };
+  }, [offlineSession, playlistId, isFavorites, isCustomOrReadOnly]);
 
-  const fetchPlaylist = async () => {
+  useEffect(() => {
+    if (!offlineSession || isFavorites || isCustomOrReadOnly) return;
+    isCollectionSaved(offlineSession, collectionKey)
+      .then(setSavedCollection)
+      .catch(() => {});
+  }, [offlineSession, playlistId, isFavorites, isCustomOrReadOnly]);
+  const toggleCollection = async () => {
+    if (!offlineSession) return;
+    if (savedCollection)
+      await removeOfflineCollection(offlineSession, collectionKey);
+    else
+      await saveOfflineCollection(offlineSession, collectionKey, {
+        title: playlistName,
+        tracks,
+      });
+    if (isOfflineSessionCurrent(offlineSession))
+      setSavedCollection(!savedCollection);
+  };
+  useEffect(() => {
+    if (!offlineSession || (!isFavorites && !savedCollection)) return;
+    let active = true;
+    const refresh = () =>
+      collectionProgress(offlineSession, tracks)
+        .then((value) => {
+          if (active) setProgress(value);
+        })
+        .catch(() => {});
+    refresh();
+    const unsubscribe = subscribeOfflineIndex(({ type }) => {
+      if (['published', 'missing', 'collection'].includes(type)) refresh();
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [offlineSession, tracks, savedCollection, isFavorites]);
+
+  useEffect(() => {
+    if (!offlineSession) return;
+    let active = true;
+    let latest = 0;
+    const refresh = () => {
+      const request = ++latest;
+      readFavoriteDownloads(offlineSession)
+        .then(({ ready }) => {
+          if (
+            active &&
+            request === latest &&
+            isOfflineSessionCurrent(offlineSession)
+          )
+            setSavedIds(ready);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const unsubscribe = subscribeOfflineIndex(({ type }) => {
+      if (type === 'published' || type === 'missing') refresh();
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [offlineSession]);
+
+  const saveOffline = async (track) => {
+    if (!offlineSession || savingId !== null) return;
+    setSavingId(String(getTrackId(track)));
+    try {
+      if (await saveFavoriteOffline(offlineSession, track)) return;
+      if (isOfflineSessionCurrent(offlineSession))
+        Alert.alert('Не удалось скачать трек');
+    } catch {
+      if (isOfflineSessionCurrent(offlineSession))
+        Alert.alert('Не удалось скачать трек');
+    } finally {
+      if (isOfflineSessionCurrent(offlineSession)) setSavingId(null);
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setHasCompleteSnapshot(false);
+    if (!hasInitialTracks) {
+      fetchPlaylist(controller.signal);
+    }
+    return () => controller.abort();
+  }, [playlistId, hasInitialTracks, offlineSession]);
+
+  const fetchPlaylist = async (signal) => {
+    const revision = snapshotRevision.current;
     setIsLoading(true);
     try {
       if (isFavorites) {
-        const response = await authFetch('/api/favorites');
+        const canUpdate = () =>
+          !signal.aborted && revision === snapshotRevision.current &&
+          getOfflineSession() === offlineSession &&
+          (!offlineSession || isOfflineSessionCurrent(offlineSession));
+        const showTracks = (raw) =>
+          setTracks(
+            raw
+              .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+              .filter(Boolean),
+          );
+        const saved = offlineSession
+          ? await readCollection(offlineSession, FAVORITES_COLLECTION).catch(
+              () => null,
+            )
+          : null;
+        if (!canUpdate()) return;
+        if (saved) {
+          const projected = overlayFavorites(saved.tracks, await getRatingOverlay(offlineSession));
+          if (!canUpdate()) return;
+          showTracks(projected);
+          setIsLoading(false);
+        }
+        if (offlineSession) await waitForOutboxDrain(offlineSession);
+        if (!canUpdate()) return;
+        const response = await (offlineSession
+          ? authFetch('/api/favorites', { signal, retry: 0 })
+          : authFetch('/api/favorites'));
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        const raw = Array.isArray(data) ? data : [];
-        setTracks(
-          raw
-            .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
-            .filter(Boolean),
-        );
+        if (!Array.isArray(data) || !canUpdate()) return;
+        const projected = offlineSession
+          ? overlayFavorites(data, await getRatingOverlay(offlineSession))
+          : data;
+        if (!canUpdate()) return;
+        showTracks(projected);
       } else {
-        const response = await authFetch(`/api/playlists/${playlistId}`);
+        const saved = offlineSession
+          ? await readCollection(offlineSession, collectionKey).catch(
+              () => null,
+            )
+          : null;
+        if (
+          saved &&
+          !signal.aborted &&
+          isOfflineSessionCurrent(offlineSession)
+        ) {
+          setTracks(
+            saved.tracks
+              .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
+              .filter(Boolean),
+          );
+          setHasCompleteSnapshot(true);
+          setIsLoading(false);
+        }
+        const response = await (offlineSession
+          ? authFetch(`/api/playlists/${playlistId}`, { signal })
+          : authFetch(`/api/playlists/${playlistId}`));
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        const raw = Array.isArray(data?.tracks) ? data.tracks : [];
+        if (signal.aborted) return;
+        if (!Array.isArray(data?.tracks))
+          throw new Error('Invalid playlist response');
+        const raw = data.tracks;
+        setHasCompleteSnapshot(true);
+        if (
+          offlineSession &&
+          (await isCollectionSaved(offlineSession, collectionKey))
+        )
+          await saveOfflineCollection(offlineSession, collectionKey, {
+            title: playlistName,
+            tracks: raw,
+          }, { requireSaved: true, replaceSnapshot: true, expectedUpdatedAt: saved?.updatedAt ?? null });
+        if (signal.aborted || revision !== snapshotRevision.current || (offlineSession && !isOfflineSessionCurrent(offlineSession))) return;
         setTracks(
           raw
             .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
@@ -78,9 +273,18 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
         );
       }
     } catch (error) {
-      console.error('Fetch playlist tracks error:', error);
+      if (
+        !signal.aborted &&
+        (!offlineSession || isOfflineSessionCurrent(offlineSession))
+      ) {
+        console.error('Fetch playlist tracks error:', error);
+      }
     } finally {
-      setIsLoading(false);
+      if (
+        !signal.aborted &&
+        (!offlineSession || isOfflineSessionCurrent(offlineSession))
+      )
+        setIsLoading(false);
     }
   };
 
@@ -101,12 +305,13 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
           onPress: async () => {
             try {
               if (isFavorites) {
-                await authFetch(
-                  `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
-                  {
-                    method: 'DELETE',
-                  },
-                );
+                if (offlineSession)
+                  await saveRatingWithFeedback(offlineSession, trackOrId, 'neutral');
+                else
+                  await authFetch(
+                    `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+                    { method: 'DELETE' },
+                  );
               } else {
                 await authFetch(
                   `/api/playlists/${encodeURIComponent(String(playlistId))}/tracks/${encodeURIComponent(String(trackId))}`,
@@ -120,6 +325,7 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
               );
             } catch (e) {
               console.error('Remove track error', e);
+              if (isFavorites) showRatingError();
             }
           },
         },
@@ -127,40 +333,75 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
     );
   };
 
-  const renderTrack = ({ item, index }) => (
-    <TouchableOpacity
-      style={styles.trackRow}
-      activeOpacity={0.6}
-      onPress={() => onPlayTrackList(tracks, index)}
-      onLongPress={() => onPressEllipsis?.(item)}
-    >
-      <Text style={styles.trackNumber}>{index + 1}</Text>
-      {item.coverArt && (
-        <CoverImage source={item.coverArt} style={styles.trackThumb} />
-      )}
-      <View style={styles.trackInfo}>
-        <Text style={styles.trackTitle} numberOfLines={1}>
-          {item.title}
-        </Text>
-        <Text style={styles.trackArtist} numberOfLines={1}>
-          {item.artist}
-        </Text>
-      </View>
-      {onPressEllipsis && (
-        <TouchableOpacity onPress={() => onPressEllipsis(item)} accessibilityRole="button" accessibilityLabel={`Действия с ${item.title}`} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-          <Ionicons name="ellipsis-horizontal" size={20} color="#aaa" />
-        </TouchableOpacity>
-      )}
-      {!isCustomOrReadOnly && (
-        <TouchableOpacity
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          onPress={() => handleRemoveTrack(item)}
-        >
-          <Ionicons name="trash-outline" size={18} color="#ff453a" />
-        </TouchableOpacity>
-      )}
-    </TouchableOpacity>
-  );
+  const renderTrack = ({ item, index }) => {
+    const trackId = String(getTrackId(item));
+    const isSaved = savedIds.includes(trackId);
+    return (
+      <TouchableOpacity
+        style={styles.trackRow}
+        activeOpacity={0.6}
+        onPress={() => onPlayTrackList(tracks, index)}
+        onLongPress={() => onPressEllipsis?.(item)}
+      >
+        <Text style={styles.trackNumber}>{index + 1}</Text>
+        {item.coverArt && (
+          <CoverImage source={item.coverArt} style={styles.trackThumb} />
+        )}
+        <View style={styles.trackInfo}>
+          <Text style={styles.trackTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          <Text style={styles.trackArtist} numberOfLines={1}>
+            {item.artist}
+          </Text>
+        </View>
+        {offlineSession && isFavorites && (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={
+              isSaved ? `${item.title} скачан` : `Скачать ${item.title}`
+            }
+            disabled={savingId !== null || isSaved}
+            onPress={() => saveOffline(item)}
+            style={styles.downloadButton}
+          >
+            {savingId === trackId ? (
+              <ActivityIndicator color={accentColor} />
+            ) : (
+              <Ionicons
+                name={isSaved ? 'checkmark-circle-outline' : 'download-outline'}
+                size={20}
+                color={isSaved ? accentColor : '#aaa'}
+              />
+            )}
+          </TouchableOpacity>
+        )}
+        {onPressEllipsis && (
+          <TouchableOpacity
+            onPress={() => onPressEllipsis(item)}
+            accessibilityRole="button"
+            accessibilityLabel={`Действия с ${item.title}`}
+            style={{
+              width: 44,
+              height: 44,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="ellipsis-horizontal" size={20} color="#aaa" />
+          </TouchableOpacity>
+        )}
+        {!isCustomOrReadOnly && (
+          <TouchableOpacity
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={() => handleRemoveTrack(item)}
+          >
+            <Ionicons name="trash-outline" size={18} color="#ff453a" />
+          </TouchableOpacity>
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -208,6 +449,21 @@ export default function PlaylistScreen({ route, navigation, onPlayTrackList, onP
                 </View>
               )}
               <Text style={styles.playlistTitleText}>{playlistName}</Text>
+              {offlineSession && !isFavorites && !isCustomOrReadOnly && hasCompleteSnapshot && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={toggleCollection}
+                >
+                  <Text style={styles.playlistSubtitleText}>
+                    {savedCollection ? 'Удалить загрузку' : 'Скачать плейлист'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {progress && (
+                <Text style={styles.playlistSubtitleText}>
+                  Скачано {progress.ready} из {progress.total}
+                </Text>
+              )}
               <Text style={styles.playlistSubtitleText}>
                 {customSubtitle ? `${customSubtitle} • ` : ''}
                 {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
@@ -243,6 +499,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#1c1c1e',
+  },
+  downloadButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   backButton: {
     marginRight: 16,

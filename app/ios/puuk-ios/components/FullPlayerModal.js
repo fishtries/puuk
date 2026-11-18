@@ -44,6 +44,7 @@ import {
 } from 'react-native-gesture-handler';
 
 import AppleLyricsView from './fullplayer/lyrics/AppleLyricsView';
+import usePlayerLyrics from './fullplayer/lyrics/usePlayerLyrics';
 import { PlaybackProgressClock } from './fullplayer/ProgressBar';
 import QueuePanel from './fullplayer/QueuePanel';
 import PlayerControls from './fullplayer/PlayerControls';
@@ -154,60 +155,11 @@ const FullPlayerModal = ({
   const lyricsTransition = useSharedValue(0);
   const lyricsRotation = useSharedValue(0);
 
-  const trackId = getTrackId(currentTrack);
-
-  const initialHasLyrics = useMemo(() => {
-    if (!currentTrack) return false;
-    if (currentTrack.has_lyrics !== undefined)
-      return Boolean(currentTrack.has_lyrics);
-    if (typeof currentTrack.lyrics === 'string')
-      return currentTrack.lyrics.trim().length > 0;
-    return false;
-  }, [currentTrack]);
-
-  const [hasLyrics, setHasLyrics] = useState(initialHasLyrics);
-
-  useEffect(() => {
-    if (trackId === null) {
-      setHasLyrics(false);
-      return;
-    }
-
-    if (currentTrack?.has_lyrics !== undefined) {
-      setHasLyrics(Boolean(currentTrack.has_lyrics));
-    } else if (typeof currentTrack?.lyrics === 'string') {
-      setHasLyrics(currentTrack.lyrics.trim().length > 0);
-    }
-
-    let isMounted = true;
-    authFetch(`/api/tracks/${encodeURIComponent(String(trackId))}/lyrics`)
-      .then((res) => (res && res.ok ? res.json() : null))
-      .then((data) => {
-        if (!isMounted) return;
-        const exists = Boolean(
-          data && data.lyrics && data.lyrics.trim().length > 0,
-        );
-        setHasLyrics(exists);
-        if (!exists && isLyricsView) {
-          setIsLyricsView(false);
-          setIsLyricsMounted(false);
-          cancelAnimation(lyricsTransition);
-          cancelAnimation(lyricsRotation);
-          lyricsTransition.value = 0;
-          lyricsRotation.value = 0;
-        }
-      })
-      .catch(() => {
-        if (!isMounted) return;
-        if (currentTrack?.has_lyrics === undefined && !currentTrack?.lyrics) {
-          setHasLyrics(false);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [trackId]);
+  const lyricsResult = usePlayerLyrics(currentTrack, currentPlayback?.mediaKey);
+  const hasLyrics = lyricsResult.state === 'ready' ||
+    (lyricsResult.state !== 'absent' && Boolean(
+      currentTrack?.has_lyrics ?? (typeof currentTrack?.lyrics === 'string' && currentTrack.lyrics.trim()),
+    ));
 
   const [isLyricsCompact, setIsLyricsCompact] = useState(false);
   const [isSpeedControlOpen, setIsSpeedControlOpen] = useState(false);
@@ -755,7 +707,7 @@ const FullPlayerModal = ({
   }, [isQueueVisible, isLyricsView, lyricsTransition, lyricsRotation, queueTransition]);
 
   const handleToggleLyrics = useCallback(() => {
-    if (!hasLyrics) return;
+    if (!isLyricsView && !hasLyrics) return;
     setIsLyricsCompact(false);
     if (!isLyricsView) {
       setIsQueueVisible(false);
@@ -1259,6 +1211,7 @@ const FullPlayerModal = ({
           />
 
           <AppleLyricsView
+            lyricsResult={lyricsResult}
             player={player}
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
@@ -1508,7 +1461,7 @@ const FullPlayerModal = ({
                 playPreviousTrack={playPreviousTrack}
                 seekTo={seekTo}
                 isLyricsView={isLyricsView}
-                hasLyrics={hasLyrics}
+                hasLyrics={hasLyrics || isLyricsView}
                 isQueueVisible={isQueueVisible}
                 isSlidingShared={isSlidingShared}
                 sliderWidthShared={sliderWidthShared}

@@ -53,11 +53,12 @@ import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
 import {
-  checkAuth,
   restoreLocalSession,
   verifySession,
   logout,
   addAuthListener,
+  getAuthSessionGeneration,
+  getCachedUser,
   SERVER_URL,
   setServerUrl,
   isNetworkError,
@@ -65,13 +66,20 @@ import {
 import { syncStateManager } from './shared/sync/syncState';
 import {
   loadSettings,
-  getSavedLastTrack,
-  setSavedLastTrack,
   getSettings,
   addSettingsListener,
 } from './shared/storage/settings';
 import { getTrackId, areTrackIdsEqual } from './shared/domain/trackAdapter';
 import defaultAudioCache from './utils/audioCache';
+import {
+  getOfflineSession, isOfflineSessionCurrent, LAST_PLAYED_COLLECTION, readCollection, saveCollection,
+} from './offline';
+import { startLyricsSync } from './offline/lyrics';
+import { finishBackgroundDownloadRestore, startBackgroundDownloads } from './offline/downloads/runtime';
+import { startCollectionSync } from './offline/collections/runtime';
+import { prepareCachePromotion } from './offline/promoteCache';
+import { startOfflineArtwork } from './offline/artwork';
+import { createWaveJobOrder, startOfflineWave } from './offline/wave';
 import useSavedCreditsSync from './hooks/useSavedCreditsSync';
 
 const { width, height } = Dimensions.get('window');
@@ -137,6 +145,7 @@ function AppContent() {
     dislikeIds,
     dislikePending,
     startWave,
+    restoreSavedWave,
     dismissPlayer,
     seekTo,
     currentPlayback,
@@ -567,8 +576,12 @@ function AppContent() {
     setIsAuthModalVisible(false);
   }, []);
 
-  const handleLoginSuccess = useCallback((u) => {
-    setCurrentUser(u);
+  const handleLoginSuccess = useCallback(() => {
+    const user = getCachedUser();
+    if (user) {
+      setRestoreError(null);
+      setCurrentUser(user);
+    }
   }, []);
 
   const handleCloseManageModal = useCallback(() => {
@@ -672,8 +685,10 @@ function AppContent() {
     setIsAuthChecking(true);
     try {
       const res = await verifySession();
-      if (res.success && res.user) {
-        setCurrentUser(res.user);
+      if (res.aborted) {
+        setIsAuthChecking(false);
+      } else if (res.success && res.user) {
+        setCurrentUser(getCachedUser());
         setIsAuthChecking(false);
       } else if (res.status === 401) {
         setCurrentUser(null);
@@ -696,6 +711,13 @@ function AppContent() {
     }
   }, []);
 
+  useEffect(() => startLyricsSync(), []);
+
+  useEffect(() => startBackgroundDownloads({ orderJobs: createWaveJobOrder(), promoteCache: prepareCachePromotion }), []);
+  useEffect(() => startCollectionSync(), []);
+  useEffect(() => startOfflineWave(), []);
+  useEffect(() => startOfflineArtwork(), []);
+
   // Инициализация приложения: локальное открытие интерфейса и фоновая проверка сессии
   useEffect(() => {
     let isMounted = true;
@@ -704,20 +726,19 @@ function AppContent() {
       try {
         const s = await loadSettings();
         if (s?.serverUrl) {
-          setServerUrl(s.serverUrl);
-        }
-
-        const savedTrack = await getSavedLastTrack();
-        if (savedTrack && !currentTrack) {
-          setCurrentTrack(savedTrack);
+          setServerUrl(s.serverUrl, { bootstrap: true });
         }
 
         defaultAudioCache.init().catch((err) => {
           console.warn('[AudioCache init warning]', err);
         });
 
+        const generation = getAuthSessionGeneration();
         const session = await restoreLocalSession();
         if (!isMounted) return;
+        const sameGeneration = generation === getAuthSessionGeneration();
+        finishBackgroundDownloadRestore({ clearOrphans: !session.hasToken });
+        if (!sameGeneration) return;
 
         if (!session.hasToken) {
           setCurrentUser(null);
@@ -730,6 +751,16 @@ function AppContent() {
           setCurrentUser(session.user);
           setIsAuthChecking(false);
 
+          const offlineSession = getOfflineSession();
+          readCollection(offlineSession, LAST_PLAYED_COLLECTION).then(async (snapshot) => {
+            const track = snapshot?.tracks[0];
+            if (track && isMounted && isOfflineSessionCurrent(offlineSession)) {
+              if (await restoreSavedWave(offlineSession, track)) return;
+              if (isMounted && isOfflineSessionCurrent(offlineSession))
+                setCurrentTrack(current => current || track);
+            }
+          }).catch(() => {});
+
           // Проверяем сессию на сервере в фоне
           runBackgroundSessionCheck();
           return;
@@ -740,6 +771,7 @@ function AppContent() {
       } catch (e) {
         console.warn('[App init error]', e);
         if (isMounted) {
+          finishBackgroundDownloadRestore();
           setIsAuthChecking(false);
         }
       }
@@ -751,6 +783,11 @@ function AppContent() {
       if (isMounted) {
         setCurrentUser(user);
         if (!user) {
+          setTrackToAdd(null);
+          setTrackToManage(null);
+          setQueueNotice(null);
+          setRestoreError(null);
+          setIsAuthChecking(false);
           syncStateManager.reset();
         }
       }
@@ -760,13 +797,16 @@ function AppContent() {
       isMounted = false;
       unsubscribe();
     };
-  }, [runBackgroundSessionCheck, restoreProfileFromServer]);
+  }, [runBackgroundSessionCheck, restoreProfileFromServer, restoreSavedWave]);
 
+  const playbackOwner = getOfflineSession();
   useEffect(() => {
-    if (getTrackId(currentTrack) !== null) {
-      setSavedLastTrack(currentTrack);
+    if (getTrackId(currentTrack) !== null && playbackOwner?.owner.userId === String(currentUser?.id)) {
+      saveCollection(playbackOwner, LAST_PLAYED_COLLECTION, {
+        title: '', tracks: [currentTrack],
+      }).catch(() => {});
     }
-  }, [currentTrack]);
+  }, [currentTrack, currentUser?.id, playbackOwner]);
 
   if (isAuthChecking || restoreError) {
     return (
@@ -791,10 +831,7 @@ function AppContent() {
       <AppAuthGate
         isChecking={isAuthChecking}
         currentUser={currentUser}
-        onLoginSuccess={(u) => {
-          setRestoreError(null);
-          setCurrentUser(u);
-        }}
+        onLoginSuccess={handleLoginSuccess}
         accentColor={accentColor}
       />
     );

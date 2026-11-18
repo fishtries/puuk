@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Image, View, StyleSheet, PixelRatio } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { getOfflineCoverUri } from '../../offline/artwork';
 import {
   getCachedAuthHeaders,
-  getCachedAuthToken,
+  authFetch,
+  getAuthSessionGeneration,
   addAuthListener,
   SERVER_URL,
 } from '../api/api';
@@ -28,31 +30,26 @@ export const isArtistArtworkUri = (uri) => {
   return /\/api\/artists\/[^/?#]+\/artwork(?=[/?#]|$)/.test(trimmed);
 };
 
-/**
- * Проверяет наличие media-тикета (?mt=...) в URI.
- */
-export const hasMediaTicket = (uri) => {
-  if (typeof uri !== 'string') return false;
-  return /[?&]mt=[^&#]+/.test(uri);
-};
+// Historical cover URLs may contain a previous API host. Only recognized media
+// paths are rebased, and credentials are attached after checking the final origin.
+function parseCoverUri(rawUri) {
+  if (typeof rawUri !== 'string' || !rawUri.trim()) return null;
+  const value = rawUri.trim();
+  if (value.startsWith('//') || /[\\\s]/.test(value)) return null;
+  try {
+    const url = new URL(value, SERVER_URL);
+    if (!['https:', 'http:', 'file:'].includes(url.protocol) || url.username || url.password) return null;
+    if (url.protocol !== 'file:' && /^\/api\/(?:cover\/[^/]+|artists\/[^/]+\/artwork)$/.test(url.pathname)) {
+      const rebased = new URL(SERVER_URL);
+      rebased.pathname = url.pathname;
+      rebased.search = url.search;
+      return rebased;
+    }
+    return url;
+  } catch { return null; }
+}
 
-/**
- * Проверяет, является ли URI обложкой или artwork нашего сервера:
- * - Содержит путь эндпоинта /api/cover/
- * - Содержит путь эндпоинта /api/artists/{id}/artwork
- * - Начинается с относительного пути /
- * - Начинается с текущего SERVER_URL
- */
-export const isServerCoverUri = (uri) => {
-  if (typeof uri !== 'string') return false;
-  const trimmed = uri.trim();
-  return (
-    trimmed.includes('/api/cover/') ||
-    isArtistArtworkUri(trimmed) ||
-    trimmed.startsWith('/') ||
-    (Boolean(SERVER_URL) && trimmed.startsWith(SERVER_URL))
-  );
-};
+export const isServerCoverUri = (uri) => parseCoverUri(uri)?.origin === new URL(SERVER_URL).origin;
 
 export const isServerMediaUri = isServerCoverUri;
 
@@ -93,95 +90,45 @@ export function NeutralPlaceholder({
   );
 }
 
-/**
- * Нормализует URL обложки / artwork артиста:
- * - Перенаправляет путь /api/cover/ и /api/artists/ на актуальный SERVER_URL
- * - Для artwork артиста: НИКОГДА не генерирует query ?token= (auth только через Bearer / media-тикет)
- * - Для обычных обложек (/api/cover/): добавляет query-параметр ?token= для нативной загрузки
- * - Поддерживает инвалидацию кэша через query-параметр ?v=<version>
- */
-export const resolveCoverUri = (rawUri, token = null, versionOrOptions = null) => {
-  if (!rawUri || typeof rawUri !== 'string') return '';
-  const trimmed = rawUri.trim();
-  if (!trimmed) return '';
-
-  const isArtwork = isArtistArtworkUri(trimmed);
-  const apiCoverIndex = trimmed.indexOf('/api/cover/');
-  const apiArtistIndex = trimmed.indexOf('/api/artists/');
-
-  let targetUri = trimmed;
-  if (apiCoverIndex !== -1) {
-    const path = trimmed.slice(apiCoverIndex);
-    targetUri = `${SERVER_URL}${path}`;
-  } else if (apiArtistIndex !== -1) {
-    const path = trimmed.slice(apiArtistIndex);
-    targetUri = `${SERVER_URL}${path}`;
-  } else if (trimmed.startsWith('/')) {
-    targetUri = `${SERVER_URL}${trimmed}`;
+export const resolveCoverUri = (rawUri, optionsOrLegacyToken = null, legacyOptions = null) => {
+  // Older callers supplied an account token in the second argument.
+  const options = legacyOptions ?? (typeof optionsOrLegacyToken === 'string' ? null : optionsOrLegacyToken);
+  const url = parseCoverUri(rawUri);
+  if (!url) return '';
+  url.searchParams.delete('token');
+  const version = typeof options === 'object' ? options?.version ?? options?.artwork_version : options;
+  if (version != null && version !== '') url.searchParams.set('v', String(version));
+  if (url.pathname.startsWith('/api/cover/') && [128, 256, 512, 1024].includes(options?.size)) {
+    url.searchParams.set('size', String(options.size));
   }
-
-  // Handle version cache busting if provided
-  let version = null;
-  if (typeof versionOrOptions === 'number' || typeof versionOrOptions === 'string') {
-    version = versionOrOptions;
-  } else if (typeof versionOrOptions === 'object' && versionOrOptions !== null) {
-    version = versionOrOptions.version ?? versionOrOptions.artwork_version ?? null;
-  }
-
-  if (version !== null && version !== undefined && version !== '') {
-    const vParam = `v=${encodeURIComponent(String(version))}`;
-    if (/[?&]v=[^&#]*/.test(targetUri)) {
-      targetUri = targetUri.replace(/([?&])v=[^&#]*/, `$1${vParam}`);
-    } else {
-      const separator = targetUri.includes('?') ? '&' : '?';
-      targetUri = `${targetUri}${separator}${vParam}`;
-    }
-  }
-
-  // Preview variants retain the same authorization and artwork revision.
-  const size = typeof versionOrOptions === 'object' ? versionOrOptions?.size : null;
-  if (apiCoverIndex !== -1 && [128, 256, 512, 1024].includes(size)) {
-    const parsed = new URL(targetUri);
-    parsed.searchParams.set('size', String(size));
-    targetUri = parsed.toString();
-  }
-
-  // Для artwork артиста: auth только через Authorization: Bearer заголовок
-  // или предзаданный media-тикет (?mt=). НИКОГДА не генерируем и не оставляем ?token=.
-  if (isArtwork) {
-    targetUri = targetUri
-      .replace(/([?&])token=[^&#]*(&|$)/g, (match, prefix, suffix) =>
-        suffix === '&' ? prefix : ''
-      )
-      .replace(/[?&]$/, '');
-    return targetUri;
-  }
-
-  // Для трековых/альбомных обложек: добавляем token при его наличии
-  if (isServerCoverUri(targetUri) && token && !targetUri.includes('token=')) {
-    const separator = targetUri.includes('?') ? '&' : '?';
-    return `${targetUri}${separator}token=${encodeURIComponent(token)}`;
-  }
-
-  return targetUri;
+  return url.toString();
 };
 
-/**
- * Выполняет фоновую предзагрузку обложки / artwork в нативный кэш изображений.
- */
-export const prefetchCover = (rawUri, token = null, versionOrOptions = null) => {
-  if (!rawUri || typeof rawUri !== 'string') return;
-  try {
-    const isArtwork = isArtistArtworkUri(rawUri);
-    const resolved = resolveCoverUri(
-      rawUri,
-      isArtwork ? null : token || getCachedAuthToken(),
-      versionOrOptions
-    );
-    if (resolved && typeof Image?.prefetch === 'function') {
-      Image.prefetch(resolved).catch(() => {});
-    }
-  } catch {}
+export async function resolveLockScreenCover(rawUri) {
+  const uri = resolveCoverUri(rawUri);
+  if (!uri || !isServerCoverUri(uri)) return uri || undefined;
+  const url = new URL(uri);
+  if (!/^\/api\/cover\/[a-f0-9-]+$/i.test(url.pathname)) return undefined;
+  const generation = getAuthSessionGeneration();
+  const response = await authFetch(url.pathname + '/ticket', {
+    method: 'POST', timeout: 2000, retry: 0, redirect: 'error', cache: 'no-store',
+  });
+  if (!response.ok || response.redirected) return undefined;
+  const { ticket } = await response.json();
+  if (generation !== getAuthSessionGeneration() || !ticket || typeof ticket !== 'string') return undefined;
+  url.searchParams.set('ct', ticket);
+  return url.toString();
+}
+
+export const prefetchCover = (rawUri, optionsOrLegacyToken = null, legacyOptions = null) => {
+  const uri = resolveCoverUri(rawUri, optionsOrLegacyToken, legacyOptions);
+  if (!uri) return;
+  if (isServerCoverUri(uri)) {
+    const headers = getCachedAuthHeaders();
+    if (headers) Image.getSizeWithHeaders(uri, headers)?.catch(() => {});
+  } else {
+    Image.prefetch(uri)?.catch(() => {});
+  }
 };
 
 function CoverImage({
@@ -204,7 +151,6 @@ function CoverImage({
 }) {
   const [hasError, setHasError] = useState(false);
   const [authHeaders, setAuthHeaders] = useState(() => getCachedAuthHeaders());
-  const [authToken, setAuthToken] = useState(() => getCachedAuthToken());
 
   useEffect(() => {
     // Заголовки читаются только из памяти; обновляем их при изменении сессии.
@@ -212,7 +158,6 @@ function CoverImage({
       typeof addAuthListener === 'function'
         ? addAuthListener(() => {
             setAuthHeaders(getCachedAuthHeaders());
-            setAuthToken(getCachedAuthToken());
           })
         : () => {};
 
@@ -301,23 +246,20 @@ function CoverImage({
     return renderPlaceholder();
   }
 
+  const localCover = rawUri && !isArtwork && (hasError || !authHeaders) ? getOfflineCoverUri(rawUri) : null;
   let imageSource = defaultSource;
   if (typeof source === 'number') {
     // Локальный ресурс require(...)
     imageSource = source;
+  } else if (localCover) {
+    imageSource = { uri: localCover };
   } else if (rawUri && !hasError) {
     const isServer = isServerCoverUri(rawUri);
     if (isServer) {
-      const hasInlineAuth =
-        hasMediaTicket(rawUri) ||
-        (!isArtwork && /[?&]token=[^&#]+/.test(rawUri));
-
-      if (authHeaders || hasInlineAuth) {
-        const resolvedUri = resolveCoverUri(
-          rawUri,
-          isArtwork ? null : authToken,
-          { version: effectiveVersion, size: coverPreviewSize(style, PixelRatio.get()) }
-        );
+      if (authHeaders) {
+        const resolvedUri = resolveCoverUri(rawUri, {
+          version: effectiveVersion, size: coverPreviewSize(style, PixelRatio.get()),
+        });
         imageSource = {
           uri: resolvedUri,
           ...(authHeaders ? { headers: authHeaders } : {}),
@@ -332,7 +274,8 @@ function CoverImage({
       }
     } else {
       // Внешний URL (iTunes, Deezer и т.д.) — не шлём наш Bearer наружу
-      imageSource = { uri: rawUri };
+      const uri = resolveCoverUri(rawUri);
+      if (uri) imageSource = { uri };
     }
   }
 

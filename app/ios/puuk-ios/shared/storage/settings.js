@@ -1,3 +1,4 @@
+import { DEFAULT_OFFLINE_BUDGET_BYTES, DEFAULT_WAVE_RESERVE_MINUTES, normalizeOfflineSetting } from '../../offline/policy';
 import * as SecureStore from 'expo-secure-store';
 import { DeviceEventEmitter } from 'react-native';
 import { DEFAULT_SERVER_URL } from '../api/api';
@@ -12,6 +13,9 @@ export const DEFAULT_SETTINGS = {
   hapticsEnabled: true,
   soundCheck: true,
   crossfade: false,
+  allowCellularDownloads: true,
+  offlineBudgetBytes: DEFAULT_OFFLINE_BUDGET_BYTES,
+  waveReserveMinutes: DEFAULT_WAVE_RESERVE_MINUTES,
   serverUrl: DEFAULT_SERVER_URL,
 };
 
@@ -125,6 +129,8 @@ export const loadSettings = async () => {
     if (raw) {
       const parsed = JSON.parse(raw);
       cachedSettings = { ...DEFAULT_SETTINGS, ...parsed };
+      for (const key of ['offlineBudgetBytes', 'waveReserveMinutes'])
+        cachedSettings[key] = normalizeOfflineSetting(key, cachedSettings[key]);
     }
   } catch (e) {
     console.warn('[Settings load error]', e);
@@ -133,6 +139,7 @@ export const loadSettings = async () => {
 };
 
 export const updateSetting = async (key, value) => {
+  value = normalizeOfflineSetting(key, value);
   cachedSettings[key] = value;
   try {
     await SecureStore.setItemAsync(SETTINGS_KEY, JSON.stringify(cachedSettings), SECURE_STORE_OPTIONS);
