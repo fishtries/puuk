@@ -62,7 +62,7 @@ jobs:
         run: node scripts/patch-expo-symbols.js
 
       - name: Prebuild iOS project
-        run: npx expo prebuild --platform ios --no-install --non-interactive
+        run: CI=1 npx expo prebuild --platform ios --no-install
 
       - name: Install CocoaPods
         run: |
