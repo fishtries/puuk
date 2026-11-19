@@ -108,7 +108,7 @@ describe('actual authFetch transport/session integration',()=>{
  });
 });
 
-describe('existing coordinator owns CDN recovery, not the resolver or engine',()=>{
+describe('coordinator preserves the installed CDN source',()=>{
  let c,p,attempt,revision,position,intent,logicalStarts;
  const { PlaybackCoordinator }=require('../playbackCoordinator');
  const flush=async()=>{for(let i=0;i<60;i++)await Promise.resolve();};
@@ -118,7 +118,7 @@ describe('existing coordinator owns CDN recovery, not the resolver or engine',()
   jest.useFakeTimers();attempt=null;revision=0;position=0;intent='pause';logicalStarts=0;
   fetcher.mockImplementation(async(_,o)=>response(o.body.delivery==='direct'?direct({url:`/api/stream/${o.body.track_id}?mt=a.b.c`}):sourceTicket(o.body.track_id)));
   resolver.clock=()=>performance.now();
-  c=new PlaybackCoordinator({resolveMedia:(t,o)=>resolver.resolve(t,o),cache:{getCachedUri:()=>null},scheduler:{addListener:()=>()=>{},setPlaybackPressure:jest.fn(),cancelAll:jest.fn(),syncQueue:jest.fn()},recoveryDelayMs:800,clock:()=>performance.now(),bypassCache:true});
+  c=new PlaybackCoordinator({resolveMedia:(t,o)=>resolver.resolve(t,o),cache:{getCachedUri:()=>null},scheduler:{addListener:()=>()=>{},setPlaybackPressure:jest.fn(),cancelAll:jest.fn(),syncQueue:jest.fn()},clock:()=>performance.now(),bypassCache:true});
   p={puukSourceIdentityVersion:1,puukExpectedIntentVersion:1,
    get currentStatus(){return {sourceIdentityVersion:1,sourceAttemptId:attempt,nativeIntent:intent,intentRevision:revision};},
    replaceWithExpectedIntent:jest.fn((source,id,rev,old,expectedIntent)=>p.replaceWithAttempt(source,id,rev,old,expectedIntent)),
@@ -129,23 +129,20 @@ describe('existing coordinator owns CDN recovery, not the resolver or engine',()
  });
  afterEach(()=>c.destroy());
  async function start(id=ID){await c.play(p,{id,title:'Fixture',duration:100,normalization_gain_db:-3},{isUserSelection:true,headers:{Authorization:'CANARY',Cookie:'CANARY'}});position=12;emit('progress');}
- async function recover(){emit('error',{error:{status:503}});jest.advanceTimersByTime(800);await flush();}
- test('exactly one refresh and one authorized direct fallback preserve position, logical listen, queue and gain',async()=>{
-  await start();c.upNextQueue=[{id:B}];const gain=p.volume;
-  expect(p.replaceWithAttempt.mock.calls[0][0].headers).toEqual({});await recover();expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(c.current.positionSeconds).toBe(12);expect(c.currentTrackId).toBe(ID);expect(c.upNextQueue).toEqual([{id:B}]);expect(p.volume).toBe(gain);
-  await recover();expect(fetcher).toHaveBeenCalledTimes(3);expect(fetcher.mock.calls[2][1].body.delivery).toBe('direct');
-  expect(p.replaceWithAttempt.mock.calls[2][0]).toMatchObject({uri:`https://api.test/api/stream/${ID}?mt=a.b.c`,headers:{}});
-  emit('error',{error:{status:503}});jest.advanceTimersByTime(30000);await flush();expect(fetcher).toHaveBeenCalledTimes(3);expect(p.replaceWithAttempt).toHaveBeenCalledTimes(3);expect(c.current.status).toBe('error');expect(logicalStarts).toBe(1);
- });
- test.each([401,403,404,410])('refresh API %i cannot bypass through direct',async status=>{
-  await start();fetcher.mockResolvedValue(response({detail:{code:'denied'}},status));await recover();expect(fetcher).toHaveBeenCalledTimes(2);expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);expect(c.current.status).toBe('error');
- });
- test('direct-selected source gets one refresh and no redundant direct fallback',async()=>{
-  fetcher.mockImplementation(async(_,o)=>response(direct({url:`/api/stream/${o.body.track_id}?mt=a.b.c`})));await start();await recover();emit('error',{error:{status:503}});jest.advanceTimersByTime(10000);await flush();expect(fetcher).toHaveBeenCalledTimes(2);expect(c.current.status).toBe('error');
- });
- test('pause while refresh awaits wins; late permission cannot replace or resume',async()=>{
-  await start();const gate=deferred();fetcher.mockImplementationOnce(()=>gate.promise);emit('error',{error:{status:503}});jest.advanceTimersByTime(800);await flush();await c.setIntent(p,{type:'pause'});gate.resolve(response(ticket()));await flush();expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);expect(c.current.intent).toBe('pause');expect(c.current.status).toBe('paused');
+ test.each([503, 408, 401, 403, 404, 410])('native failure %i holds position without refreshing its ticket or seeking', async status => {
+  await start();
+  c.upNextQueue = [{ id: B }];
+  const originalAttempt = attempt;
+  emit('error', { error: { status } });
+  await jest.advanceTimersByTimeAsync(180000);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
+  expect(p.replaceWithAttempt.mock.calls[0][0].headers).toEqual({});
+  expect(p.replace).not.toHaveBeenCalled();
+  expect(p.seekForAttempt).not.toHaveBeenCalled();
+  expect(c.current).toMatchObject({ status: 'error', positionSeconds: 12, sourceAttemptId: originalAttempt, error: { holdTrack: true } });
+  expect(c.upNextQueue).toEqual([{ id: B }]);
+  expect(logicalStarts).toBe(1);
  });
  test('A to B with late A ticket never replaces B, its descriptor or its attempt',async()=>{
   const gate=deferred();fetcher.mockImplementationOnce(()=>gate.promise);const a=c.play(p,{id:ID},{isUserSelection:true});a.catch(()=>{});await flush();await c.play(p,{id:B},{isUserSelection:true});const bAttempt=attempt;gate.resolve(response(ticket()));await a;await flush();expect(c.currentTrackId).toBe(B);expect(c._mediaDescriptor.trackId).toBe(B);expect(attempt).toBe(bAttempt);expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
@@ -153,16 +150,25 @@ describe('existing coordinator owns CDN recovery, not the resolver or engine',()
  test('logout cancels pending tickets, unloads source and rejects old native events',async()=>{
   await start();const old=attempt;c.cancelCurrent('logout',p);expect(p.replace).toHaveBeenCalledWith(null);expect(p.setActiveForLockScreen).toHaveBeenCalledWith(false);expect(c.currentTrackId).toBeNull();expect(c.handleNativeStatus(p,{sourceIdentityVersion:1,sourceAttemptId:old,nativeEvent:'progress'}).accepted).toBe(false);
  });
- test('long pause expiry renews before resume and retains target position',async()=>{
-  await start();await c.setIntent(p,{type:'pause'});c._mediaDescriptor={...c._mediaDescriptor,usableUntil:0};const retry=c.setIntent(p,{type:'play'});await flush();await retry;expect(fetcher).toHaveBeenCalledTimes(2);expect(c.current.positionSeconds).toBe(12);expect(c.currentTrackId).toBe(ID);
+ test('expired ticket does not replace the already installed item on resume', async () => {
+  await start();
+  await c.setIntent(p, { type: 'pause' });
+  c._mediaDescriptor = { ...c._mediaDescriptor, usableUntil: 0 };
+  await c.setIntent(p, { type: 'play' });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
+  expect(p.seekForAttempt).not.toHaveBeenCalled();
+  expect(c.current.positionSeconds).toBe(12);
  });
- test('foreground invalidates permission reuse but does not replace healthy playback on a timer',async()=>{
-  await start();c.foreground();expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);expect(resolver.cache.size).toBe(1); // injected resolver is isolated from global foreground cache
-  const retry=c.setIntent(p,{type:'seek',positionSeconds:40});await flush();await retry;expect(fetcher).toHaveBeenCalledTimes(2);expect(c.current.positionSeconds).toBe(40);
- });
- test('overall 30s episode includes ticket and source phases and cannot be renewed by repeated errors',async()=>{
-  c.startupTimeoutMs=7000;await start();c._episodeDeadline=performance.now()+1000;const gate=deferred();fetcher.mockImplementationOnce(()=>gate.promise);
-  emit('error',{error:{status:503}});jest.advanceTimersByTime(800);await flush();jest.advanceTimersByTime(200);await flush();gate.resolve(response(ticket()));await flush();expect(c.clock()).toBeLessThanOrEqual(30000);expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);expect(c.current.status).toBe('error');
+ test('foreground leaves the stream in place and explicit seek targets the same source', async () => {
+  await start();
+  const originalAttempt = attempt;
+  c.foreground();
+  await c.setIntent(p, { type: 'seek', positionSeconds: 40 });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
+  expect(p.seekForAttempt).toHaveBeenCalledWith(originalAttempt, 40, null);
+  expect(c.current.positionSeconds).toBe(40);
  });
 });
 test('a monotonic reset during request cannot extend or publish the capability',async()=>{

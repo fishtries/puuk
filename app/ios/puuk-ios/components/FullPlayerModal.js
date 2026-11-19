@@ -1452,7 +1452,13 @@ const FullPlayerModal = ({
               <PlayerControls
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}
-                isPlaying={isPlaying}
+                isPlaying={
+                  isPlaying ||
+                  (currentPlayback?.intent === 'play' &&
+                    ['starting', 'playing', 'stalled', 'recovering'].includes(
+                      currentPlayback.status,
+                    ))
+                }
                 isLoading={isLoading}
                 currentTime={Math.floor(currentTime || 0)}
                 duration={duration}

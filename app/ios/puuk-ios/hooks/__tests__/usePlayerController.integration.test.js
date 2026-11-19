@@ -34,6 +34,7 @@ jest.mock('../../offline/outbox/runtime', () => ({
 jest.mock('../../offline/wave', () => ({
   readWaveQueue: jest.fn(),
   selectLocalWaveTracks: jest.fn(),
+  waveTrackDuration: (track) => track.duration || 0,
   saveWaveQueue: async () => true,
   setWavePlaybackMode: () => {},
 }));
@@ -285,6 +286,34 @@ describe('usePlayerController with accepted real coordinator', () => {
     jest.useRealTimers();
   });
 
+  test('Wave keeps the interrupted stream selected until the listener skips', async () => {
+    const { readWaveQueue } = require('../../offline/wave');
+    readWaveQueue.mockResolvedValueOnce({
+      current: track('A'), future: [track('B')], history: [],
+    });
+    await act(async () => { await controller.startWave(); await flush(); });
+    await progress(3);
+    await advance(180000);
+    expect(controller.currentPlayback).toMatchObject({
+      status: 'stalled', positionSeconds: 3, error: null,
+    });
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.seekForAttempt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mockPlayer.emit({ nativeEvent: 'error', error: 'Connection lost' });
+      await flush();
+    });
+    expect(controller.currentPlayback).toMatchObject({
+      status: 'error', positionSeconds: 3,
+    });
+    expect(controller.currentTrack.id).toBe('A');
+    expect(controller.currentTime).toBe(3);
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    await act(async () => { await controller.fetchNextTrack(); await flush(); });
+    expect(controller.currentTrack.id).toBe('B');
+  });
+
   test('terminal Wave fallback keeps the confirmed start and closes the failed listening episode without an outcome', async () => {
     const { readWaveQueue, selectLocalWaveTracks } = require('../../offline/wave');
     readWaveQueue.mockResolvedValueOnce({ current: track('A'), future: [], history: [] });
@@ -360,7 +389,7 @@ describe('usePlayerController with accepted real coordinator', () => {
   });
 
   test.each(['before command resolves', 'after command resolves'])(
-    'one-event native error %s survives React snapshot overwrite with recovery or safe terminal outcome',
+    'native error %s remains visible without reopening the stream',
     async (when) => {
       if (when === 'before command resolves')
         mockPlayer.onInstall = () =>
@@ -372,35 +401,12 @@ describe('usePlayerController with accepted real coordinator', () => {
           mockPlayer.emit({ nativeEvent: 'error', error: 'broken' });
           mockPlayer.emit({ nativeEvent: 'snapshot', error: undefined });
         });
-      expect(controller.currentPlayback.status).toBe('recovering');
-      const initialPlayCalls = mockPlayer.playForAttempt.mock.calls.length;
-      await advance(800);
-      expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);
-      if (when === 'before command resolves') {
-        expect(controller.currentPlayback.status).toBe('error');
-        expect(controller.currentPlayback.error.kind).toBe('playback');
-        expect(mockPlayer.playForAttempt).not.toHaveBeenCalled();
-        // Explicit Retry prepares a healthy paused source; explicit Play then
-        // grants fresh native intent without weakening an automatic guard.
-        let pending;
-        await act(async () => {
-          pending = controller.retryCurrent();
-          await flush();
-        });
-        await retryReady();
-        await act(async () => {
-          await pending;
-        });
-        expect(controller.currentPlayback.status).toBe('paused');
-        await act(async () => controller.togglePlayPause());
-      } else {
-        await retryReady();
-        expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(
-          initialPlayCalls + 1,
-        );
-      }
-      expect(mockPlayer.playForAttempt.mock.results.at(-1).value).toBe(true);
-      expect(mockPlayer.intent).toBe('play');
+      expect(controller.currentPlayback.status).toBe('error');
+      const initialPlayCalls = when === 'before command resolves' ? 0 : 1;
+      await advance(180000);
+      expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+      expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(initialPlayCalls);
+      expect(mockPlayer.seekForAttempt).not.toHaveBeenCalled();
       expect(recordPlayStart).not.toHaveBeenCalled();
     },
   );
@@ -651,13 +657,13 @@ describe('usePlayerController with accepted real coordinator', () => {
     }
   });
 
-  test('pause during scheduled recovery and same-turn double toggle retain latest intent', async () => {
+  test('pause during buffering and same-turn double toggle retain latest intent', async () => {
     await select();
-    await act(async () => {
-      mockPlayer.emit({ nativeEvent: 'error', error: 'broken' });
-      controller.togglePlayPause();
-    });
-    await advance(1000);
+    await progress(1);
+    await advance(8000);
+    expect(controller.currentPlayback.status).toBe('stalled');
+    await act(async () => controller.togglePlayPause());
+    await advance(180000);
     expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
     expect(mockPlayer.intent).toBe('pause');
     await act(async () => {
@@ -787,10 +793,11 @@ describe('usePlayerController with accepted real coordinator', () => {
     },
   );
 
-  test('native pause cancels recovery and stale play/progress cannot undo it', async () => {
+  test('native pause during buffering wins over stale play/progress', async () => {
     await select();
+    await advance(180000);
+    expect(controller.currentPlayback.status).toBe('starting');
     await act(async () => {
-      mockPlayer.emit({ nativeEvent: 'error', error: 'broken' });
       const queued = mockPlayer.event({
         nativeEvent: 'progress',
         currentTime: 1,
@@ -1024,11 +1031,10 @@ describe('usePlayerController with accepted real coordinator', () => {
     await select();
     expect(controller.currentPlayback.status).toBe('starting');
     await advance(0);
-    expect(controller.currentPlayback.status).toBe('recovering');
-    await advance(800);
-    await retryReady();
-    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);
-    expect(mockPlayer.playForAttempt.mock.results.at(-1).value).toBe(true);
+    expect(controller.currentPlayback.status).toBe('error');
+    await advance(180000);
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.seekForAttempt).not.toHaveBeenCalled();
     expect(recordPlayStart).not.toHaveBeenCalled();
   });
 
@@ -1054,7 +1060,7 @@ describe('usePlayerController with accepted real coordinator', () => {
     expect(authFetch).not.toHaveBeenCalled();
   });
 
-  test('immutable installation error delivered FIFO after play admission drives real bounded recovery', async () => {
+  test('immutable installation error delivered FIFO remains terminal after play admission', async () => {
     const queued = [];
     const deliver = mockPlayer.emit;
     mockPlayer.emit = (patch = {}, name = 'playbackStatusUpdate') => {
@@ -1086,20 +1092,12 @@ describe('usePlayerController with accepted real coordinator', () => {
       for (const [event, name] of queued) deliver(event, name);
       await flush();
     });
-    expect(controller.currentPlayback.status).toBe('recovering');
-    await advance(800);
+    expect(controller.currentPlayback.status).toBe('error');
+    await advance(180000);
+    expect(mockPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
     expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(1);
-    await retryReady();
-    expect(mockPlayer.seekForAttempt).toHaveBeenLastCalledWith(
-      mockPlayer.attempt,
-      0,
-      expect.any(Number),
-    );
-    expect(mockPlayer.playForAttempt).toHaveBeenCalledTimes(2);
+    expect(mockPlayer.seekForAttempt).not.toHaveBeenCalled();
     expect(recordPlayStart).not.toHaveBeenCalled();
     expect(recordStarted).not.toHaveBeenCalled();
-    await progress(0.1);
-    expect(recordStarted).toHaveBeenCalledTimes(1);
-    expect(recordPlayStart).toHaveBeenCalledTimes(1);
   });
 });

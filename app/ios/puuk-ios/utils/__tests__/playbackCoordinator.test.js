@@ -1222,7 +1222,7 @@ describe('PlaybackCoordinator', () => {
     });
   });
 
-  describe('J07 — Coordinator: confirmed playback start, recovery and native source identity', () => {
+  describe('Coordinator: confirmed playback start and native source identity', () => {
     function createIdentifiedPlayer(overrides = {}) {
       return {
         puukSourceIdentityVersion: 1,
@@ -1237,26 +1237,6 @@ describe('PlaybackCoordinator', () => {
         setActiveForLockScreen: jest.fn(),
         ...overrides,
       };
-    }
-
-    async function completeAutomaticRestore(coord, player, attempt) {
-      const event = {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: attempt,
-        intentRevision: 1,
-        nativeIntent: 'play',
-        isLoaded: true,
-        currentTime: 0,
-      };
-      coord.handleNativeStatus(player, { ...event, nativeEvent: 'loaded' });
-      for (let i = 0; i < 20; i++) await flushRemote();
-      coord.handleNativeStatus(player, {
-        ...event,
-        nativeEvent: 'seek',
-        seekOrigin: 'recovery',
-        seekCompleted: true,
-      });
-      for (let i = 0; i < 20; i++) await flushRemote();
     }
 
     test('fails closed on legacy binary missing native identity capability', async () => {
@@ -1348,7 +1328,7 @@ describe('PlaybackCoordinator', () => {
       expect(dupProg.didStart).toBe(false);
     });
 
-    test('sustainable progress proof ends startup episode and releases background pressure', async () => {
+    test('sustainable progress releases background playback pressure', async () => {
       const identifiedPlayer = createIdentifiedPlayer();
       let fakeTime = 1000;
       const coordWithClock = new PlaybackCoordinator({
@@ -1394,60 +1374,7 @@ describe('PlaybackCoordinator', () => {
       coordWithClock.destroy();
     });
 
-    test('native asynchronous error after successful play triggers single recovery after 800ms', async () => {
-      const identifiedPlayer = createIdentifiedPlayer();
-      const track = { id: 301, title: 'Corrupt Stream' };
-
-      const res = await coordinator.play(identifiedPlayer, track);
-      expect(res.confirmation).toBe('pending');
-
-      // Asynchronous error event arrives
-      const errorEvent = {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Transport stream corrupted'),
-      };
-      coordinator.handleNativeStatus(identifiedPlayer, errorEvent);
-
-      expect(coordinator.getState().current.status).toBe('recovering');
-      expect(coordinator.getState().current.recoveryCount).toBe(1);
-
-      // Before 800ms: recovery has not replaced source yet
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
-      jest.advanceTimersByTime(799);
-      await flushRemote();
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
-
-      // At 800ms: recovery runs with fresh attempt ID
-      jest.advanceTimersByTime(1);
-      await flushRemote();
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(2);
-      const newAttemptId = identifiedPlayer.replaceWithAttempt.mock.calls[1][1];
-      expect(newAttemptId).not.toBe(res.sourceAttemptId);
-      expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(1);
-      await completeAutomaticRestore(
-        coordinator,
-        identifiedPlayer,
-        newAttemptId,
-      );
-      expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(2);
-
-      // Second error event on the recovered attempt is terminal in this episode
-      coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: newAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Second failure'),
-      });
-
-      expect(coordinator.getState().current.status).toBe('error');
-      expect(coordinator.getState().networkStatus).toBe('error');
-    });
-
-    test('local cache error invalidates exact used URI and falls back to remote stream', async () => {
+    test('native local cache error invalidates the exact used URI', async () => {
       mockCache.cached.set('401', 'file:///mock/bad_track.mp3');
       mockCache.invalidate = jest.fn(() => Promise.resolve(true));
 
@@ -1470,87 +1397,10 @@ describe('PlaybackCoordinator', () => {
         '401',
         'file:///mock/bad_track.mp3',
       );
-      expect(coordinator.getState().current.status).toBe('recovering');
-
-      // Advance 800ms recovery delay
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      // Recovery should fall back to remote stream
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledWith(
-        expect.objectContaining({ uri: 'https://puuk.app/api/stream/401' }),
-        expect.any(String),
-        1,
-        res.sourceAttemptId,
-      );
-    });
-
-    test('startup watchdog (15s) and stall watchdog (10s) respect total 30s episode budget', async () => {
-      let fakeTime = 0;
-      const coordWithClock = new PlaybackCoordinator({
-      resolveMedia: mockResolveMedia,
-        cache: mockCache,
-        scheduler: mockScheduler,
-        clock: () => fakeTime,
-        startupTimeoutMs: 15000,
-        stallTimeoutMs: 10000,
-        episodeTotalMs: 30000,
-        recoveryDelayMs: 800,
-      });
-
-      const identifiedPlayer = createIdentifiedPlayer();
-      const res = await coordWithClock.play(identifiedPlayer, { id: 501 });
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'snapshot',
-        nativeIntent: 'play',
-        intentRevision: 1,
-      });
-
-      // Advance 15,000ms without progress: startup watchdog fires
-      fakeTime = 15000;
-      jest.advanceTimersByTime(15000);
-      await flushRemote();
-
-      expect(coordWithClock.getState().current.status).toBe('recovering');
-
-      // Advance 800ms recovery delay
-      fakeTime = 15800;
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      const recoveredAttempt =
-        coordWithClock.getState().current.sourceAttemptId;
-      expect(recoveredAttempt).not.toBe(res.sourceAttemptId);
-      await completeAutomaticRestore(
-        coordWithClock,
-        identifiedPlayer,
-        recoveredAttempt,
-      );
-
-      // Advancing progress arrives on recovered attempt
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: recoveredAttempt,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 2.0,
-      });
-      expect(coordWithClock.getState().current.status).toBe('playing');
-
-      // Stall for 10,000ms
-      fakeTime += 10000;
-      jest.advanceTimersByTime(10000);
-      await flushRemote();
-
-      // Since recoveryCount is already 1, stall watchdog terminates with timeout error
-      expect(coordWithClock.getState().current.status).toBe('error');
-      expect(coordWithClock.getState().current.error.kind).toBe('timeout');
-
-      coordWithClock.destroy();
+      expect(coordinator.getState().current.error.kind).toBe('transient');
+      await jest.advanceTimersByTimeAsync(180000);
+      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
+      expect(identifiedPlayer.seekForAttempt).not.toHaveBeenCalled();
     });
 
     test('A/B/A track switching rejects stale events from prior attempts and old revisions', async () => {
@@ -1620,26 +1470,18 @@ describe('PlaybackCoordinator', () => {
       expect(staleRevision.accepted).toBe(false);
     });
 
-    test('concurrent retryCurrent calls share a single promise and start fresh episode', async () => {
+    test('concurrent retryCurrent calls share a single promise after native failure', async () => {
       const identifiedPlayer = createIdentifiedPlayer();
-      await coordinator.play(identifiedPlayer, { id: 601 });
-
-      // Trigger error to set error state
+      const selection = await coordinator.play(identifiedPlayer, { id: 601 });
+      identifiedPlayer.currentStatus.sourceAttemptId = selection.sourceAttemptId;
       coordinator.handleNativeStatus(identifiedPlayer, {
         sourceIdentityVersion: 1,
-        sourceAttemptId: coordinator.getState().current.sourceAttemptId,
+        sourceAttemptId: selection.sourceAttemptId,
         nativeEvent: 'error',
         error: new Error('Test error'),
       });
-      jest.advanceTimersByTime(800);
-      await flushRemote(); // let auto-recovery fire
-      coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: coordinator.getState().current.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Terminal error'),
-      });
       expect(coordinator.getState().current.status).toBe('error');
+      expect(identifiedPlayer.replace).not.toHaveBeenCalled();
 
       // Double-tap retry
       const p1 = coordinator.retryCurrent(identifiedPlayer);
@@ -1672,31 +1514,6 @@ describe('PlaybackCoordinator', () => {
       expect(retryRes.reused).toBeFalsy();
       expect(coordinator.getState().current.status).toBe('starting');
       expect(coordinator.getState().current.error).toBeNull();
-    });
-
-    test('user pause during loading or recovery cancels recovery and prevents autoplay', async () => {
-      const identifiedPlayer = createIdentifiedPlayer();
-      const res = await coordinator.play(identifiedPlayer, { id: 701 });
-
-      // Trigger error to start recovery timer
-      coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Recoverable error'),
-      });
-      expect(coordinator.getState().current.status).toBe('recovering');
-
-      // User pauses while recovery is waiting in 800ms backoff
-      await coordinator.setIntent(identifiedPlayer, { type: 'pause' });
-      expect(coordinator.getState().current.intent).toBe('pause');
-      expect(coordinator.getState().current.status).toBe('paused');
-
-      // Advance timers: recovery timer was cancelled, player.playForAttempt is NOT called
-      jest.advanceTimersByTime(1000);
-      await flushRemote();
-      expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(1); // Only initial play call
-      expect(coordinator.getState().current.status).toBe('paused');
     });
 
     test('next-ready scheduler event cannot clear current track error', async () => {
@@ -1843,164 +1660,6 @@ describe('PlaybackCoordinator', () => {
       expect(coordinator.getState().current.status).toBe('starting');
     });
 
-    test('root repro 2: native pause during deferred headers in recovery cancels recovery with zero replacement and no autoplay', async () => {
-      const identifiedPlayer = createIdentifiedPlayer();
-      let callCount = 0;
-      let resolveHeaders;
-      const deferredHeaders = new Promise((resolve) => {
-        resolveHeaders = resolve;
-      });
-
-      const res = await coordinator.play(
-        identifiedPlayer,
-        { id: 220 },
-        {
-          getHeadersAsync: () => {
-            callCount++;
-            if (callCount === 1)
-              return Promise.resolve({ Authorization: 'Bearer initial' });
-            return deferredHeaders;
-          },
-        },
-      );
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
-
-      coordinator.handleNativeStatus(identifiedPlayer, { sourceIdentityVersion: 1, sourceAttemptId: res.sourceAttemptId, nativeEvent: 'intent', nativeIntent: 'play', intentRevision: 1 });
-      // Native error triggers recovery
-      coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Transport stream failed'),
-      });
-      expect(coordinator.getState().current.status).toBe('recovering');
-
-      // Advance 800ms backoff: recovery begins, but getHeadersAsync is deferred
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1); // not replaced yet
-
-      // Old installed native attempt receives pause while headers are pending
-      const pauseRes = coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId, // Old attempt is STILL accepted!
-        intentRevision: 2,
-        nativeEvent: 'intent',
-        nativeIntent: 'pause',
-      });
-      expect(pauseRes.accepted).toBe(true);
-      expect(coordinator.getState().current.intent).toBe('pause');
-      expect(coordinator.getState().current.status).toBe('paused');
-
-      // Now headers finish resolving
-      resolveHeaders({ Authorization: 'Bearer refreshed_token' });
-      await flushRemote();
-      await flushRemote();
-
-      // Zero additional replacement commands and zero autoplay!
-      expect(identifiedPlayer.replaceWithAttempt).toHaveBeenCalledTimes(1);
-      expect(identifiedPlayer.playForAttempt).toHaveBeenCalledTimes(1); // Only initial play call
-      expect(coordinator.getState().current.status).toBe('paused');
-    });
-
-    test('root repro 3: recovery seek rejection or completion timeout asserts zero play commands; loaded wait is required', async () => {
-      // Scenario A: seekForAttempt returns false
-      const playerSeekReject = createIdentifiedPlayer({
-        seekForAttempt: jest.fn(() => false),
-      });
-
-      const resA = await coordinator.play(playerSeekReject, { id: 231 });
-      coordinator.handleNativeStatus(playerSeekReject, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: resA.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 15.0,
-      });
-
-      // Error triggers recovery
-      coordinator.handleNativeStatus(playerSeekReject, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: resA.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Stall in middle of track'),
-      });
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      // Recovery replaces stream; wait for loaded arrives
-      expect(playerSeekReject.replaceWithAttempt).toHaveBeenCalledTimes(2);
-      const attempt2 = playerSeekReject.replaceWithAttempt.mock.calls[1][1];
-
-      // Native emits loaded event for attempt2
-      coordinator.handleNativeStatus(playerSeekReject, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: attempt2,
-        nativeEvent: 'loaded',
-        intentRevision: 1,
-        isLoaded: true,
-      });
-      for (let i = 0; i < 30; i++) await flushRemote();
-
-      // seekForAttempt was reached and returned false
-      expect(playerSeekReject.seekForAttempt).toHaveBeenCalledTimes(1);
-      // Zero play commands on recovered attempt!
-      expect(playerSeekReject.playForAttempt).toHaveBeenCalledTimes(1); // only initial call
-      expect(coordinator.getState().current.status).toBe('error');
-
-      // Scenario B: seek completion timeout (5s)
-      const playerSeekTimeout = createIdentifiedPlayer({
-        seekForAttempt: jest.fn(() => true),
-      });
-
-      const resB = await coordinator.play(playerSeekTimeout, { id: 232 });
-      coordinator.handleNativeStatus(playerSeekTimeout, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: resB.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 25.0,
-      });
-
-      coordinator.handleNativeStatus(playerSeekTimeout, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: resB.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Stall'),
-      });
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      const attemptB2 = playerSeekTimeout.replaceWithAttempt.mock.calls[1][1];
-      coordinator.handleNativeStatus(playerSeekTimeout, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: attemptB2,
-        nativeEvent: 'loaded',
-        intentRevision: 1,
-        isLoaded: true,
-      });
-      for (let i = 0; i < 30; i++) await flushRemote();
-
-      expect(playerSeekTimeout.seekForAttempt).toHaveBeenCalledTimes(1);
-
-      // Advance 5000ms seek completion timeout without seekCompleted event
-      jest.advanceTimersByTime(5000);
-      await flushRemote();
-      for (let i = 0; i < 30; i++) await flushRemote();
-
-      // playForAttempt was NEVER called on attemptB2
-      expect(playerSeekTimeout.playForAttempt).toHaveBeenCalledTimes(1);
-      expect(coordinator.getState().current.status).toBe('error');
-    });
-
     test('backward user seek resets progress baseline and suppresses confirmation while pending', async () => {
       const identifiedPlayer = createIdentifiedPlayer();
       const res = await coordinator.play(identifiedPlayer, { id: 233 });
@@ -2060,151 +1719,6 @@ describe('PlaybackCoordinator', () => {
       expect(coordinator.getState().current.status).toBe('playing');
     });
 
-    test('root repro 4: hard 30s global episode deadline terminates at exact 30000ms', async () => {
-      let fakeTime = 0;
-      const coordWithClock = new PlaybackCoordinator({
-      resolveMedia: mockResolveMedia,
-        cache: mockCache,
-        scheduler: mockScheduler,
-        clock: () => fakeTime,
-        startupTimeoutMs: 15000,
-        stallTimeoutMs: 10000,
-      });
-
-      const identifiedPlayer = createIdentifiedPlayer();
-      const res = await coordWithClock.play(identifiedPlayer, { id: 241 });
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'snapshot',
-        nativeIntent: 'play',
-        intentRevision: 1,
-      });
-
-      // Startup watchdog fires at 15000ms
-      fakeTime = 15000;
-      jest.advanceTimersByTime(15000);
-      await flushRemote();
-      expect(coordWithClock.getState().current.status).toBe('recovering');
-
-      // Recovery replacement at 15800ms
-      fakeTime = 15800;
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-      expect(coordWithClock.getState().current.status).toBe('recovering');
-
-      // Advance to exact 30,000ms from original selection
-      fakeTime = 30000;
-      jest.advanceTimersByTime(14200);
-      await flushRemote();
-
-      // At exact 30,000ms, hard episode timeout fires
-      expect(coordWithClock.getState().current.status).toBe('error');
-      expect(coordWithClock.getState().current.error.kind).toBe('timeout');
-
-      coordWithClock.destroy();
-    });
-
-    test('single progress blip does not clear 30s startup episode; only sustainable proof does', async () => {
-      let fakeTime = 0;
-      const coordWithClock = new PlaybackCoordinator({
-      resolveMedia: mockResolveMedia,
-        cache: mockCache,
-        scheduler: mockScheduler,
-        clock: () => fakeTime,
-      });
-
-      const identifiedPlayer = createIdentifiedPlayer();
-      const res = await coordWithClock.play(identifiedPlayer, { id: 242 });
-
-      // A single progress blip at t = 5000ms
-      fakeTime = 5000;
-      jest.advanceTimersByTime(5000);
-      await flushRemote();
-      const blip = coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 0.5,
-      });
-      expect(blip.didStart).toBe(true);
-
-      // No second progress event arrives. At t = 30000ms, startup episode expires!
-      fakeTime = 30000;
-      jest.advanceTimersByTime(25000);
-      await flushRemote();
-
-      expect(coordWithClock.getState().current.status).toBe('error');
-      expect(coordWithClock.getState().current.error.kind).toBe('timeout');
-
-      coordWithClock.destroy();
-    });
-
-    test('later stall episode deadline is anchored to last accepted progress before stall', async () => {
-      let fakeTime = 0;
-      const coordWithClock = new PlaybackCoordinator({
-      resolveMedia: mockResolveMedia,
-        cache: mockCache,
-        scheduler: mockScheduler,
-        clock: () => fakeTime,
-        startupTimeoutMs: 15000,
-        stallTimeoutMs: 10000,
-      });
-
-      const identifiedPlayer = createIdentifiedPlayer();
-      const res = await coordWithClock.play(identifiedPlayer, { id: 243 });
-
-      // Progress 1 at 1000ms
-      fakeTime = 1000;
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 0.5,
-      });
-
-      // Progress 2 at 2200ms -> sustainable proof!
-      fakeTime = 2200;
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 1.2,
-      });
-
-      // Progress 3 at 20000ms -> last progress before stall!
-      fakeTime = 20000;
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'progress',
-        isLoaded: true,
-        playing: true,
-        nativeIntent: 'play',
-        currentTime: 10.0,
-      });
-
-      // 10s stall watchdog fires at t = 30000ms
-      fakeTime = 30000;
-      jest.advanceTimersByTime(10000);
-      await flushRemote();
-      expect(coordWithClock.getState().current.status).toBe('stalled');
-
-      // Stall episode deadline is 20000 + 30000 = 50000ms (NOT 30000 + 30000 = 60000ms!)
-      expect(coordWithClock._stallEpisodeDeadline).toBe(50000);
-
-      coordWithClock.destroy();
-    });
-
     test('legacy player has no attributed watchdogs and plays past 30s without false error', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
@@ -2233,59 +1747,6 @@ describe('PlaybackCoordinator', () => {
       expect(coordWithClock.getState().current.status).toBe('starting');
       expect(coordWithClock.getState().networkStatus).toBe('good');
       expect(coordWithClock.getState().current.error).toBeNull();
-
-      coordWithClock.destroy();
-    });
-
-    test('hanging headers during recovery times out within remaining episode budget', async () => {
-      let fakeTime = 0;
-      const coordWithClock = new PlaybackCoordinator({
-      resolveMedia: mockResolveMedia,
-        cache: mockCache,
-        scheduler: mockScheduler,
-        clock: () => fakeTime,
-        headerTimeoutMs: 5000,
-      });
-
-      const identifiedPlayer = createIdentifiedPlayer();
-      let callCount = 0;
-      let neverResolveHeaders = new Promise(() => {});
-
-      const res = await coordWithClock.play(
-        identifiedPlayer,
-        { id: 245 },
-        {
-          getHeadersAsync: () => {
-            callCount++;
-            if (callCount === 1)
-              return Promise.resolve({ Authorization: 'Bearer initial' });
-            return neverResolveHeaders;
-          },
-        },
-      );
-
-      // Error triggers recovery
-      coordWithClock.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: res.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Stream disconnect'),
-      });
-
-      // 800ms backoff
-      fakeTime = 800;
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      // Advance 5000ms: header timeout fires
-      fakeTime += 5000;
-      jest.advanceTimersByTime(5000);
-      await flushRemote();
-      for (let i = 0; i < 10; i++) await flushRemote();
-
-      expect(coordWithClock.getState().current.status).toBe('error');
-      expect(coordWithClock.getState().current.error.kind).toBe('timeout');
 
       coordWithClock.destroy();
     });
@@ -2479,47 +1940,6 @@ describe('PlaybackCoordinator', () => {
       }
     });
 
-    test('obsolete header failure cannot fail new track', async () => {
-      const identifiedPlayer = createIdentifiedPlayer();
-      let rejectHeaders;
-      let n = 0;
-      const pendingHeaders = new Promise((_, reject) => {
-        rejectHeaders = reject;
-      });
-
-      const resA = await coordinator.play(
-        identifiedPlayer,
-        { id: 'A' },
-        {
-          getHeaders: () => (++n === 1 ? Promise.resolve({}) : pendingHeaders),
-        },
-      );
-      coordinator.handleNativeStatus(identifiedPlayer, {
-        sourceIdentityVersion: 1,
-        intentRevision: 1,
-        sourceAttemptId: resA.sourceAttemptId,
-        nativeEvent: 'error',
-        error: new Error('Transport stream failed'),
-      });
-      jest.advanceTimersByTime(800);
-      await flushRemote();
-
-      // Now user selects track B
-      await coordinator.play(
-        identifiedPlayer,
-        { id: 'B' },
-        { getHeaders: async () => ({}) },
-      );
-
-      // Old A headers reject late
-      rejectHeaders(new Error('Synthetic cancelled header error'));
-      for (let i = 0; i < 10; i++) await flushRemote();
-
-      // B must remain unaffected and healthy
-      expect(coordinator.getState().current.trackId).toBe('B');
-      expect(coordinator.getState().current.status).not.toBe('error');
-    });
-
     test('obsolete retry cannot seek new track', async () => {
       const identifiedPlayer = createIdentifiedPlayer();
       const resA = await coordinator.play(
@@ -2604,7 +2024,7 @@ describe('PlaybackCoordinator', () => {
       expect(coordinator.getState().current.status).toBe('paused');
     });
 
-    test('healthy confirmed resume does not expire at original 30s episode', async () => {
+    test('healthy confirmed resume keeps playing after 30 seconds', async () => {
       let fakeTime = 0;
       const coordWithClock = new PlaybackCoordinator({
       resolveMedia: mockResolveMedia,
@@ -3030,37 +2450,10 @@ describe('public Retry with native source and revision guards', () => {
     await start();
     emit('error', { error: { statusCode: 401, message: 'redacted' } });
     expect(c.current.error.kind).toBe('auth');
-    expect(c.current.recoveryCount).toBe(0);
     expect(classifyPlaybackError(new Error('unauthorized 404'), 'A').type).toBe(
       'remote_replace_error',
     );
   });
-  test('automatic recovery retains synchronous loaded and seek acknowledgement events', async () => {
-    await start();
-    const replace = player.replaceWithAttempt.getMockImplementation();
-    player.replaceWithAttempt.mockImplementation((...args) => {
-      const ok = replace(...args);
-      if (ok) emit('loaded');
-      return ok;
-    });
-    const seek = player.seekForAttempt.getMockImplementation();
-    player.seekForAttempt.mockImplementation((...args) => {
-      const ok = seek(...args);
-      emit('seek', { seekOrigin: 'recovery', seekCompleted: ok });
-      return ok;
-    });
-    emit('error', { error: 'synthetic stream failure' });
-    await jest.advanceTimersByTimeAsync(800);
-    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
-    expect(player.seekForAttempt).toHaveBeenCalledWith(
-      installed,
-      12,
-      expect.any(Number),
-    );
-    expect(player.playForAttempt).toHaveBeenCalledTimes(2);
-    expect(c.current.error).toBeNull();
-  });
-
   test('initial loaded before command resolution preserves explicit selection intent', async () => {
     const replace = player.replaceWithAttempt.getMockImplementation();
     const command = deferred();
@@ -3094,10 +2487,11 @@ describe('public Retry with native source and revision guards', () => {
     command.resolve();
     await selection;
     expect(player.playForAttempt).not.toHaveBeenCalled();
-    expect(c.current.status).toBe('recovering');
+    expect(c.current.status).toBe('error');
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
   });
 
-  test('early Retry error never resumes that attempt or loses the automatic replacement cap', async () => {
+  test('an error during explicit Retry does not resume or replace its failed attempt', async () => {
     await start();
     const replace = player.replaceWithAttempt.getMockImplementation();
     player.replaceWithAttempt.mockImplementation((...args) => {
@@ -3109,9 +2503,8 @@ describe('public Retry with native source and revision guards', () => {
     await c.retryCurrent(player);
     await jest.advanceTimersByTimeAsync(30000);
     expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
-    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(3); // selection, Retry, one automatic replacement
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
     expect(c.current.status).toBe('error');
-    expect(c.current.recoveryCount).toBe(1);
   });
 
   test.each(['false', 'throw'])(
@@ -3183,50 +2576,58 @@ describe('public Retry with native source and revision guards', () => {
     expect(c.current.error.kind).toBe('timeout');
   });
 
-  test('Retry has a fresh hard episode and one blip cannot reset its budget/cap', async () => {
-    await start();
-    const retry = c.retryCurrent(player);
-    await flush();
-    await ready();
-    await seekAck();
-    await retry;
-    position = 13;
+  test('initial buffering waits on the same source for several minutes', async () => {
+    await c.play(player, { id: 'A' });
+    await jest.advanceTimersByTimeAsync(180000);
+    expect(c.current.status).toBe('starting');
+    expect(c.current.positionSeconds).toBe(0);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    expect(player.replace).not.toHaveBeenCalled();
+    expect(player.seekForAttempt).not.toHaveBeenCalled();
+    position = 1;
     emit('progress');
-    await jest.advanceTimersByTimeAsync(10000);
-    await jest.advanceTimersByTimeAsync(800);
-    expect(c.current.recoveryCount).toBe(1);
-    await ready();
-    await seekAck();
-    position = 14;
-    emit('progress'); // No second sustainable proof, and cap remains consumed.
-    await jest.advanceTimersByTimeAsync(19200);
-    expect(c.current.status).toBe('error');
-    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(3);
+    expect(c.current.status).toBe('playing');
   });
 
-  test('healthy resume survives 30s, then a later stall stays finite', async () => {
-    await start();
-    await jest.advanceTimersByTimeAsync(1100);
-    position = 13;
-    emit('progress');
-    await c.setIntent(player, { type: 'pause' });
-    await jest.advanceTimersByTimeAsync(40000);
-    expect(c.current.status).toBe('paused');
-    await c.setIntent(player, { type: 'play' });
-    position = 14;
-    emit('progress');
-    await jest.advanceTimersByTimeAsync(1100);
-    position = 15;
-    emit('progress');
-    for (let i = 0; i < 7; i++) {
-      await jest.advanceTimersByTimeAsync(5000);
-      position += 5;
+  test.each([false, true])(
+    'buffering resumes on the same native source with stable proof %s',
+    async (stable) => {
+      await start();
+      if (stable) {
+        await jest.advanceTimersByTimeAsync(1100);
+        position = 13;
+        emit('progress');
+      }
+      const heldPosition = position;
+      const initialAttempt = installed;
+      await jest.advanceTimersByTimeAsync(180000);
+      expect(c.current).toMatchObject({
+        status: 'stalled',
+        intent: 'play',
+        positionSeconds: heldPosition,
+        sourceAttemptId: initialAttempt,
+        error: null,
+      });
+      expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
+      expect(player.replace).not.toHaveBeenCalled();
+      expect(player.pause).not.toHaveBeenCalled();
+      expect(player.seekForAttempt).not.toHaveBeenCalled();
+      position += 1;
       emit('progress');
-    }
-    expect(c.current.status).toBe('playing');
-    await jest.advanceTimersByTimeAsync(30000);
-    expect(c.current.status).toBe('error');
-    expect(c.current.recoveryCount).toBe(1);
+      expect(c.current.status).toBe('playing');
+      expect(c.current.positionSeconds).toBe(heldPosition + 1);
+      expect(results.filter(result => result.didStart)).toHaveLength(1);
+    },
+  );
+
+  test('a native media reset does not trigger a second source installation', async () => {
+    await start();
+    emit('reset', { mediaServicesDidReset: true });
+    await jest.advanceTimersByTimeAsync(180000);
+    expect(c.current.status).toBe('stalled');
+    expect(c.current.error).toBeNull();
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
+    expect(player.seekForAttempt).not.toHaveBeenCalled();
   });
 
   test('legacy Retry stays usable beyond 40s without attributed errors or recovery', async () => {
@@ -3289,60 +2690,6 @@ describe('public Retry with native source and revision guards', () => {
     expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
   });
 
-  test('early initial item error ends safely on native veto without ever playing failed source', async () => {
-    const replace = player.replaceWithAttempt.getMockImplementation();
-    player.replaceWithAttempt.mockImplementationOnce((...args) => {
-      const accepted = replace(...args);
-      emit('error', { error: 'synthetic initial failure' });
-      return accepted;
-    });
-    await c.play(player, { id: 'A' }, { requestId: 'early' });
-    expect(c.current.status).toBe('recovering');
-    await jest.advanceTimersByTimeAsync(800);
-    expect(player.playForAttempt).not.toHaveBeenCalled();
-    expect(player.play).not.toHaveBeenCalled();
-    expect(c.current.status).toBe('error');
-    expect(c.current.error.kind).toBe('playback');
-    expect(c.current.intent).toBe('pause');
-    expect(c.current.requestId).toBe('early');
-    expect(c.current.recoveryCount).toBe(1);
-    await jest.advanceTimersByTimeAsync(40000);
-    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  test.each(['pause', 'seek'])(
-    'new native %s during initial failed installation forbids delayed play/replacement',
-    async (action) => {
-      const replace = player.replaceWithAttempt.getMockImplementation();
-      player.replaceWithAttempt.mockImplementationOnce((...args) => {
-        const accepted = replace(...args);
-        emit('error', { error: 'synthetic initial failure' });
-        if (action === 'pause') player.pause();
-        else player.seekForAttempt(installed, 19, null);
-        return accepted;
-      });
-      await c.play(player, { id: 'A' });
-      await jest.advanceTimersByTimeAsync(40000);
-      expect(player.playForAttempt).not.toHaveBeenCalled();
-      expect(player.play).not.toHaveBeenCalled();
-      expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
-      expect(c.current.intent).toBe('pause');
-    },
-  );
-
-  test('guarded recovery play rejection terminates immediately without unguarded fallback', async () => {
-    await start();
-    player.playForAttempt.mockImplementationOnce(() => false);
-    emit('error', { error: 'synthetic error' });
-    await jest.advanceTimersByTimeAsync(800);
-    await ready();
-    await seekAck();
-    await flush();
-    expect(c.current.status).toBe('error');
-    expect(c.current.error.kind).toBe('playback');
-    expect(player.play).not.toHaveBeenCalled();
-  });
-
   test('finished valid selection permits pause only, while absent/stale IDs remain inert', async () => {
     await start();
     emit('finish', { didJustFinish: true });
@@ -3363,150 +2710,39 @@ describe('public Retry with native source and revision guards', () => {
     expect(player.pause).toHaveBeenCalledTimes(cancelledPauses);
   });
 
-  test.each(['pause', 'seek'])(
-    'new user %s inside rejected guarded recovery is never overwritten by terminal handling',
-    async (action) => {
-      await start();
-      player.replaceWithAttempt.mockImplementationOnce(() => {
-        c.setIntent(player, { type: action, positionSeconds: 23 });
-        return false;
-      });
-      const plays = player.playForAttempt.mock.calls.length;
-      emit('error', { error: 'synthetic error' });
-      await jest.advanceTimersByTimeAsync(800);
-      expect(c.current.error).toBeNull();
-      expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
-      if (action === 'pause') expect(c.current.status).toBe('paused');
-      else expect(c.current.positionSeconds).toBe(23);
-    },
-  );
-
-  test('automatic zero restore waits matching loaded and successful nonnull seek before guarded play', async () => {
-    await c.play(player, { id: 'A' }, { requestId: 'zero' });
-    emit('error', { error: 'zero source failed' });
-    await jest.advanceTimersByTimeAsync(800);
+  test('FIFO immutable error captured during install is terminal after play admission', async () => {
+    const queued = [];
+    listeners.clear();
+    listeners.add((event) => queued.push(event));
+    const replace = player.replaceWithAttempt.getMockImplementation();
+    player.replaceWithAttempt.mockImplementationOnce((...args) => {
+      const accepted = replace(...args);
+      emit('error', { error: 'captured before initial play' });
+      return accepted;
+    });
+    await c.play(player, { id: 'A' }, { requestId: 'fifo' });
+    expect(queued[0]).toEqual(
+      expect.objectContaining({
+        nativeEvent: 'error',
+        nativeIntent: 'pause',
+        intentRevision: 0,
+      }),
+    );
+    expect(queued[1]).toEqual(
+      expect.objectContaining({
+        nativeEvent: 'intent',
+        nativeIntent: 'play',
+        intentRevision: 1,
+      }),
+    );
+    while (queued.length)
+      results.push(c.handleNativeStatus(player, queued.shift()));
+    expect(c.current.status).toBe('error');
+    await jest.advanceTimersByTimeAsync(180000);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
     expect(player.playForAttempt).toHaveBeenCalledTimes(1);
     expect(player.seekForAttempt).not.toHaveBeenCalled();
-    const attempt = installed;
-    const rev = revision;
-    const premature = c.handleNativeStatus(player, {
-      sourceIdentityVersion: 1,
-      sourceAttemptId: attempt,
-      intentRevision: rev,
-      nativeEvent: 'progress',
-      nativeIntent: 'play',
-      playing: true,
-      isLoaded: true,
-      currentTime: 7,
-    });
-    expect(premature.didStart).toBe(false);
-    await ready();
-    expect(player.seekForAttempt).toHaveBeenLastCalledWith(attempt, 0, rev);
-    expect(player.playForAttempt).toHaveBeenCalledTimes(1);
-    expect(
-      c.handleNativeStatus(player, {
-        sourceIdentityVersion: 1,
-        sourceAttemptId: 'obsolete',
-        intentRevision: rev,
-        nativeEvent: 'seek',
-        nativeIntent: 'play',
-        seekOrigin: 'recovery',
-        seekCompleted: true,
-      }).accepted,
-    ).toBe(false);
-    expect(player.playForAttempt).toHaveBeenCalledTimes(1);
-    await seekAck();
-    expect(player.playForAttempt).toHaveBeenLastCalledWith(attempt, rev);
-    expect(player.playForAttempt).toHaveBeenCalledTimes(2);
-    expect(results.filter((x) => x.didStart)).toHaveLength(0);
-    position = 0.5;
-    emit('progress');
-    expect(results.filter((x) => x.didStart)).toHaveLength(1);
   });
-
-  test.each([
-    'false-command',
-    'failed-ack',
-    'loaded-timeout',
-    'seek-timeout',
-    'pause',
-    'seek',
-    'new-track',
-  ])('automatic zero restore cannot autoplay after %s', async (mode) => {
-    await c.play(player, { id: 'A' }, { requestId: 'zero' });
-    emit('error', { error: 'zero source failed' });
-    await jest.advanceTimersByTimeAsync(800);
-    if (mode === 'false-command')
-      player.seekForAttempt.mockReturnValueOnce(false);
-    if (mode !== 'loaded-timeout') await ready();
-    if (mode === 'failed-ack') await seekAck({ seekCompleted: false });
-    if (mode === 'pause') await c.setIntent(player, { type: 'pause' });
-    if (mode === 'seek')
-      await c.setIntent(player, { type: 'seek', positionSeconds: 11 });
-    if (mode === 'new-track')
-      await c.play(player, { id: 'B' }, { requestId: 'new' });
-    const plays = player.playForAttempt.mock.calls.length;
-    await jest.advanceTimersByTimeAsync(5000);
-    if (['pause', 'seek'].includes(mode)) await seekAck();
-    expect(player.playForAttempt).toHaveBeenCalledTimes(plays);
-    expect(player.play).not.toHaveBeenCalled();
-    if (
-      mode.endsWith('timeout') ||
-      mode === 'false-command' ||
-      mode === 'failed-ack'
-    )
-      expect(c.current.status).toBe('error');
-    if (mode === 'seek') expect(c.current.positionSeconds).toBe(11);
-    if (mode === 'new-track') expect(c.current.requestId).toBe('new');
-  });
-
-  test.each(['none', 'pause', 'seek'])(
-    'FIFO immutable error captured during install preserves source failure and newer intent: %s',
-    async (newer) => {
-      const queued = [];
-      listeners.clear();
-      listeners.add((event) => queued.push(event));
-      const replace = player.replaceWithAttempt.getMockImplementation();
-      player.replaceWithAttempt.mockImplementationOnce((...args) => {
-        const accepted = replace(...args);
-        emit('error', { error: 'captured before initial play' });
-        return accepted;
-      });
-      await c.play(player, { id: 'A' }, { requestId: 'fifo' });
-      expect(queued[0]).toEqual(
-        expect.objectContaining({
-          nativeEvent: 'error',
-          nativeIntent: 'pause',
-          intentRevision: 0,
-        }),
-      );
-      expect(queued[1]).toEqual(
-        expect.objectContaining({
-          nativeEvent: 'intent',
-          nativeIntent: 'play',
-          intentRevision: 1,
-        }),
-      );
-      if (newer === 'pause') player.pause();
-      if (newer === 'seek') player.seekForAttempt(installed, 21, null);
-      const error = queued[0];
-      while (queued.length)
-        results.push(c.handleNativeStatus(player, queued.shift()));
-      if (newer === 'none') {
-        expect(c.current.status).toBe('recovering');
-        expect(c.current.recoveryCount).toBe(1);
-      } else {
-        expect(c.handleNativeStatus(player, error).accepted).toBe(false);
-        expect(c.current.intent).toBe(newer === 'pause' ? 'pause' : 'play');
-        if (newer === 'seek') expect(c.current.positionSeconds).toBe(21);
-      }
-      await jest.advanceTimersByTimeAsync(800);
-      expect(player.replaceWithAttempt).toHaveBeenCalledTimes(
-        newer === 'none' ? 2 : 1,
-      );
-      expect(player.playForAttempt).toHaveBeenCalledTimes(1);
-    },
-  );
 
   test('a source error play snapshot cannot grant resume permission after JS pause', async () => {
     await start();
@@ -3547,9 +2783,8 @@ describe('public Retry with native source and revision guards', () => {
     ]);
     for (const event of queued) c.handleNativeStatus(player, event);
     expect(c.current.intent).toBe('play');
-    expect(c.current.status).toBe('recovering');
-    expect(c.current.recoveryCount).toBe(1);
-    await jest.advanceTimersByTimeAsync(800);
-    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(2);
+    expect(c.current.status).toBe('error');
+    await jest.advanceTimersByTimeAsync(180000);
+    expect(player.replaceWithAttempt).toHaveBeenCalledTimes(1);
   });
 });

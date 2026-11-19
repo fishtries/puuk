@@ -17,14 +17,14 @@ export default function PlayerNetworkBanner({
   onRetryNext,
   onSkip,
 }) {
-  // 1. Текущий трек находится в процессе автоматического восстановления
+  // Подготовка после нажатия «Повторить».
   if (current?.status === 'recovering') {
     return (
       <View
         style={[styles.bannerContainer, styles.recoveringBanner]}
         accessible={true}
         accessibilityRole="alert"
-        accessibilityLabel="Восстановление воспроизведения"
+        accessibilityLabel="Загрузка трека"
       >
         <View style={styles.contentRow}>
           <Ionicons
@@ -34,7 +34,7 @@ export default function PlayerNetworkBanner({
             style={styles.icon}
           />
           <Text style={styles.recoveringText} numberOfLines={1}>
-            Восстановление воспроизведения...
+            Загрузка трека…
           </Text>
         </View>
       </View>
@@ -46,13 +46,12 @@ export default function PlayerNetworkBanner({
 
   // 2. Текущий поток завис (stall)
   if (current?.status === 'stalled') {
-    const retryHandler = onRetryCurrent || onRetry;
     return (
       <View
         style={[styles.bannerContainer, styles.warningBanner]}
         accessible={true}
         accessibilityRole="alert"
-        accessibilityLabel="Воспроизведение приостановлено"
+        accessibilityLabel="Буферизация потока"
       >
         <View style={styles.contentRow}>
           <Ionicons
@@ -62,23 +61,9 @@ export default function PlayerNetworkBanner({
             style={styles.icon}
           />
           <Text style={styles.warningText} numberOfLines={1}>
-            Буферизация потока...
+            Буферизация…
           </Text>
         </View>
-        {retryHandler && (
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={retryHandler}
-              activeOpacity={0.7}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="Повторить"
-            >
-              <Text style={styles.actionText}>Повторить</Text>
-            </TouchableOpacity>
-          </View>
-        )}
       </View>
     );
   }
@@ -103,7 +88,11 @@ export default function PlayerNetworkBanner({
 
     return (
       <View
-        style={[styles.bannerContainer, styles.errorBanner]}
+        style={[
+          styles.bannerContainer,
+          styles.errorBanner,
+          styles.currentErrorBanner,
+        ]}
         accessible={true}
         accessibilityRole="alert"
         accessibilityLabel={message}
@@ -115,9 +104,7 @@ export default function PlayerNetworkBanner({
             color="#ff453a"
             style={styles.icon}
           />
-          <Text style={styles.errorText} numberOfLines={1}>
-            {message}
-          </Text>
+          <Text style={styles.errorText}>{message}</Text>
         </View>
         <View style={styles.actionsRow}>
           {isRetryable && retryHandler && (
@@ -227,6 +214,10 @@ const styles = StyleSheet.create({
     marginVertical: 6,
     maxWidth: '92%',
     backdropFilter: 'blur(20px)',
+  },
+  currentErrorBanner: {
+    flexDirection: 'column',
+    gap: 6,
   },
   contentRow: {
     flexDirection: 'row',

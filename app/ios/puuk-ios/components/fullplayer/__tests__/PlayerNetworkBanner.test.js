@@ -78,7 +78,7 @@ describe('PlayerNetworkBanner', () => {
     expect(onSkip).toHaveBeenCalled();
   });
 
-  it('renders recovering banner when current.status is recovering', () => {
+  it('shows loading while preparing an explicit retry', () => {
     let renderer;
     act(() => {
       renderer = TestRenderer.create(
@@ -92,12 +92,28 @@ describe('PlayerNetworkBanner', () => {
     const root = renderer.root;
     const textNodes = root.findAllByType('Text');
     const texts = textNodes.map((n) => n.props.children);
-    expect(texts).toContain('Восстановление воспроизведения...');
-    // No action buttons during automatic recovery
+    expect(texts).toContain('Загрузка трека…');
+    // Retry is already pending.
     const retryButtons = root.findAll(
       (n) => n.props?.accessibilityLabel === 'Повторить',
     );
     expect(retryButtons.length).toBe(0);
+  });
+
+  it('shows buffering without a retry action for the active stream', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <PlayerNetworkBanner
+          current={{ status: 'stalled' }}
+          onRetryCurrent={jest.fn()}
+        />,
+      );
+    });
+    expect(renderer.root.findAllByType('Text').map(node => node.props.children))
+      .toContain('Буферизация…');
+    expect(renderer.root.findAll(node => node.props?.accessibilityRole === 'button'))
+      .toHaveLength(0);
   });
 
   it('renders safe category error strings for current track errors without raw text', () => {

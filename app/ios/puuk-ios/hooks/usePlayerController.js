@@ -555,8 +555,11 @@ export default function usePlayerController({ setTracks }) {
   }, [player]);
 
   const isPlaying = status.playing;
-  const currentTime = status.currentTime || 0;
-  const duration = status.duration || 0;
+  const holdPosition = networkUX.current?.error?.holdTrack;
+  const currentTime = holdPosition
+    ? networkUX.current.positionSeconds
+    : status.currentTime || 0;
+  const duration = status.duration || (holdPosition ? currentTrack?.duration || 0 : 0);
 
   useEffect(() => {
     // Legacy presentation remains available without attributing v1 events.
@@ -1412,6 +1415,7 @@ export default function usePlayerController({ setTracks }) {
   useEffect(() => {
     const state = networkUX.current;
     if (!durableWaveRef.current || waveModeRef.current === 'empty' || state?.status !== 'error' ||
+        state.error?.holdTrack ||
         state.requestId !== currentRequestIdRef.current || waveErrorRef.current === state.requestId ||
         isAdvancingRef.current || localSelectionRef.current) return;
     waveErrorRef.current = state.requestId;
