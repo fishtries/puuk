@@ -321,6 +321,14 @@ final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate {
       staged[transfer.operationId] = Receipt(stagingPath: transfer.stagingPath, status: status,
                                              failure: status == 200 ? "integrity" : "http")
       downloadTask.cancel()
+      return
+    }
+    let interval: Int64 = 1024 * 1024
+    let now = DispatchTime.now()
+    if now >= lastProgressSignal + .seconds(1),
+       totalBytesWritten / interval != (totalBytesWritten - bytesWritten) / interval {
+      lastProgressSignal = now
+      signalChange()
     }
   }
 
@@ -355,17 +363,6 @@ final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate {
       if sha256 != transfer.contentVersion { receipt.failure = "integrity" }
     } catch {
       receipt.failure = storageFailure(error)
-    }
-  }
-
-  func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-    didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-    let interval: Int64 = 1024 * 1024
-    let now = DispatchTime.now()
-    if now >= lastProgressSignal + .seconds(1),
-       totalBytesWritten / interval != (totalBytesWritten - bytesWritten) / interval {
-      lastProgressSignal = now
-      signalChange()
     }
   }
 
