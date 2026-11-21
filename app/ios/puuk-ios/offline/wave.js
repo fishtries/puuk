@@ -16,7 +16,7 @@ import {
   getBackgroundDownloadStatus,
   subscribeBackgroundDownloadStatus,
 } from './downloads/runtime';
-import { getLocalDislikeIds } from './outbox/runtime';
+import { getLocalDislikeIds, getLocalRatingIds } from './outbox/runtime';
 import { offlineDatabase } from './storage';
 import {
   getOfflineSession,
@@ -37,6 +37,7 @@ export const WAVE_REASON = Object.freeze({
   collectionId: 'reserve',
 });
 export const WAVE_JOB_REASON = 'wave:reserve';
+export const LOCAL_WAVE_BATCH_SIZE = 12;
 const id = (track) => String(getTrackId(track));
 export const waveTrackDuration = (track) =>
   Number.isFinite(track.duration) ? Math.max(0, track.duration) : 0;
@@ -51,37 +52,46 @@ async function database(session) {
   if (!isOfflineSessionCurrent(session)) return null;
   const db = await offlineDatabase();
   if (!isOfflineSessionCurrent(session)) return null;
-  db.runSync(`CREATE TABLE IF NOT EXISTS wave_state (
-    owner TEXT PRIMARY KEY, current_track TEXT, future TEXT NOT NULL, history TEXT NOT NULL
-  )`);
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS wave_state (
+      owner TEXT PRIMARY KEY, current_track TEXT, future TEXT NOT NULL, history TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS wave_reserve (
+      owner TEXT PRIMARY KEY, future TEXT NOT NULL
+    );
+  `);
   return db;
 }
+
+const selectWaveState = `SELECT state.*, reserve.future AS reserve_future
+  FROM wave_state state LEFT JOIN wave_reserve reserve USING (owner)
+  WHERE state.owner=?`;
 
 export async function readWaveQueue(session = getOfflineSession()) {
   const db = await database(session);
   if (!db) return null;
-  const row = db.getFirstSync(
-    'SELECT * FROM wave_state WHERE owner=?',
-    ownerKey(session.owner),
-  );
+  const row = db.getFirstSync(selectWaveState, ownerKey(session.owner));
   return row
     ? {
         current: JSON.parse(row.current_track),
         future: JSON.parse(row.future),
         history: JSON.parse(row.history),
+        reserve: JSON.parse(row.reserve_future ?? row.future),
+        localFuture: row.reserve_future != null && row.reserve_future !== row.future,
       }
     : null;
 }
 
-export async function saveWaveQueue(session, { current, future, history }) {
+export async function saveWaveQueue(
+  session,
+  { current, future, history },
+  { updateReserve = true } = {},
+) {
   if (!current) return false;
   const db = await database(session);
   if (!db) return false;
   const owner = ownerKey(session.owner);
-  const previous = db.getFirstSync(
-    'SELECT * FROM wave_state WHERE owner=?',
-    owner,
-  );
+  const previous = db.getFirstSync(selectWaveState, owner);
   if (!previous || id(JSON.parse(previous.current_track)) !== id(current))
     suppressed.clear();
   const saved = [
@@ -93,18 +103,22 @@ export async function saveWaveQueue(session, { current, future, history }) {
       history.slice(-recentLimit).map(displayTrack).filter(Boolean),
     ),
   ];
+  // An older snapshot used the playback queue as its download plan.
+  const oldReserve = previous?.reserve_future ?? previous?.future;
+  const reserve = updateReserve ? saved[1] : oldReserve ?? '[]';
   if (
     previous &&
+    oldReserve === reserve &&
     [previous.current_track, previous.future, previous.history].every(
       (entry, i) => entry === saved[i],
     )
   )
     return true;
-  db.runSync(
-    'INSERT OR REPLACE INTO wave_state VALUES (?,?,?,?)',
-    owner,
-    ...saved,
-  );
+  db.withTransactionSync(() => {
+    db.runSync('INSERT OR REPLACE INTO wave_state VALUES (?,?,?,?)', owner, ...saved);
+    if (previous?.reserve_future !== reserve)
+      db.runSync('INSERT OR REPLACE INTO wave_reserve VALUES (?,?)', owner, reserve);
+  });
   notifyOfflineIndex({ type: 'wave-queue', session });
   return true;
 }
@@ -119,7 +133,7 @@ export function setWavePlaybackMode(session, mode) {
 async function candidates(session, queue) {
   const disliked = await getLocalDislikeIds(session);
   const seen = new Set(queue?.current ? [id(queue.current)] : []);
-  return (queue?.future || []).filter((track) => {
+  return (queue?.reserve || []).filter((track) => {
     const key = id(track);
     if (seen.has(key) || disliked.has(key)) return false;
     seen.add(key);
@@ -139,36 +153,50 @@ function desiredTracks(tracks) {
   return desired;
 }
 
+function artistKey(track) {
+  const artist = track?.artists?.[0]?.name ?? track?.artist;
+  return typeof artist === 'string' ? artist.trim().toLowerCase() : '';
+}
+
 export async function selectLocalWaveTracks(
   session,
-  { current, future, history = [], exclude = [] },
+  { current, future = [], history = [], exclude = [] },
 ) {
-  const [ordered, library, disliked] = await Promise.all([
-    candidates(session, { current, future }),
+  const [library, ratings, retained, snapshot] = await Promise.all([
     listPlayableTracks(session),
-    getLocalDislikeIds(session),
+    getLocalRatingIds(session),
+    listReasonTracks(session, WAVE_REASON),
+    readWaveQueue(session),
   ]);
-  if (!isOfflineSessionCurrent(session)) return { reserve: [], library: [] };
-  const ready = new Set(library.map(id));
-  const excluded = new Set(exclude.map(id));
-  const reserve = ordered.filter(
-    (track) =>
-      ready.has(id(track)) &&
-      !disliked.has(id(track)) &&
-      !excluded.has(id(track)),
+  if (!isOfflineSessionCurrent(session)) return { tracks: [], reserveIds: new Set() };
+  const reserveIds = new Set([...retained, ...(snapshot?.reserve || []).map(id)]);
+  const excluded = new Set([...exclude.map(id), id(current), ...ratings.dislikes]);
+  const playable = new Map(
+    library.filter((track) => !excluded.has(id(track))).map((track) => [id(track), track]),
   );
-  const recent = [...history, current].filter(Boolean).map(id);
-  const pool = library.filter(
-    (track) =>
-      id(track) !== id(current) &&
-      !disliked.has(id(track)) &&
-      !excluded.has(id(track)),
-  );
-  const lastPlayed = new Map(recent.map((trackId, index) => [trackId, index]));
-  pool.sort(
-    (a, b) => (lastPlayed.get(id(a)) ?? -1) - (lastPlayed.get(id(b)) ?? -1),
-  );
-  return { reserve, library: pool };
+  const tracks = future.filter((track) => playable.delete(id(track)));
+  const lastPlayed = new Map(history.map((track, index) => [id(track), index]));
+  const remaining = [...playable].map(([key, track]) => ({
+    track,
+    artist: artistKey(track),
+    lastPlayed: lastPlayed.get(key) ?? -1,
+    priority: Number(reserveIds.has(key)) + Number(ratings.favorites.has(key)),
+    tieBreaker: Math.random(),
+  }));
+  remaining.sort((a, b) => a.lastPlayed - b.lastPlayed ||
+    b.priority - a.priority || a.tieBreaker - b.tieBreaker);
+  let artist = artistKey(tracks.at(-1) ?? current ?? history.at(-1));
+  while (tracks.length < LOCAL_WAVE_BATCH_SIZE && remaining.length) {
+    // Vary adjacent artists among candidates with the same listening recency.
+    const next = artist && artist === remaining[0].artist
+      ? remaining.findIndex((candidate) => candidate.lastPlayed === remaining[0].lastPlayed &&
+          candidate.artist && candidate.artist !== artist)
+      : 0;
+    const [pick] = remaining.splice(Math.max(0, next), 1);
+    tracks.push(pick.track);
+    artist = pick.artist;
+  }
+  return { tracks: [...tracks, ...remaining.map(({ track }) => track)], reserveIds };
 }
 
 export async function readOfflineWaveStatus(session = getOfflineSession()) {
@@ -311,7 +339,7 @@ export function startOfflineWave() {
   });
   setWaveBudgetReclaimer(async (session, fits, { background, trackId }) => {
     const queue = await readWaveQueue(session);
-    const ordered = (queue?.future || []).map(id);
+    const ordered = (queue?.reserve || []).map(id);
     const position = ordered.indexOf(String(trackId));
     const tracks = await listReasonTracks(session, WAVE_REASON);
     const protectedId = queue?.current ? id(queue.current) : null;

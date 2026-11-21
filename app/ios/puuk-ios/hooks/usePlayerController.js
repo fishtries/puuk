@@ -4,7 +4,14 @@ import { AppState } from 'react-native';
 import defaultAudioCache from '../utils/audioCache';
 import defaultPreloadScheduler from '../utils/preloadScheduler';
 import { boundedMediaOperation, mediaDelivery } from '../shared/api/media';
-import { readWaveQueue, saveWaveQueue, selectLocalWaveTracks, setWavePlaybackMode, waveTrackDuration } from '../offline/wave';
+import {
+  LOCAL_WAVE_BATCH_SIZE,
+  readWaveQueue,
+  saveWaveQueue,
+  selectLocalWaveTracks,
+  setWavePlaybackMode,
+  waveTrackDuration,
+} from '../offline/wave';
 import { readMediaKey } from '../offline';
 import { DEFAULT_WAVE_RESERVE_MINUTES } from '../offline/policy';
 import { getCurrentNetworkPolicy, subscribeNetworkPolicy } from '../utils/networkPolicy';
@@ -107,18 +114,17 @@ function capIds(ids, limit = MAX_EXCLUDE_IDS) {
 }
 
 /** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
-function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}, route = 'queue') {
-  const params = new URLSearchParams();
+function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
+  const params = new URLSearchParams({ limit: '50' });
   const canonicalId = getTrackId(trackId);
   if (canonicalId !== null) {
     params.append('current_track_id', String(canonicalId));
   }
-  if (route === 'queue') params.set('limit', '50');
   for (const id of capIds(excludeIds))
     params.append('exclude_track_ids', String(id));
   for (const id of capIds(queuedIds))
     params.append('queued_track_ids', String(id));
-  return `/api/wave/${route}?${params.toString()}`;
+  return `/api/wave/queue?${params.toString()}`;
 }
 
 /** Слияние пачки рекомендаций с буфером без дублей. */
@@ -243,14 +249,15 @@ export default function usePlayerController({ setTracks }) {
   const awaitingRecommendationsRef = useRef(false);
   const waveErrorRef = useRef(null);
   const waveModeRef = useRef('idle');
-  const localSelectionRef = useRef(null);
+  const pendingWaveSelectionRef = useRef(null);
   const setWaveMode = useCallback((mode) => {
     if (waveModeRef.current === mode) return;
     waveModeRef.current = mode;
     setWavePlaybackMode(getOfflineSession(), mode);
   }, []);
-  const canRequestWave = useCallback(() => getCurrentNetworkPolicy()?.isConnected !== false &&
-    !reconnectPendingRef.current && Date.now() >= waveRetryAtRef.current, []);
+  const canRequestWave = useCallback(({ ignoreBackoff = false } = {}) =>
+    getCurrentNetworkPolicy()?.isConnected !== false &&
+    !reconnectPendingRef.current && (ignoreBackoff || Date.now() >= waveRetryAtRef.current), []);
   const autoplayAfterQueueRef = useRef(false);
   const collectionTrackIdsRef = useRef([]);
   const removedQueueIdsRef = useRef(new Set());
@@ -1016,6 +1023,16 @@ export default function usePlayerController({ setTracks }) {
     [player, refreshTrackLoudness, changePlaybackRate, projectRating],
   );
 
+  const saveCurrentWave = useCallback(() => {
+    const session = getOfflineSession();
+    if (!durableWaveRef.current || !session || !currentTrackRef.current || pendingWaveSelectionRef.current) return;
+    void saveWaveQueue(session, {
+      current: currentTrackRef.current, future: queueRef.current, history: historyRef.current,
+    }, {
+      updateReserve: canRequestWave() && !awaitingRecommendationsRef.current,
+    }).catch(() => {});
+  }, [canRequestWave]);
+
   const fetchQueue = useCallback((trackId, exclusions = {}, { replaceRecommendations = false } = {}) => {
     const epoch = queueEpochRef.current;
     const selection = currentRequestIdRef.current;
@@ -1029,14 +1046,15 @@ export default function usePlayerController({ setTracks }) {
       return pending.promise;
     }
     pending?.controller.abort();
-    const excludeIds = [
-      ...(exclusions.excludeIds || []),
+    const hardExclusions = [
       ...collectionTrackIdsRef.current,
       ...removedQueueIdsRef.current,
       ...dislikeIdsRef.current,
     ];
+    const excludeIds = [...(exclusions.excludeIds || []), ...hardExclusions];
     const excluded = new Set(
-      [trackId, ...excludeIds, ...(exclusions.queuedIds || [])]
+      [trackId, ...(durable && replaceRecommendations ? hardExclusions : excludeIds),
+        ...(exclusions.queuedIds || [])]
         .filter((id) => id !== null && id !== undefined)
         .map(String),
     );
@@ -1050,15 +1068,18 @@ export default function usePlayerController({ setTracks }) {
         if (!isCurrent() || signal.aborted) return [];
         if (durable && !canRequestWave()) return [];
         if (!Array.isArray(data)) throw new Error('Invalid Wave queue');
-        if (durable && replaceRecommendations && data.length === 0) return [];
         const normalizedQueue = mergeUniqueQueue(
           [],
-          (Array.isArray(data) ? data : [])
-            .map(normalizeTrackDto)
+          data.map(normalizeTrackDto)
             .filter(
               (track) => track && !excluded.has(String(getTrackId(track))) && !dislikeIdsRef.current.has(String(getTrackId(track))),
             ),
         );
+        if (durable && replaceRecommendations && !normalizedQueue.length) {
+          if (awaitingRecommendationsRef.current)
+            waveRetryAtRef.current = Date.now() + WAVE_RETRY_DELAY;
+          return [];
+        }
         const previousRecommendations = recommendationsRef.current;
         const existing = replaceRecommendations
           ? queueRef.current.filter((track) => !previousRecommendations.has(queueKey(track)))
@@ -1072,6 +1093,7 @@ export default function usePlayerController({ setTracks }) {
         if (durable && normalizedQueue.length) {
           waveRetryAtRef.current = 0;
           awaitingRecommendationsRef.current = false;
+          saveCurrentWave();
         } else if (durable && awaitingRecommendationsRef.current) {
           waveRetryAtRef.current = Date.now() + WAVE_RETRY_DELAY;
         }
@@ -1092,7 +1114,7 @@ export default function usePlayerController({ setTracks }) {
       }
     })();
     return request.promise;
-  }, [setUpNextQueue, setWaveMode, canRequestWave]);
+  }, [setUpNextQueue, setWaveMode, canRequestWave, saveCurrentWave]);
 
   const refreshFutureWave = useCallback(() => {
     const trackId = getTrackId(currentTrackRef.current);
@@ -1114,13 +1136,6 @@ export default function usePlayerController({ setTracks }) {
     }, { replaceRecommendations: true });
   }, [fetchQueue]);
 
-  const saveCurrentWave = useCallback(() => {
-    const session = getOfflineSession();
-    if (!durableWaveRef.current || !session || !currentTrackRef.current || localSelectionRef.current) return;
-    void saveWaveQueue(session, {
-      current: currentTrackRef.current, future: queueRef.current, history: historyRef.current,
-    }).catch(() => {});
-  }, []);
   const wavePositionKey = JSON.stringify([
     getTrackId(currentTrack), upNextQueue.map(getTrackId), history.map(getTrackId),
   ]);
@@ -1128,7 +1143,8 @@ export default function usePlayerController({ setTracks }) {
 
   useEffect(() => {
     const trackId = getTrackId(currentTrackRef.current);
-    if (!durableWaveRef.current || !currentRequestIdRef.current || trackId === null ||
+    if (!durableWaveRef.current || pendingWaveSelectionRef.current ||
+        !currentRequestIdRef.current || trackId === null ||
         !canRequestWave() || awaitingRecommendationsRef.current || !queueRef.current.length) return;
     const target = (getSettings()?.waveReserveMinutes ?? DEFAULT_WAVE_RESERVE_MINUTES) * 60;
     if (queueRef.current.reduce((seconds, track) => seconds + waveTrackDuration(track), 0) >= target) return;
@@ -1163,7 +1179,10 @@ export default function usePlayerController({ setTracks }) {
         queueEpochRef.current !== epoch || currentTrackRef.current ||
         !track || !areTrackIdsEqual(snapshot?.current, track)) return false;
     const current = applyWaveSnapshot(snapshot);
-    if (current) setWaveMode(canRequestWave() ? 'online' : 'reserve');
+    if (current) {
+      if (snapshot.localFuture) awaitingRecommendationsRef.current = true;
+      setWaveMode(canRequestWave() && !awaitingRecommendationsRef.current ? 'online' : 'reserve');
+    }
     return Boolean(current);
   }, [applyWaveSnapshot, canRequestWave, setWaveMode]);
 
@@ -1238,49 +1257,81 @@ export default function usePlayerController({ setTracks }) {
     ],
   );
 
-  const advanceLocalWave = useCallback(async ({ session, valid, current, future, previous, exclude = [] }) => {
-    const planned = queueRef.current;
-    const { reserve, library } = await selectLocalWaveTracks(session, {
-      current, future, history: previous, exclude,
+  const beginWaveSession = useCallback((session) => {
+    const newSession = 'wave_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+    sessionIdRef.current = newSession;
+    setPlaybackSessionId(newSession);
+    durableWaveRef.current = Boolean(session);
+    isWaveSessionRef.current = true;
+    autoplayAfterQueueRef.current = true;
+    setAutoplayEnabled(true);
+    removedQueueIdsRef.current.clear();
+    unshuffledRef.current = null;
+    setShuffleEnabled(false);
+    undoRef.current = null;
+    setQueueUndo(null);
+    collectionTrackIdsRef.current = [];
+  }, []);
+
+  const tryWaveTrack = useCallback(async (track, { offlineOnly = false } = {}) => {
+    const selection = {};
+    pendingWaveSelectionRef.current = selection;
+    try {
+      setCurrentTrack(track);
+      const playback = loadAndPlay(track, 'wave', { offlineOnly });
+      const requestId = currentRequestIdRef.current;
+      const result = await playback;
+      return requestId === currentRequestIdRef.current ? result : { superseded: true };
+    } finally {
+      if (pendingWaveSelectionRef.current === selection) pendingWaveSelectionRef.current = null;
+    }
+  }, [loadAndPlay, setCurrentTrack]);
+
+  const advanceLocalWave = useCallback(async ({
+    session, valid, current, future = [], previous, exclude = [], restart = false,
+  }) => {
+    const { tracks, reserveIds } = await selectLocalWaveTracks(session, {
+      current: restart ? null : current,
+      future, history: previous, exclude: restart ? exclude : [...exclude, ...removedQueueIdsRef.current],
     });
-    const played = new Set();
-    for (const [mode, tracks] of [['reserve', reserve], ['library', library]]) {
-      for (const track of tracks) {
+    const manualIds = new Set(future.filter((track) =>
+      !recommendationsRef.current.has(queueKey(track)),
+    ).map((track) => String(getTrackId(track))));
+    for (const [index, track] of tracks.entries()) {
+      if (!valid()) return false;
+      const trackId = String(getTrackId(track));
+      if (dislikeIdsRef.current.has(trackId)) continue;
+      const next = normalizeTrackDto(track);
+      if (!next) continue;
+      const result = await tryWaveTrack(next, { offlineOnly: true });
+      if (!valid({ allowIntentChange: true }) || result?.superseded) return false;
+      if (result?.error) {
         if (!valid()) return false;
-        const trackId = getTrackId(track);
-        if (played.has(String(trackId)) || dislikeIdsRef.current.has(String(trackId))) continue;
-        played.add(String(trackId));
-        setWaveMode(mode);
-        const next = normalizeTrackDto(track);
-        const selection = {};
-        localSelectionRef.current = selection;
-        setCurrentTrack(next);
-        let result;
-        try {
-          result = await loadAndPlay(next, 'wave', { offlineOnly: true });
-        } finally {
-          if (localSelectionRef.current === selection) localSelectionRef.current = null;
-        }
-        if (!valid() || result?.superseded) return false;
-        if (result?.error) continue;
-        if (mode === 'reserve') {
-          const position = queueRef.current.findIndex(item => areTrackIdsEqual(item, track));
-          if (position >= 0) setUpNextQueue(queueRef.current.slice(position + 1));
-        } else if (queueRef.current === planned && planned.length) {
-          setUpNextQueue([]);
-        }
-        if (current && !areTrackIdsEqual(current, track))
-          setHistory([...previous, current].slice(-MAX_HISTORY));
-        saveCurrentWave();
-        return true;
+        continue;
       }
+      const queue = tracks.slice(index + 1)
+        .filter((item) => !dislikeIdsRef.current.has(String(getTrackId(item))))
+        .slice(0, Math.max(LOCAL_WAVE_BATCH_SIZE, future.length) - 1)
+        .map(normalizeTrackDto).filter(Boolean);
+      if (restart) beginWaveSession(session);
+      awaitingRecommendationsRef.current = true;
+      const mode = reserveIds.has(trackId) ? 'reserve' : 'library';
+      setWaveMode(mode);
+      setUpNextQueue(queue);
+      recommendationsRef.current = new Set(queueRef.current.filter((item) =>
+        !manualIds.has(String(getTrackId(item))),
+      ).map(queueKey));
+      if (restart) cycleTracksRef.current = [next, ...queue];
+      setHistory(!restart && current ? [...previous, current].slice(-MAX_HISTORY) : previous);
+      saveCurrentWave();
+      return true;
     }
     if (valid()) {
-      if (played.size && current) setCurrentTrack(current);
+      if (currentTrackRef.current !== current) setCurrentTrack(current);
       setWaveMode('empty');
     }
     return false;
-  }, [loadAndPlay, saveCurrentWave, setCurrentTrack, setUpNextQueue, setHistory, setWaveMode]);
+  }, [beginWaveSession, tryWaveTrack, saveCurrentWave, setCurrentTrack, setUpNextQueue, setHistory, setWaveMode]);
 
   const fetchNextTrack = useCallback(
     async ({ finished = false, forceLocal = false } = {}) => {
@@ -1294,8 +1345,8 @@ export default function usePlayerController({ setTracks }) {
       const epoch = queueEpochRef.current;
       const transition = transitionEpochRef.current;
       const session = getOfflineSession();
-      const valid = () => epoch === queueEpochRef.current &&
-        transition === transitionEpochRef.current && isOfflineSessionCurrent(session);
+      const valid = ({ allowIntentChange = false } = {}) => epoch === queueEpochRef.current &&
+        (allowIntentChange || transition === transitionEpochRef.current) && isOfflineSessionCurrent(session);
       const advanceLocal = (exclude = []) => advanceLocalWave({
         session, valid, current: currentTrack, future: queueRef.current, previous: history, exclude,
       });
@@ -1417,7 +1468,7 @@ export default function usePlayerController({ setTracks }) {
     if (!durableWaveRef.current || waveModeRef.current === 'empty' || state?.status !== 'error' ||
         state.error?.holdTrack ||
         state.requestId !== currentRequestIdRef.current || waveErrorRef.current === state.requestId ||
-        isAdvancingRef.current || localSelectionRef.current) return;
+        isAdvancingRef.current || pendingWaveSelectionRef.current) return;
     waveErrorRef.current = state.requestId;
     // A terminal source failure ends this episode without a listening outcome.
     playbackEpisodeRef.current = null;
@@ -1864,80 +1915,87 @@ export default function usePlayerController({ setTracks }) {
   const startWave = useCallback(async () => {
     if (!mountedRef.current) return;
     const epoch = ++queueEpochRef.current;
+    queueRequestRef.current?.controller.abort();
     const transition = transitionEpochRef.current;
     const session = getOfflineSession();
     const previous = historyRef.current;
     const formerTrack = currentTrackRef.current;
-    const valid = () => mountedRef.current && epoch === queueEpochRef.current &&
-      transition === transitionEpochRef.current && (!session || isOfflineSessionCurrent(session));
+    const valid = ({ allowIntentChange = false } = {}) => mountedRef.current &&
+      epoch === queueEpochRef.current && (allowIntentChange || transition === transitionEpochRef.current) &&
+      (!session || isOfflineSessionCurrent(session));
     isAdvancingRef.current = true;
     setIsLoading(true);
     try {
-      const snapshot = session ? await readWaveQueue(session) : null;
-      if (!valid()) return;
-      const dislikes = session ? await getLocalDislikeIds(session) : dislikeIdsRef.current;
-      if (!valid()) return;
-      let first = snapshot?.current ? normalizeTrackDto(snapshot.current) : null;
-      if (first && dislikes.has(String(getTrackId(first)))) first = null;
-      const online = canRequestWave();
-      if (!first && online) {
-        try {
-          const data = await requestWave(buildWaveQueueUrl(
-            'random', { excludeIds: [...dislikes] }, 'next',
-          ));
-          if (!valid()) return;
-          first = normalizeTrackDto(data);
-          if (!first || dislikes.has(String(getTrackId(first)))) throw new Error('Invalid Wave track');
-        } catch {
-          if (valid()) {
-            waveRetryAtRef.current = Date.now() + WAVE_RETRY_DELAY;
-            awaitingRecommendationsRef.current = true;
-          }
-          first = null;
-        }
-      }
+      const [snapshot, dislikes] = session
+        ? await Promise.all([readWaveQueue(session), getLocalDislikeIds(session)])
+        : [null, dislikeIdsRef.current];
       if (!valid()) return;
 
-      const newSession = 'wave_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-      sessionIdRef.current = newSession;
-      setPlaybackSessionId(newSession);
-      durableWaveRef.current = Boolean(session);
-      isWaveSessionRef.current = true;
-      autoplayAfterQueueRef.current = true;
-      setAutoplayEnabled(true);
-      removedQueueIdsRef.current.clear();
-      unshuffledRef.current = null;
-      setShuffleEnabled(false);
-      undoRef.current = null;
-      setQueueUndo(null);
-      collectionTrackIdsRef.current = [];
-      const future = (snapshot?.future || []).map(normalizeTrackDto).filter(Boolean);
-      const played = snapshot?.history || (formerTrack ? [...previous, formerTrack].slice(-MAX_HISTORY) : previous);
-      setHistory(played);
-      setUpNextQueue(future);
-      recommendationsRef.current = new Set(future.map(queueKey));
-      const useNetwork = canRequestWave();
-      if (first && (useNetwork || await readMediaKey(session, getTrackId(first)))) {
+      const recent = new Map();
+      for (const track of [...(snapshot?.history || []), snapshot?.current, ...previous, formerTrack]) {
+        const trackId = getTrackId(track);
+        if (trackId === null) continue;
+        const key = String(trackId);
+        recent.delete(key);
+        recent.set(key, track);
+      }
+      const played = [...recent.values()].slice(-MAX_HISTORY);
+      let failedTrack;
+      if (canRequestWave({ ignoreBackoff: true })) {
+        const controller = new AbortController();
+        const request = { epoch, controller };
+        queueRequestRef.current = request;
+        let data;
+        try {
+          data = await requestWave(buildWaveQueueUrl(null, {
+            excludeIds: [...dislikes, ...played.map(getTrackId)],
+          }), controller.signal);
+        } catch {
+          // Local playback also covers a network or server failure.
+        } finally {
+          if (queueRequestRef.current === request) queueRequestRef.current = null;
+        }
         if (!valid()) return;
-        setWaveMode(useNetwork ? 'online' : 'reserve');
-        cycleTracksRef.current = [first, ...future];
-        setCurrentTrack(first);
-        const result = await loadAndPlay(first, 'wave', { offlineOnly: !useNetwork });
-        if (!valid()) return;
-        if (!result?.error) {
-          saveCurrentWave();
-          if (useNetwork) fetchQueue(getTrackId(first), {
-            excludeIds: played.map(getTrackId), queuedIds: future.map(getTrackId),
-          });
-          return;
+        if (Array.isArray(data) && canRequestWave({ ignoreBackoff: true })) {
+          const lastPlayed = new Map(played.map((track, index) => [String(getTrackId(track)), index]));
+          const candidates = mergeUniqueQueue([], data.map(normalizeTrackDto).filter((track) => {
+            const id = String(getTrackId(track));
+            return track && !dislikes.has(id) && !dislikeIdsRef.current.has(id);
+          }));
+          // The server may return recent tracks after it runs out of other candidates.
+          candidates.sort((a, b) => (lastPlayed.get(String(getTrackId(a))) ?? -1) -
+            (lastPlayed.get(String(getTrackId(b))) ?? -1));
+          const [first, ...future] = candidates;
+          if (first) {
+            const result = await tryWaveTrack(first);
+            if (!valid({ allowIntentChange: true }) || result?.superseded) return;
+            if (!result?.error) {
+              beginWaveSession(session);
+              waveRetryAtRef.current = 0;
+              awaitingRecommendationsRef.current = false;
+              setWaveMode(canRequestWave() ? 'online' : 'reserve');
+              setHistory(played);
+              setUpNextQueue(future);
+              recommendationsRef.current = new Set(queueRef.current.map(queueKey));
+              cycleTracksRef.current = [first, ...future];
+              saveCurrentWave();
+              return;
+            }
+            if (!valid()) return;
+            failedTrack = first;
+          }
         }
         waveRetryAtRef.current = Date.now() + WAVE_RETRY_DELAY;
-        awaitingRecommendationsRef.current = true;
       }
-      if (session && valid()) await advanceLocalWave({
-        session, valid, current: snapshot?.current || formerTrack, future, previous: played,
-        exclude: first ? [first] : [],
-      });
+      if (session) {
+        const started = await advanceLocalWave({
+          session, valid, current: formerTrack, previous: played, restart: true,
+          exclude: failedTrack ? [failedTrack] : [],
+        });
+        if (started && canRequestWave()) refreshWaveAfterAdvanceRef.current = true;
+      } else if (failedTrack) {
+        setCurrentTrack(formerTrack);
+      }
     } catch (error) {
       if (valid()) console.warn('Failed to start wave:', error.message);
     } finally {
@@ -1947,7 +2005,7 @@ export default function usePlayerController({ setTracks }) {
         if (refreshWaveAfterAdvanceRef.current) refreshFutureWave();
       }
     }
-  }, [advanceLocalWave, canRequestWave, fetchQueue, loadAndPlay, refreshFutureWave, saveCurrentWave, setCurrentTrack, setHistory, setUpNextQueue, setWaveMode]);
+  }, [advanceLocalWave, beginWaveSession, canRequestWave, tryWaveTrack, refreshFutureWave, saveCurrentWave, setCurrentTrack, setHistory, setUpNextQueue, setWaveMode]);
 
   const dismissPlayer = useCallback(async () => {
     completePlayback(playbackEpisodeRef.current, 'skip');

@@ -9,8 +9,9 @@ import { authFetch } from '../../shared/api/api';
 import { updateSetting } from '../../shared/storage/settings';
 import { recordPlayStart } from '../../shared/api/artists';
 import { setLocalRating } from '../../offline/outbox/runtime';
+import { readMediaKey } from '../../offline';
 import { notifyOfflineIndex } from '../../offline/session';
-import { readWaveQueue, selectLocalWaveTracks } from '../../offline/wave';
+import { readWaveQueue, saveWaveQueue, selectLocalWaveTracks } from '../../offline/wave';
 import { queueKey } from '../../utils/queueIdentity';
 
 const mockSession = { owner: { userId: 1, origin: 'https://puuk.app' }, activationId: 'a', generation: 1 };
@@ -26,12 +27,18 @@ jest.mock('../../offline/session', () => ({
   },
 }));
 jest.mock('../../offline/wave', () => ({
+  LOCAL_WAVE_BATCH_SIZE: 12,
   readWaveQueue: jest.fn(async () => null),
   saveWaveQueue: jest.fn(async () => true),
-  selectLocalWaveTracks: jest.fn(async () => ({ reserve: [], library: [] })),
+  selectLocalWaveTracks: jest.fn(),
   setWavePlaybackMode: jest.fn(),
   waveTrackDuration: track => track.duration || 0,
 }));
+jest.mock('../../offline', () => ({
+  ...jest.requireActual('../../offline'),
+  readMediaKey: jest.fn(async () => null),
+}));
+const isWaveStart = (url) => url.includes('/api/wave/queue') && !url.includes('current_track_id=');
 jest.mock('../../offline/outbox/runtime', () => ({
   startOutboxSync: () => () => {},
   getRatingOverlay: jest.fn(async () => [...mockOfflineRatings.values()]),
@@ -188,7 +195,7 @@ describe('usePlayerController', () => {
     getNetworkStateAsync.mockResolvedValue({ isConnected: true, type: 'WIFI' });
     await getNetworkPolicy();
     readWaveQueue.mockResolvedValue(null);
-    selectLocalWaveTracks.mockResolvedValue({ reserve: [], library: [] });
+    selectLocalWaveTracks.mockResolvedValue({ tracks: [], reserveIds: new Set() });
     setLocalRating.mockImplementation(async (session, track, rating) => {
       const trackId = String(track.id);
       const revision = (mockOfflineRatings.get(trackId)?.revision || 0) + 1;
@@ -1010,47 +1017,88 @@ describe('usePlayerController', () => {
     expect(mockPlayerInstance.pause).toHaveBeenCalled();
   });
 
-  test('startWave fetches wave track and starts wave recommendation session', async () => {
-    authFetch.mockImplementation(async (url) => {
-      if (url.includes('/api/wave/next')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            id: 999,
-            title: 'Wave Song',
-            artist: 'Wave Artist',
-          }),
-        };
-      }
-      if (url.includes('/api/wave/queue')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => [
-            { id: 1001, title: 'Rec 1' },
-            { id: 1002, title: 'Rec 2' },
-          ],
-        };
-      }
-      return { ok: true, status: 200, json: async () => ({}) };
-    });
+  test('each Wave launch requests a new online queue and avoids restarting the last track', async () => {
+    const current = { id: 'saved-current' };
+    const old = { id: 'saved-future' };
+    const a = { id: 'a', duration: 3600 };
+    const b = { id: 'b', duration: 3600 };
+    const c = { id: 'c', duration: 3600 };
+    readWaveQueue.mockResolvedValue({ current, future: [old], history: [] });
+    const batches = [[current, a, b], [a, c, b]];
+    authFetch.mockImplementation(async (url) => ({
+      ok: true,
+      json: async () => isWaveStart(url) ? batches.shift() : [],
+    }));
+    await act(async () => controller.startWave());
+    expect(controller.currentTrack.id).toBe(a.id);
+    expect(queueIds()).toEqual([b.id, current.id]);
 
+    await act(async () => controller.startWave());
+    expect(controller.currentTrack.id).toBe(c.id);
+    expect(queueIds()).toEqual([b.id, a.id]);
+    const requests = authFetch.mock.calls.map(([url]) => url).filter(isWaveStart);
+    expect(requests).toHaveLength(2);
+    expect(new URL(requests[0], 'https://puuk.app').searchParams.getAll('exclude_track_ids')).toEqual([current.id]);
+    expect(new URL(requests[1], 'https://puuk.app').searchParams.getAll('exclude_track_ids')).toEqual([current.id, a.id]);
+  });
+
+  test('offline launch uses recent plays for a fresh queue while Play resumes the saved session', async () => {
+    const current = { id: 'saved' };
+    const old = { id: 'old' };
+    const a = { id: 'a' };
+    const b = { id: 'b' };
+    const snapshot = { current, future: [old], history: [], localFuture: true };
+    readWaveQueue.mockResolvedValue(snapshot);
+    await act(async () => { await controller.restoreSavedWave(mockSession, current); });
+    expect(saveWaveQueue).toHaveBeenLastCalledWith(mockSession, expect.any(Object), { updateReserve: false });
+    getNetworkStateAsync.mockResolvedValue({ isConnected: false, type: 'NONE' });
+    await act(async () => getNetworkPolicy());
+    readMediaKey.mockResolvedValueOnce({ trackId: current.id });
+    await act(async () => controller.togglePlayPause());
+    expect(defaultPlaybackCoordinator.play.mock.lastCall[1].id).toBe(current.id);
+    expect(queueIds()).toEqual([old.id]);
+    expect(selectLocalWaveTracks).not.toHaveBeenCalled();
+
+    selectLocalWaveTracks
+      .mockResolvedValueOnce({ tracks: [a, b], reserveIds: new Set([a.id]) })
+      .mockResolvedValueOnce({ tracks: [b, current], reserveIds: new Set() });
+    await act(async () => controller.startWave());
+    expect(controller.currentTrack.id).toBe(a.id);
+    expect(queueIds()).toEqual([b.id]);
+    await act(async () => controller.startWave());
+    expect(controller.currentTrack.id).toBe(b.id);
+    expect(queueIds()).toEqual([current.id]);
+    expect(authFetch.mock.calls.some(([url]) => url.includes('/wave/queue'))).toBe(false);
+    expect(selectLocalWaveTracks).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({
+      current: null,
+      future: [],
+      history: [expect.objectContaining({ id: current.id }), expect.objectContaining({ id: a.id })],
+    }));
+    expect(saveWaveQueue).toHaveBeenLastCalledWith(mockSession, expect.objectContaining({
+      current: expect.objectContaining({ id: b.id }),
+    }), { updateReserve: false });
+  });
+
+  test('pausing the selected track during Wave startup keeps its new queue', async () => {
+    authFetch.mockResolvedValue({ ok: true, json: async () => [{ id: 'first' }, { id: 'next', duration: 3600 }] });
+    let ready;
+    defaultPlaybackCoordinator.play.mockImplementationOnce(() => new Promise((resolve) => { ready = resolve; }));
+    let start;
+    await act(async () => { start = controller.startWave(); });
+    await act(async () => controller.togglePlayPause());
+    expect(defaultPlaybackCoordinator.setIntent.mock.lastCall[1].type).toBe('pause');
     await act(async () => {
-      await controller.startWave();
+      ready({ uri: 'mock://stream' });
+      await start;
     });
-
-    expect(controller.currentTrack.id).toBe(999);
-    // upNextQueue should receive the wave recommendations
-    expect(controller.upNextQueue.length).toBe(2);
-    expect(controller.upNextQueue[0].id).toBe(1001);
+    expect(controller.currentTrack.id).toBe('first');
+    expect(queueIds()).toEqual(['next']);
   });
 
   test('dislike advances the wave and does not affect a track selected during the request', async () => {
     authFetch.mockImplementation(async (url) => ({
       ok: true,
-      json: async () => url.includes('/wave/next') ? { id: 999 } :
-        url.includes('/wave/queue') ? [{ id: 1001 }, { id: 1002 }] : [],
+      json: async () => isWaveStart(url) ? [{ id: 999 }, { id: 1001 }, { id: 1002 }] : [],
     }));
     await act(async () => controller.startWave());
     await act(async () => controller.handleToggleDislike(controller.currentTrack));
@@ -1074,7 +1122,7 @@ describe('usePlayerController', () => {
     let candidates = [{ id: 'old' }];
     authFetch.mockImplementation(async (url) => ({
       ok: true,
-      json: async () => url.includes('/wave/next') ? { id: 'now' } : candidates,
+      json: async () => isWaveStart(url) ? [{ id: 'now' }, ...candidates] : candidates,
     }));
     await act(async () => controller.startWave());
     await act(async () => controller.queueControls.enqueue({ id: 'manual' }));
@@ -1102,10 +1150,9 @@ describe('usePlayerController', () => {
       json: async () => [],
     }));
     selectLocalWaveTracks
-      .mockResolvedValueOnce({ reserve: [{ id: 'wave-ready' }], library: [] })
-      .mockResolvedValueOnce({ reserve: [], library: [{ id: 'downloaded' }] });
+      .mockResolvedValueOnce({ tracks: [{ id: 'wave-ready' }, { id: 'downloaded' }], reserveIds: new Set(['wave-ready']) })
+      .mockResolvedValueOnce({ tracks: [{ id: 'downloaded' }], reserveIds: new Set() });
     await act(async () => controller.startWave());
-    await act(async () => controller.fetchNextTrack({ finished: true }));
     expect(controller.currentTrack.id).toBe('wave-ready');
     expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).toMatchObject({ offlineOnly: true });
     await act(async () => controller.fetchNextTrack({ finished: true }));
@@ -1129,11 +1176,10 @@ describe('usePlayerController', () => {
     const current = { id: 'offline-now' };
     const ready = { id: 'offline-next', duration: 3600 };
     const fresh = { id: 'recommended-after-drain', duration: 3600 };
-    readWaveQueue.mockResolvedValue({ current, future: [ready], history: [] });
     let reconciled = false;
     authFetch.mockImplementation(async (path) => ({
       ok: true,
-      json: async () => path.includes('/wave/queue') ? (reconciled ? [fresh] : []) : {},
+      json: async () => isWaveStart(path) ? [current, ready] : reconciled ? [fresh] : [],
     }));
     await act(async () => controller.startWave());
     const plays = defaultPlaybackCoordinator.play.mock.calls.length;
@@ -1146,7 +1192,7 @@ describe('usePlayerController', () => {
     expect(authFetch.mock.calls.some(([path]) => path.includes('/wave/queue'))).toBe(false);
     expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays);
 
-    selectLocalWaveTracks.mockResolvedValueOnce({ reserve: [ready], library: [] });
+    selectLocalWaveTracks.mockResolvedValueOnce({ tracks: [ready], reserveIds: new Set([ready.id]) });
     await act(async () => controller.fetchNextTrack({ finished: true }));
     expect(controller.currentTrack.id).toBe(ready.id);
     expect(defaultPlaybackCoordinator.play.mock.lastCall[2]).toMatchObject({ offlineOnly: true });
@@ -1165,14 +1211,14 @@ describe('usePlayerController', () => {
   test('late initial wave response cannot replace a collection', async () => {
     let resolveWave;
     authFetch.mockImplementation(async (url) => {
-      if (url.includes('/api/wave/next')) return new Promise((resolve) => { resolveWave = resolve; });
+      if (isWaveStart(url)) return new Promise((resolve) => { resolveWave = resolve; });
       return { ok: true, status: 200, json: async () => ({}) };
     });
     let start;
     await act(async () => { start = controller.startWave(); });
     await act(async () => { controller.playTrackList([{ id: 10 }, { id: 11 }]); });
     await act(async () => {
-      resolveWave({ ok: true, json: async () => ({ id: 99 }) });
+      resolveWave({ ok: true, json: async () => [{ id: 99 }] });
       await start;
     });
     expect(controller.currentTrack.id).toBe(10);
@@ -1186,11 +1232,11 @@ describe('usePlayerController', () => {
     });
 
     authFetch.mockImplementation(async (url) => {
-      if (url.includes('/api/wave/next')) {
+      if (isWaveStart(url)) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ id: 50, title: 'Wave 50' }),
+          json: async () => [{ id: 50, title: 'Wave 50' }, { id: 49 }],
         };
       }
       if (url.includes('/api/wave/queue')) {
@@ -1206,8 +1252,9 @@ describe('usePlayerController', () => {
 
     // 1. User starts wave
     await act(async () => {
-      controller.startWave();
+      await controller.startWave();
     });
+    expect(authFetch.mock.calls.some(([url]) => url.includes('current_track_id=50'))).toBe(true);
 
     // 2. User quickly switches to a manual album playlist before wave response arrives
     const albumList = [

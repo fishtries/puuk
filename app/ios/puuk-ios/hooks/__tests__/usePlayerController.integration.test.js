@@ -32,6 +32,7 @@ jest.mock('../../offline/outbox/runtime', () => ({
   recordOutcome: jest.fn().mockResolvedValue(),
 }));
 jest.mock('../../offline/wave', () => ({
+  LOCAL_WAVE_BATCH_SIZE: 12,
   readWaveQueue: jest.fn(),
   selectLocalWaveTracks: jest.fn(),
   waveTrackDuration: (track) => track.duration || 0,
@@ -287,10 +288,7 @@ describe('usePlayerController with accepted real coordinator', () => {
   });
 
   test('Wave keeps the interrupted stream selected until the listener skips', async () => {
-    const { readWaveQueue } = require('../../offline/wave');
-    readWaveQueue.mockResolvedValueOnce({
-      current: track('A'), future: [track('B')], history: [],
-    });
+    authFetch.mockResolvedValueOnce({ ok: true, json: async () => [track('A'), track('B')] });
     await act(async () => { await controller.startWave(); await flush(); });
     await progress(3);
     await advance(180000);
@@ -315,9 +313,9 @@ describe('usePlayerController with accepted real coordinator', () => {
   });
 
   test('terminal Wave fallback keeps the confirmed start and closes the failed listening episode without an outcome', async () => {
-    const { readWaveQueue, selectLocalWaveTracks } = require('../../offline/wave');
-    readWaveQueue.mockResolvedValueOnce({ current: track('A'), future: [], history: [] });
-    selectLocalWaveTracks.mockResolvedValueOnce({ reserve: [track('B')], library: [] });
+    const { selectLocalWaveTracks } = require('../../offline/wave');
+    authFetch.mockResolvedValueOnce({ ok: true, json: async () => [track('A')] });
+    selectLocalWaveTracks.mockResolvedValueOnce({ tracks: [track('B')], reserveIds: new Set(['B']) });
     mockAcquirePlayable.mockImplementation(async (_session, id) =>
       id === 'B' ? { uri: 'file:///B', release() {} } : null,
     );

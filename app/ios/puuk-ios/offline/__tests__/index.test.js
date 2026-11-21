@@ -7,6 +7,7 @@ import {
 import { readOfflineWaveStatus, readWaveQueue, saveWaveQueue, selectLocalWaveTracks, startOfflineWave, WAVE_REASON } from '../wave';
 import { listRetentionReasons, reconcileRetention, setRetentionReason } from '../collections';
 import { setLocalRating } from '../outbox/runtime';
+import { offlineDatabase } from '../storage';
 import { fetch as downloadFetch } from 'expo/fetch';
 import { mediaDelivery } from '../../shared/api/media';
 import { saveFavoriteOffline } from '../foreground';
@@ -991,13 +992,47 @@ test('Wave cold restore reopens SQLite, retains exact queue position and exclude
   const status = await readOfflineWaveStatus(restored);
   expect(status).toMatchObject({ readySeconds: 150, readyMinutes: 2.5, targetMinutes: 60, upcomingCount: 2 });
   const local = await selectLocalWaveTracks(restored, snapshot);
-  expect(local.reserve.map(dto => dto.id)).toEqual([ready.id]);
-  expect(local.library.map(dto => dto.id)).toEqual([fresh.id, ready.id, played.id]);
+  expect(local.reserveIds.has(ready.id)).toBe(true);
+  expect(local.tracks.map(dto => dto.id)).toEqual([ready.id, fresh.id, played.id]);
   const alternate = await login('wave-other', { ...session.owner, userId: '22' }, 3);
   expect(await readWaveQueue(alternate)).toBeNull();
   expect(await readOfflineWaveStatus(restored)).toBeNull();
   expect(await saveWaveQueue(restored, snapshot)).toBe(false);
-  expect(await selectLocalWaveTracks(alternate, snapshot)).toEqual({ reserve: [], library: [] });
+  expect(await selectLocalWaveTracks(alternate, snapshot)).toEqual({ tracks: [], reserveIds: new Set() });
+});
+
+test('fresh offline Wave uses verified tracks and local ratings while keeping the download plan through restart', async () => {
+  const session = await login('wave-new-queue', { origin: 'https://new-wave.test', userId: '11' });
+  const last = { id: 'last', artist: 'A', duration: 180 };
+  const a = { id: '4842d018-b4e4-4217-8fba-3ec1c6b36693', artist: 'A', duration: 180 };
+  const b = { id: '636bc145-7693-48fc-b6e7-8d44efb72b43', artist: 'B', duration: 180 };
+  const c = { id: 'another-a', artist: 'A', duration: 180 };
+  const disliked = { id: '7a9c3226-3d42-4b07-90e5-143f8dd4d698', duration: 180 };
+  const pending = { id: 'pending-file', duration: 180 };
+  for (const dto of [last, a, b, c, disliked]) await publishTrack(session, dto);
+  await setLocalRating(session, a, 'like');
+  await setLocalRating(session, b, 'like');
+  await setLocalRating(session, disliked, 'dislike');
+  await saveWaveQueue(session, { current: last, future: [a, c, disliked, pending], history: [] });
+  // Simulate an installation whose existing snapshot predates the separate reserve.
+  (await offlineDatabase()).runSync('DELETE FROM wave_reserve');
+  const local = await selectLocalWaveTracks(session, { history: [last] });
+  expect(local.tracks.map(dto => dto.id)).toEqual([b.id, a.id, c.id, last.id]);
+  await saveWaveQueue(session, {
+    current: b, future: [a, c, last], history: [last],
+  }, { updateReserve: false });
+
+  closeOfflineSession();
+  await new Promise(resolve => setImmediate(resolve));
+  mockReopenDatabase();
+  const restored = await login(session.activationId, session.owner, 2);
+  const snapshot = await readWaveQueue(restored);
+  expect(snapshot.current.id).toBe(b.id);
+  expect(snapshot.localFuture).toBe(true);
+  expect(snapshot.future.map(dto => dto.id)).toEqual([a.id, c.id, last.id]);
+  expect(snapshot.reserve.map(dto => dto.id)).toEqual([a.id, c.id, disliked.id, pending.id]);
+  const newWave = await selectLocalWaveTracks(restored, { history: [...snapshot.history, snapshot.current] });
+  expect(newWave.tracks.map(dto => dto.id)).toEqual([a.id, c.id, last.id, b.id]);
 });
 
 test('storage admission releases abandoned activations only after their native operation is gone', async () => {
