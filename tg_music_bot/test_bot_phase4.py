@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import shutil
@@ -10,12 +11,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import test_db_path  # noqa: F401 — изолирует тестовую БД и отключает доставку в рабочий Qdrant
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 import db
 from api import app
 from bot import get_puuk_user, is_user_allowed, generate_otp_code, index_downloaded_tracks
+from telegram_imports import TelegramImports
 
 class TestPhase4TelegramBot(unittest.TestCase):
     @classmethod
@@ -254,6 +257,35 @@ class TestPhase4TelegramBot(unittest.TestCase):
             conn.cursor().execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         conn.commit()
         conn.close()
+
+    def test_08_import_handlers_receive_the_linked_account(self):
+        async def verify(imports):
+            message = SimpleNamespace(
+                from_user=SimpleNamespace(id=self.tg_id),
+                chat=SimpleNamespace(id=self.tg_id),
+                message_id=1,
+                reply_to_message=None,
+                answer=AsyncMock(return_value=SimpleNamespace(message_id=2)),
+            )
+            self.assertEqual(imports.mode(self.tg_id, 'chat'), 'chat')
+            self.assertIsNone(imports._linked_owner(self.tg_id, self.user_id + 1))
+            await imports.downloads(message)
+            message.answer.assert_awaited_once_with(
+                'Незавершённых загрузок нет.', reply_markup=None, disable_notification=True,
+            )
+            message.answer.reset_mock()
+            command = SimpleNamespace(command='puuk', args='https://open.spotify.com/track/' + 'a' * 22)
+            await imports.override(message, command)
+            message.answer.assert_awaited_once_with('⏳ В очереди', disable_notification=True)
+            job, = imports.jobs.outstanding(self.tg_id, self.user_id)
+            self.assertEqual(job['owner_id'], self.user_id)
+            self.assertEqual(job['mode'], 'server')
+            self.assertEqual(job['status_message'], 2)
+            self.assertEqual(imports.mode(self.tg_id), 'chat')
+
+        with tempfile.TemporaryDirectory() as state:
+            imports = TelegramImports(None, get_puuk_user, os.path.join(state, 'queue.db'), state)
+            asyncio.run(verify(imports))
 
     @classmethod
     def tearDownClass(cls):

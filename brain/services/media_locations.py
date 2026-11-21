@@ -213,6 +213,12 @@ def ingest_music_file(file_path, *, source, expected_track_id=None, payload=None
                         if canonical!=planned:
                             raise sqlite3.IntegrityError('identity_changed')
                         previous=db.get_track(canonical,conn=conn)
+                        if (previous and previous['file_path'] == rel_path
+                                and previous['file_size'] == current.st_size
+                                and previous['file_mtime_ns'] == current.st_mtime_ns
+                                and conn.execute('SELECT 1 FROM telegram_track_imports WHERE track_id=?',
+                                                 (canonical,)).fetchone()):
+                            return previous
                         album_id=resolve_import_album(canonical,meta.album,meta.album_artist,year=meta.year,
                             artist_source=payload_artist_source(payload,'album_artists') if payload else audio_artist_source(meta,album=True),conn=conn) if meta.album else None
                         db.add_or_update_track(canonical,rel_path,meta.title,album_id,meta.artist,meta.lyrics,

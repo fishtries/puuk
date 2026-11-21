@@ -172,6 +172,18 @@ def update_track_metadata(track_id: str, payload: TrackEditPayload, request: Req
     return {"status": "success", "message": "File and database updated successfully", "track": updated_track}
 
 
+class RecordingReviewPayload(BaseModel):
+    revision: str = Field(max_length=100)
+
+
+@router.post("/tracks/{track_id}/recording-review")
+def review_recording(track_id: str, payload: RecordingReviewPayload,
+                     current_user: dict = Depends(get_current_user)):
+    from repositories.recording_reviews import request
+
+    return {"status": request(track_id, current_user['id'], payload.revision)}
+
+
 @router.post("/tracks/{track_id}/resync")
 def resync_track(track_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Idempotent reconciliation of track metadata from disk to SQLite."""

@@ -36,11 +36,14 @@ def serialize_track(r: Dict[str, Any], base_url: str, fav_ids: Optional[Set[str]
     artist_id = r.get("artist_id")
 
     from repositories.delivery import get_version
+    from repositories.recording_reviews import revision
     version = get_version(track_id)
     return {
         "share_id": track_id,
         "album_share_id": str(r['album_id']) if r.get('album_id') is not None else None,
         "content_version": version['content_version'] if version and version['state'] == 'ready' else None,
+        "audio_revision": revision(r),
+        "audio_unavailable": bool(r.get('audio_review_blocked')),
         "id": track_id,
         "title": r.get("title", ""),
         "artist": r.get("artist", ""),

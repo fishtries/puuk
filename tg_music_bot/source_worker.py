@@ -5,7 +5,7 @@ results as a fallback. JSON result is written
 atomically after the downloaded bytes pass the duration check.
 """
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import logging
 from pathlib import Path
@@ -17,6 +17,7 @@ from source_selection import (
 )
 
 RECEIPT_TAG = 'PUUK_SOURCE_V1'
+DOWNLOAD_UNAVAILABLE = 'не удалось получить проверенный файл'
 
 
 def candidates_from_results(results):
@@ -40,7 +41,7 @@ def candidates_from_results(results):
     return candidates
 
 
-def find_candidates(song, client):
+def find_candidates(song, client, alternatives=None):
     # ISRC is a search hint, not proof of identity. Every result passes the same
     # title / artist / version / explicit / duration checks.
     queries = []
@@ -62,6 +63,10 @@ def find_candidates(song, client):
             logging.warning('Catalog search failed: %s', type(exc).__name__)
             errors.append('Каталог YouTube Music недоступен')
     ranked, reasons = rank_candidates(song, candidates)
+    if alternatives is not None:
+        alternatives.extend(candidate for candidate in candidates
+                            if without_remaster(candidate.title) != candidate.title
+                            and not assess(song, replace(candidate, title=without_remaster(candidate.title)))[1])
     if not ranked:
         expected_artists = {normalized(a) for a in song['artists']}
         expected_title = normalized(credited_title(song['name'], song['artists']))
@@ -135,7 +140,7 @@ def download_candidate(song, candidate, directory):
     basename = f'{spotify_id}-{candidate.provider}-{candidate.video_id}'
     options = {
         'format': 'bestaudio/best', 'outtmpl': str(directory / (basename + '.%(ext)s')),
-        'noplaylist': True, 'quiet': True, 'no_warnings': True,
+        'noplaylist': True, 'quiet': True, 'no_warnings': True, 'noprogress': True,
         'socket_timeout': 15, 'retries': 2, 'fragment_retries': 2,
         'extractor_retries': 1, 'js_runtimes': {'node': {}},
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '0'}],
@@ -178,6 +183,12 @@ def download_candidate(song, candidate, directory):
         'policy': POLICY_VERSION, 'spotify_url': song['url'].split('?')[0],
         'candidate': asdict(candidate),
     }
+    if song.get('require_audio_match'):
+        from audio_match import matches_excerpt
+
+        if not matches_excerpt(Path(song['reference_audio']), path, song['duration']):
+            raise ValueError('Звук отличается от фрагмента Spotify')
+        receipt['audio_match'] = 'spotify-preview-original-speed'
     tags = ID3(path)
     tags.add(WOAS(url=receipt['spotify_url']))
     tags.add(TXXX(encoding=3, desc=RECEIPT_TAG, text=json.dumps(receipt, ensure_ascii=False)))
@@ -185,11 +196,37 @@ def download_candidate(song, candidate, directory):
     return {**metadata, 'filepath': str(path), 'verified_metadata': metadata, 'source': receipt}
 
 
+def _download_failure(exc):
+    message = str(exc)
+    details = message.casefold()
+    if 'drm protected' in details:
+        return 'запись защищена DRM'
+    if 'not made this video available in your country' in details:
+        return 'запись недоступна в регионе сервера'
+    if 'video unavailable' in details:
+        return 'запись недоступна'
+    return message[:90] if isinstance(exc, ValueError) and message else DOWNLOAD_UNAVAILABLE
+
+
 def download_song(song, directory, *, client=None, download=None, primary=None):
+    if song.get('require_audio_match'):
+        from audio_match import fetch_spotify_preview
+
+        if not song.get('preview_url'):
+            return {'error': 'Spotify не предоставил фрагмент для проверки звука'}
+        reference = Path(directory) / 'spotify-reference.mp3'
+        reference.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fetch_spotify_preview(song['preview_url'], reference)
+        except (OSError, ValueError) as exc:
+            return {'error': 'Не удалось получить фрагмент Spotify для проверки звука',
+                    'temporary': isinstance(exc, OSError)}
+        song = {**song, 'reference_audio': str(reference)}
     download = download or download_candidate
-    errors, reasons = [], []
+    reports, alternatives = [], []
     # Query the reserve catalog only after SoundCloud candidates fail.
-    for provider_round in range(2):
+    for provider_round, provider in enumerate(('SoundCloud', 'YouTube Music')):
+        failures = []
         try:
             if provider_round == 0:
                 candidates, provider_reasons = (primary or find_soundcloud_candidates)(song)
@@ -197,13 +234,16 @@ def download_song(song, directory, *, client=None, download=None, primary=None):
                 if client is None:
                     from ytmusicapi import YTMusic
                     client = YTMusic()
-                candidates, provider_reasons = find_candidates(song, client)
-            reasons.extend(provider_reasons)
+                candidates, provider_reasons = find_candidates(song, client, alternatives)
+                if hint := song.get('release_candidate'):
+                    release = Candidate(**hint)
+                    candidates = [release, *(candidate for candidate in candidates if candidate.video_id != release.video_id)]
         except Exception as exc:
-            provider = 'SoundCloud' if provider_round == 0 else 'YouTube Music'
             logging.warning('%s unavailable: %s', provider, type(exc).__name__)
-            candidates = []
-            reasons.append(f'Каталог {provider} недоступен')
+            reports.append(f'{provider}: каталог недоступен')
+            continue
+        if provider_reasons:
+            logging.info('%s candidate filters: %s', provider, '; '.join(provider_reasons))
         for candidate in candidates[:3]:
             if assess(song, candidate)[1]:
                 continue
@@ -214,9 +254,25 @@ def download_song(song, directory, *, client=None, download=None, primary=None):
                 for partial in Path(directory).glob(f'*-{candidate.provider}-{candidate.video_id}.*'):
                     if partial.is_file():
                         partial.unlink()
-                errors.append('Подходящая запись недоступна или не прошла проверку файла')
-    return {'error': '; '.join(dict.fromkeys(errors + reasons))[:500]
-            or 'Подтверждённая запись не найдена в музыкальных каталогах'}
+                failures.append(_download_failure(exc))
+        if failures:
+            reason = next((failure for failure in failures if failure != DOWNLOAD_UNAVAILABLE),
+                          DOWNLOAD_UNAVAILABLE)
+        elif f'Каталог {provider} недоступен' in provider_reasons:
+            reason = 'каталог недоступен'
+        else:
+            reason = 'нужная версия не найдена'
+        reports.append(f'{provider}: {reason}')
+    result = {'error': '; '.join(reports)}
+    if alternatives and without_remaster(song['name']) == song['name']:
+        candidate = alternatives[0]
+        years = re.findall(r'\b(?:19|20)\d{2}\b', candidate.title)
+        result['alternative'] = {
+            'type': 'direct', 'key': f'{candidate.provider}:{candidate.video_id}',
+            'provider_id': candidate.video_id, 'url': candidate.url, 'title': candidate.title,
+            'album': candidate.album, 'version_label': candidate.title, 'year': years[0] if years else None,
+        }
+    return result
 
 
 def main():

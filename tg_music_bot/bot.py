@@ -5,13 +5,14 @@ import logging
 import asyncio
 import uuid
 import shutil
-import random
+import secrets
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import TelegramMethod
 from aiogram.methods.base import TelegramType
@@ -36,6 +37,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ALLOWED_USERS_STR = os.getenv('ALLOWED_USERS', '')
 POLLING_TIMEOUT = int(os.getenv('TG_POLLING_TIMEOUT', '3'))
+IMPORTS_ENABLED = os.getenv('PUUK_TELEGRAM_IMPORTS') == '1'
+LOCAL_BOT_API = os.getenv('PUUK_TELEGRAM_API_URL')
 
 # Parse allowed users (comma separated IDs)
 try:
@@ -77,7 +80,9 @@ class NetworkDropFilter(logging.Filter):
 
 # Initialize bot and dispatcher
 effective_token = BOT_TOKEN if (BOT_TOKEN and BOT_TOKEN != 'your_bot_token_here') else "1234567890:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-session = ResilientAiohttpSession()
+session = (AiohttpSession(api=TelegramAPIServer.from_base(LOCAL_BOT_API, is_local=True))
+           if IMPORTS_ENABLED and LOCAL_BOT_API else
+           AiohttpSession() if IMPORTS_ENABLED else ResilientAiohttpSession())
 bot = Bot(token=effective_token, session=session)
 dp = Dispatcher()
 
@@ -87,13 +92,14 @@ logging.getLogger("aiogram.dispatcher").addFilter(NetworkDropFilter())
 user_modes = {} # user_id -> 'server' or 'chat'
 MUSIC_DIR = os.getenv('MUSIC_DIR', '/mnt/data/projects/puuk/music')
 download_jobs = None
+imports = None
 
 def get_puuk_user(tg_id: int) -> dict | None:
     """Ищет пользователя Puuk по Telegram ID или fallback в ALLOWED_USERS."""
     user = db.get_user_by_telegram_id(tg_id)
     if user:
         return dict(user)
-    if tg_id in ALLOWED_USERS:
+    if not IMPORTS_ENABLED and tg_id in ALLOWED_USERS:
         admin_user = db.get_user_by_id(1)
         if admin_user:
             return dict(admin_user)
@@ -104,7 +110,7 @@ def is_user_allowed(user_id: int) -> bool:
 
 def generate_otp_code(user_id: int) -> str:
     """Генерирует 6-значный одноразовый код со сроком жизни 5 минут."""
-    code = f"{random.randint(100000, 999999)}"
+    code = str(100000 + secrets.randbelow(900000))
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     db.create_auth_code(user_id, code, expires_at)
     return code
@@ -121,11 +127,14 @@ async def cmd_start(message: Message):
         return
         
     puuk_user = get_puuk_user(message.from_user.id)
-    username = puuk_user.get("username", "пользователь")
+    import html
+    username = html.escape(puuk_user.get("username", "пользователь"))
+    server_label = "В Puuk" if imports else "💾 1. Сохранять на сервер"
+    chat_label = "В Telegram" if imports else "💬 2. Отправлять в чат"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💾 1. Сохранять на сервер", callback_data="mode_server")],
-        [InlineKeyboardButton(text="💬 2. Отправлять в чат", callback_data="mode_chat")],
+        [InlineKeyboardButton(text=server_label, callback_data="mode_server")],
+        [InlineKeyboardButton(text=chat_label, callback_data="mode_chat")],
         [InlineKeyboardButton(text="🔑 3. Получить код для входа (OTP)", callback_data="get_otp")]
     ])
     await message.answer(
@@ -166,6 +175,17 @@ async def cmd_login(message: Message):
 
 @dp.message(Command("help", "помощь", ignore_case=True))
 async def cmd_help(message: Message):
+    if imports:
+        await message.answer(
+            'Пришлите ссылку на трек, альбом или плейлист. Выберите режим ссылок в /start.\n\n'
+            '/tg ссылка — разово отправить записи в чат\n'
+            '/puuk ссылка — разово импортировать в Puuk\n'
+            '/downloads — незавершённые загрузки\n'
+            '/album — собрать альбом из отдельных файлов\n'
+            '/code или /login — код входа\n\n'
+            'MP3, FLAC, M4A и ZIP с альбомом можно прислать для импорта в Puuk.'
+        )
+        return
     await message.answer(
         "👋 <b>Puuk Music Bot — Справка</b>\n\n"
         "🔑 <b>Вход в приложение (iOS / Web):</b>\n"
@@ -207,6 +227,14 @@ async def process_mode_selection(callback: types.CallbackQuery):
         return
         
     mode = callback.data.split('_')[1]
+    if imports:
+        if mode not in {'server', 'chat'}:
+            await callback.answer('Неизвестный режим.', show_alert=True)
+            return
+        imports.mode(callback.from_user.id, mode)
+        await callback.message.edit_text('Режим ссылок · ' + ('В Puuk' if mode == 'server' else 'В Telegram'))
+        await callback.answer()
+        return
     user_modes[callback.from_user.id] = mode
     mode_text = f"Сохранять на сервер ({MUSIC_DIR})" if mode == 'server' else "Отправлять в чат"
     await callback.message.edit_text(
@@ -462,6 +490,9 @@ async def process_sc_selection(callback: types.CallbackQuery):
     if not selection or selection[0] != callback.from_user.id:
         await callback.answer("Поиск устарел. Отправьте название трека ещё раз.", show_alert=True)
         return
+    if imports:
+        await imports.search_selection(callback, selection[1])
+        return
     await callback.message.edit_text("⏳ Начинаю обработку...", reply_markup=None)
     await callback.answer()
     await process_download(callback.from_user.id, callback.message.chat.id, selection[1], callback.message)
@@ -475,6 +506,9 @@ async def process_yt_selection(callback: types.CallbackQuery):
         
     video_id = callback.data[6:]
     url = f"https://www.youtube.com/watch?v={video_id}"
+    if imports:
+        await imports.search_selection(callback, url)
+        return
     
     await callback.message.edit_text("⏳ Начинаю обработку...", reply_markup=None)
     await callback.answer()
@@ -497,6 +531,9 @@ class QueuedStatus:
 
 @dp.message(Command('downloads'))
 async def downloads_status(message: Message):
+    if imports:
+        await imports.downloads(message)
+        return
     if not is_user_allowed(message.from_user.id):
         return
     rows = download_jobs.list_user(message.from_user.id) if download_jobs else []
@@ -508,6 +545,9 @@ async def downloads_status(message: Message):
 
 @dp.message(Command('retry'))
 async def retry_download(message: Message):
+    if imports:
+        await imports.downloads(message)
+        return
     if not is_user_allowed(message.from_user.id):
         return
     parts = message.text.split()
@@ -536,7 +576,10 @@ async def run_download_queue():
             download_jobs.finish(job, error=exc, transient=isinstance(exc, (TimeoutError, RuntimeError, OSError)))
 
 
-@dp.message(F.text)
+@dp.message(F.text.func(lambda text: text and text.strip() and not (IMPORTS_ENABLED and
+            (text.lstrip().startswith(('http://', 'https://')) or
+             text.strip().casefold() == 'готово' or
+             text.split(maxsplit=1)[0].split('@')[0] in {'/tg', '/puuk', '/album'}))))
 async def handle_message(message: Message):
     if not is_user_allowed(message.from_user.id):
         await message.answer(
@@ -599,26 +642,44 @@ async def handle_message(message: Message):
         await status_msg.edit_text("Выберите трек для скачивания:", reply_markup=keyboard)
 
 async def main():
-    global download_jobs
+    global download_jobs, imports
     if not BOT_TOKEN or BOT_TOKEN == 'your_bot_token_here':
         logging.error("BOT_TOKEN is not set correctly in .env file!")
         return
         
     logging.info("Starting bot...")
     try:
-        await bot.set_my_commands([
+        commands = [
             types.BotCommand(command="code", description="🔑 Получить код для входа (OTP)"),
             types.BotCommand(command="login", description="🔑 Войти в приложение Puuk"),
             types.BotCommand(command="start", description="🏠 Главное меню и режимы"),
             types.BotCommand(command="help", description="ℹ️ Справка и команды"),
             types.BotCommand(command="downloads", description="Статус загрузок"),
-            types.BotCommand(command="retry", description="Повторить загрузку: /retry номер"),
-        ])
+        ]
+        if IMPORTS_ENABLED:
+            commands.extend([types.BotCommand(command="tg", description="Отправить ссылку в Telegram"),
+                             types.BotCommand(command="puuk", description="Импортировать ссылку в Puuk"),
+                             types.BotCommand(command="album", description="Собрать альбом из файлов")])
+        else:
+            commands.append(types.BotCommand(command="retry", description="Повторить загрузку: /retry номер"))
+        await bot.set_my_commands(commands)
     except Exception as e:
         logging.warning(f"Failed to set bot commands: {e}")
         
     logging.info(f"Starting polling (polling_timeout={POLLING_TIMEOUT}s)...")
     queue_path = os.getenv('PUUK_DOWNLOAD_QUEUE_PATH', os.path.join(os.path.dirname(__file__), 'state', 'downloads.sqlite3'))
+    if IMPORTS_ENABLED:
+        from telegram_imports import TelegramImports
+        workers = max(1, min(8, int(os.getenv('PUUK_TELEGRAM_IMPORT_WORKERS', '3'))))
+        imports = TelegramImports(bot, get_puuk_user, queue_path, MUSIC_DIR, workers=workers)
+        dp.include_router(imports.router)
+        async with asyncio.TaskGroup() as tasks:
+            worker = tasks.create_task(imports.run())
+            try:
+                await dp.start_polling(bot, polling_timeout=POLLING_TIMEOUT)
+            finally:
+                worker.cancel()
+        return
     download_jobs = DownloadQueue(queue_path)
     download_jobs.start_worker()
     worker = asyncio.create_task(run_download_queue())

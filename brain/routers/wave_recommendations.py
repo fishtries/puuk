@@ -1,5 +1,6 @@
 """«Моя Волна» endpoints: next track, personalized queue."""
 import random
+from repositories.recording_reviews import blocked_track_ids
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -67,7 +68,7 @@ def get_next_track(
         raise HTTPException(status_code=404, detail=f"Трек {current_track_id} не найден.")
 
     dislike_ids = db.get_user_dislike_ids(current_user["id"])
-    exclude_ids = _normalize_exclude_ids(exclude_track_ids)
+    exclude_ids = _normalize_exclude_ids(exclude_track_ids) | blocked_track_ids()
     queued_ids = _normalize_exclude_ids(queued_track_ids)
     queued_ids.discard(str(current_track_id))
 
@@ -132,7 +133,7 @@ def get_wave_queue_endpoint(
             raise HTTPException(status_code=404, detail=f"Трек {current_track_id} не найден.")
 
     dislike_ids = db.get_user_dislike_ids(user_id)
-    exclude_ids = _normalize_exclude_ids(exclude_track_ids)
+    exclude_ids = _normalize_exclude_ids(exclude_track_ids) | blocked_track_ids()
     queued_ids = _normalize_exclude_ids(queued_track_ids)
     queued_ids.discard(str(current_track_id))
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel, field_validator
 import db
 from auth import get_current_user
 from config import get_base_url
+from repositories.playlists import remove_playlist_entry
 from serializers import serialize_track
 
 router = APIRouter(prefix="/api/playlists", tags=["playlists"])
@@ -50,14 +51,16 @@ class PlaylistEditPayload(BaseModel):
 
 
 class PlaylistOrderPayload(BaseModel):
-    track_ids: list[str]
+    track_ids: list[str] | None = None
+    entry_ids: list[int] | None = None
 
 
 def _require_owned_playlist(playlist_id: int, current_user: dict, action_error: str):
     playlist = db.get_playlist(playlist_id)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    if playlist.get("user_id") != current_user["id"] and current_user.get("role") != "admin":
+    if (playlist.get("user_id") != current_user["id"]
+            and (playlist.get("is_imported") or current_user.get("role") != "admin")):
         raise HTTPException(status_code=403, detail=action_error)
     return playlist
 
@@ -87,13 +90,15 @@ def get_playlist_details(playlist_id: int, request: Request, current_user: dict 
         raise HTTPException(status_code=404, detail="Playlist not found")
 
     # Проверка доступа к приватному плейлисту
-    if not playlist.get("is_public") and playlist.get("user_id") != current_user["id"] and current_user.get("role") != "admin":
+    if (not playlist.get("is_public") and playlist.get("user_id") != current_user["id"]
+            and (playlist.get("is_imported") or current_user.get("role") != "admin")):
         raise HTTPException(status_code=403, detail="Доступ к данному плейлисту ограничен")
 
     records = db.get_playlist_tracks(playlist_id)
     fav_ids = db.get_favorite_track_ids(current_user["id"])
     base_url = get_base_url(request)
-    tracks = [serialize_track(r, base_url, fav_ids, include_lyrics=False) for r in records]
+    tracks = [{**serialize_track(r, base_url, fav_ids, include_lyrics=False),
+               "playlist_entry_id": r["playlist_entry_id"]} for r in records]
     return {"playlist": playlist, "tracks": tracks}
 
 
@@ -126,15 +131,23 @@ def add_track_to_playlist(playlist_id: int, payload: TrackAdd, current_user: dic
 def reorder_playlist_tracks(playlist_id: int, payload: PlaylistOrderPayload, current_user: dict = Depends(get_current_user)):
     """Сохраняет порядок треков плейлиста (только владелец или админ)."""
     _require_owned_playlist(playlist_id, current_user, "Вы можете изменять только свои плейлисты")
-    if not payload.track_ids:
-        raise HTTPException(status_code=400, detail="track_ids must not be empty")
-    success = db.reorder_playlist_tracks(playlist_id, payload.track_ids)
+    if bool(payload.track_ids) == bool(payload.entry_ids):
+        raise HTTPException(status_code=400, detail="Provide either track_ids or entry_ids")
+    success = db.reorder_playlist_tracks(playlist_id, payload.entry_ids or payload.track_ids,
+                                         by_entry=payload.entry_ids is not None)
     if not success:
         raise HTTPException(
             status_code=400,
             detail="track_ids must exactly match the playlist contents: no duplicates, no unknown or missing tracks",
         )
     return {"status": "success"}
+
+
+@router.delete("/{playlist_id}/entries/{entry_id}")
+def delete_entry(playlist_id: int, entry_id: int, current_user: dict = Depends(get_current_user)):
+    _require_owned_playlist(playlist_id, current_user, "Вы можете изменять только свои плейлисты")
+    remove_playlist_entry(playlist_id, entry_id)
+    return {"status": "removed"}
 
 
 @router.delete("/{playlist_id}/tracks/{track_id}")

@@ -12,3 +12,4 @@ qdrant-client>=1.7.0
 Pillow>=13.0.0
 certifi>=2026.10.23
 Brotli>=1.2.1
+selenium>=4.30,<5

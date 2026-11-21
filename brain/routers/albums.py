@@ -49,7 +49,16 @@ class AlbumEditPayload(BaseModel):
 def get_all_albums(request: Request, current_user: dict = Depends(get_current_user)):
     """Каталог альбомов: полный DTO одним запросом (artist, year, track_count, cover)."""
     base_url = get_base_url(request)
-    return album_service.get_albums_catalog(base_url)
+    from services.telegram_import_service import saved_album_ids
+
+    saved = saved_album_ids(current_user['id'])
+    return [{**album, 'is_saved': album['id'] in saved}
+            for album in album_service.get_albums_catalog(base_url)]
+
+
+@router.get("/saved")
+def get_saved_albums(request: Request, current_user: dict = Depends(get_current_user)):
+    return [album for album in get_all_albums(request, current_user) if album['is_saved']]
 
 
 @router.get("/{album_id}")

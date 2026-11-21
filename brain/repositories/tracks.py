@@ -411,7 +411,7 @@ def update_track_metadata(track_id, title, artist, album_id, lyrics, *, artist_s
 UNCHANGED = object()
 
 
-def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Any = UNCHANGED, *, artist_source: CreditSource | None = None, album_artist_source: CreditSource | None = None, conn=None):
+def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int] = None, lyrics: Optional[str] = None, cover_version_inc: bool = False, preserve_empty_genre: bool = False, album_track_position: Any = UNCHANGED, *, artist_source: CreditSource | None = None, album_artist_source: CreditSource | None = None, clear_import_cover: bool = False, conn=None):
     """
     Обновляет запись трека в SQLite фактическими данными, прочитанными из файла на диске.
 
@@ -427,6 +427,8 @@ def update_track_metadata_from_audio(track_id: str, meta, album_id: Optional[int
         before = _track_fingerprint(conn, track_id)
         album_id = _recovery_album(conn, track_id, album_id)
         cursor = conn.cursor()
+        if clear_import_cover:
+            cursor.execute('DELETE FROM telegram_track_covers WHERE track_id=?', (track_id,))
 
         # Если lyrics не передан явно, берем из метаданных
         lyr = lyrics if lyrics is not None else meta.lyrics

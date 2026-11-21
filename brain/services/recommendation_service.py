@@ -533,4 +533,7 @@ def build_wave_track_payload(
         "true_peak_db": db_track.get("true_peak_db") if db_track else pick.payload.get("true_peak_db"),
         "score": round(pick.score, 3),
     }
+    if db_track:
+        from repositories.recording_reviews import revision
+        payload['audio_revision'] = revision(db_track)
     return payload

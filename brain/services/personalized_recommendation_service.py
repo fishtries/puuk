@@ -532,7 +532,8 @@ def get_personalized_genre_sections(
     # Одна выгрузка каталога (без lyrics) на весь запрос — в том числе для
     # cold-start аффинности: иначе get_catalog_genre_affinity загрузит его
     # повторно. Секции и пайплайн генерации переиспользуют её же.
-    catalog = catalog if catalog is not None else db.get_catalog_tracks()
+    catalog = [track for track in (catalog if catalog is not None else db.get_catalog_tracks())
+               if not track.get('audio_review_blocked')]
 
     affinity = get_user_genre_affinity(user_id)
     if not affinity:

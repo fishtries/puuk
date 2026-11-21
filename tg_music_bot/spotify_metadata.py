@@ -9,6 +9,21 @@ from urllib.parse import urlparse
 import requests
 
 
+def preview_url(*records):
+    for record in records:
+        preview = record.get('audioPreview') or record.get('previewUrl') or record.get('preview_url')
+        if isinstance(preview, dict):
+            preview = preview.get('url')
+        if isinstance(preview, str) and preview:
+            return preview
+    return None
+
+
+def cover_url(entity):
+    images = (entity.get('visualIdentity') or {}).get('image') or []
+    return max(images, key=lambda image: image.get('maxWidth') or 0, default={}).get('url')
+
+
 def fetch_entity(kind, ident):
     with requests.get(f'https://open.spotify.com/embed/{kind}/{ident}', timeout=(5, 12)) as response:
         response.raise_for_status()
@@ -42,8 +57,7 @@ def album_songs(url, fetch=fetch_entity, progress=None):
         ids.append(match.group(1))
     if progress:
         progress(f'Получен список: {len(ids)} треков. Проверяю метаданные...')
-    images = (album.get('visualIdentity') or {}).get('image') or []
-    cover = max(images, key=lambda x: x.get('maxWidth', 0), default={}).get('url')
+    cover = cover_url(album)
     songs = []
     with ThreadPoolExecutor(max_workers=4) as pool:
         for index, track in enumerate(pool.map(lambda key: fetch('track', key), ids)):
@@ -62,6 +76,7 @@ def album_songs(url, fetch=fetch_entity, progress=None):
                 'album_name': album['title'], 'album_artist': album.get('subtitle') or '',
                 'track_number': index + 1, 'tracks_count': len(ids),
                 'cover_url': cover, 'date': (track.get('releaseDate') or {}).get('isoString', '')[:10],
+                'preview_url': preview_url(rows[index], track),
             })
             if progress:
                 progress(f'Проверены метаданные {index + 1}/{len(ids)}: {track["title"]}')

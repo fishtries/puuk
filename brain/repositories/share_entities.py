@@ -50,6 +50,8 @@ def claim_track_identity(conn, rel_path, source, expected_track_id=None):
     rel_path = normalize_rel_path(rel_path)
     if source not in ('import','recovery'):
         raise ValueError('invalid_ingest_source')
+    if conn.execute('SELECT 1 FROM retired_import_paths WHERE rel_path=?', (rel_path,)).fetchone():
+        return None
     claim = conn.execute('SELECT track_id FROM track_path_claims WHERE rel_path=?', (rel_path,)).fetchone()
     if source == 'recovery':
         if expected_track_id is None or not recovery_allowed(expected_track_id, conn=conn):

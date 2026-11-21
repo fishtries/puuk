@@ -54,11 +54,11 @@ def is_queue_delivery_enabled() -> bool:
     return os.getenv("EMBEDDING_QUEUE_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
-def get_qdrant_client():
+def get_qdrant_client(*, timeout=None):
     """Creates a fresh Qdrant client from configuration (lazy import)."""
     from qdrant_client import QdrantClient
 
-    return QdrantClient(**QDRANT_CONNECTION)
+    return QdrantClient(**QDRANT_CONNECTION, timeout=timeout)
 
 
 def _value(track: Any, key: str, default: Any = None) -> Any:
@@ -294,6 +294,51 @@ def enqueue_missing_tracks(
     counters["failed"] = failed
     logger.info("Очередь embedding: %s", counters)
     return counters
+
+
+def publish_import_analysis(music_root):
+    """Send a bounded batch of catalog imports to the existing heavy worker."""
+    from contextlib import closing
+    from repositories.base import get_connection
+    from repositories.recording_reviews import revision
+
+    if not is_queue_delivery_enabled():
+        return
+    with closing(get_connection()) as conn:
+        pending = conn.execute("""SELECT i.track_id,i.revision,i.refresh FROM telegram_import_analysis i
+            JOIN tracks t ON t.id=i.track_id WHERE t.audio_review_blocked=0 LIMIT 20""").fetchall()
+    if not pending:
+        return
+    tracks = db.get_tracks_by_ids([row['track_id'] for row in pending])
+    with closing(get_qdrant_client(timeout=5)) as client:
+        for row in pending:
+            track_id = row['track_id']
+            track = tracks.get(track_id)
+            if not track:
+                continue
+            relative = _resolve_relative_file(track['file_path'], music_root)
+            if not relative:
+                continue
+            stat = os.stat(os.path.join(music_root, relative))
+            if row['revision'] != revision(track) or row['revision'] != f'{stat.st_size}:{stat.st_mtime_ns}':
+                with closing(get_connection()) as conn, conn:
+                    conn.execute('DELETE FROM telegram_import_analysis WHERE track_id=? AND revision=?',
+                                 (track_id, row['revision']))
+                continue
+            points = client.retrieve(collection_name=COLLECTION_NAME, ids=[track_id], with_payload=True)
+            if not points:
+                result = enqueue_missing_tracks(client, [track], str(music_root))
+                if result['failed']:
+                    continue
+            elif row['refresh']:
+                payload = points[0].payload or {}
+                if payload.get('file_mtime_ns') != stat.st_mtime_ns or payload.get('file_path') != relative:
+                    update = _build_payload(track, relative, stat)
+                    update.update(auto_genres=None, auto_genre_status=None)
+                    client.set_payload(collection_name=COLLECTION_NAME, payload=update, points=[track_id], wait=True)
+            with closing(get_connection()) as conn, conn:
+                conn.execute('DELETE FROM telegram_import_analysis WHERE track_id=? AND revision=?',
+                             (track_id, row['revision']))
 
 
 def reconcile_embedding_queue(

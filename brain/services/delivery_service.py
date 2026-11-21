@@ -390,7 +390,7 @@ def _track(track_id,deadline,cancel,*,recover=True):
     elif row is not None:
         logger.info('delivery_track track_id=%s path=sqlite',track_id)
     check_deadline(deadline,cancel)
-    if not row:
+    if not row or row.get('audio_review_blocked'):
         raise unavailable()
     return row
 

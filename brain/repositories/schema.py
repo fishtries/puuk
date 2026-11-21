@@ -50,6 +50,9 @@ def apply_migrations(conn):
                 try:
                     if not conn.in_transaction:
                         conn.execute("BEGIN IMMEDIATE")
+                    if cursor.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
+                        conn.commit()
+                        continue
                     with open(filepath, "r", encoding="utf-8") as f:
                         script = f.read()
                     statements = [s.strip() for s in script.split(";") if s.strip()]

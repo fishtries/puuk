@@ -39,7 +39,7 @@ TRACK_SUMMARY_COLUMNS = """
     t.file_size, t.file_mtime_ns, t.cover_version,
     t.auto_genres, t.auto_genre_model, t.auto_genre_updated_at,
     t.normalization_gain_db, t.loudness_status, t.loudness_lufs, t.true_peak_db,
-    t.album_track_position,
+    t.album_track_position, t.audio_review_blocked,
     (t.lyrics IS NOT NULL AND trim(t.lyrics) != '') AS has_lyrics
 """
 

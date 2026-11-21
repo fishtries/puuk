@@ -49,7 +49,8 @@ def create_playlist(name: str, user_id: int = 1, is_public: bool = False):
 def get_playlist(playlist_id: int):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
+    cursor.execute("""SELECT p.*, EXISTS(SELECT 1 FROM telegram_playlist_imports i
+        WHERE i.playlist_id=p.id) AS is_imported FROM playlists p WHERE p.id=?""", (playlist_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -58,12 +59,12 @@ def get_playlist_tracks(playlist_id: int):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
-        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, pt.added_at
+        SELECT {TRACK_SUMMARY_COLUMNS}, a.title AS album, pt.added_at, pt.id AS playlist_entry_id
         FROM tracks t
         JOIN playlist_tracks pt ON t.id = pt.track_id
         LEFT JOIN albums a ON a.id = t.album_id
         WHERE pt.playlist_id = ?
-        ORDER BY pt.position ASC, pt.added_at ASC
+        ORDER BY pt.position ASC, pt.id ASC
     """, (playlist_id,))
     tracks = hydrate_track_credits([dict(row) for row in cursor.fetchall()], conn=conn)
     conn.close()
@@ -73,6 +74,13 @@ def add_track_to_playlist(playlist_id: int, track_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        removed = cursor.execute("""SELECT slot FROM telegram_playlist_positions
+            WHERE playlist_id=? AND track_id=? AND removed=1 ORDER BY source_rank LIMIT 1""",
+                                 (playlist_id, track_id)).fetchone()
+        if cursor.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id=? AND track_id=?",
+                          (playlist_id, track_id)).fetchone() and not removed:
+            return False
         # Новый трек всегда в конец: position = max+1 (пустой плейлист -> 0)
         cursor.execute(
             "SELECT COALESCE(MAX(position), -1) AS max_pos FROM playlist_tracks WHERE playlist_id = ?",
@@ -80,18 +88,22 @@ def add_track_to_playlist(playlist_id: int, track_id: str) -> bool:
         )
         next_position = cursor.fetchone()["max_pos"] + 1
         cursor.execute(
-            "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
-            (playlist_id, track_id, next_position),
+            "INSERT INTO playlist_tracks (playlist_id, track_id, position, import_slot) VALUES (?, ?, ?, ?)",
+            (playlist_id, track_id, next_position, removed[0] if removed else None),
         )
+        if removed:
+            cursor.execute("UPDATE telegram_playlist_positions SET removed=0 WHERE playlist_id=? AND slot=?",
+                           (playlist_id, removed[0]))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
         conn.rollback()
         success = False
-    conn.close()
+    finally:
+        conn.close()
     return success
 
-def reorder_playlist_tracks(playlist_id: int, track_ids: list) -> bool:
+def reorder_playlist_tracks(playlist_id: int, track_ids: list, *, by_entry=False) -> bool:
     """
     Полностью перезаписывает порядок треков плейлиста:
     position каждого трека = его индекс в track_ids.
@@ -105,18 +117,17 @@ def reorder_playlist_tracks(playlist_id: int, track_ids: list) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         cursor.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,))
         if cursor.fetchone() is None:
             return False
-        cursor.execute(
-            "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
-            (playlist_id,),
-        )
-        current_track_ids = {row["track_id"] for row in cursor.fetchall()}
-        if len(track_ids) != len(set(track_ids)) or set(track_ids) != current_track_ids:
+        key = "id" if by_entry else "track_id"
+        rows = cursor.execute(f"SELECT {key} FROM playlist_tracks WHERE playlist_id=?",
+                              (playlist_id,)).fetchall()
+        if len(track_ids) != len(rows) or len(track_ids) != len(set(track_ids)) or set(track_ids) != {r[0] for r in rows}:
             return False
         cursor.executemany(
-            "UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?",
+            f"UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND {key} = ?",
             [(index, playlist_id, track_id) for index, track_id in enumerate(track_ids)],
         )
         conn.commit()
@@ -126,10 +137,29 @@ def reorder_playlist_tracks(playlist_id: int, track_ids: list) -> bool:
 
 def remove_track_from_playlist(playlist_id: int, track_id: str):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
-    conn.commit()
-    conn.close()
+    try:
+        with conn:
+            removed = conn.execute("""DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?
+                RETURNING import_slot""", (playlist_id, track_id)).fetchall()
+            _remember_removed_slots(conn, playlist_id, removed)
+    finally:
+        conn.close()
+
+
+def remove_playlist_entry(playlist_id: int, entry_id: int):
+    conn = get_connection()
+    try:
+        with conn:
+            removed = conn.execute("""DELETE FROM playlist_tracks WHERE playlist_id=? AND id=?
+                RETURNING import_slot""", (playlist_id, entry_id)).fetchall()
+            _remember_removed_slots(conn, playlist_id, removed)
+    finally:
+        conn.close()
+
+
+def _remember_removed_slots(conn, playlist_id, removed):
+    conn.executemany("""UPDATE telegram_playlist_positions SET removed=1
+        WHERE playlist_id=? AND slot=?""", [(playlist_id, row[0]) for row in removed if row[0]])
 
 def delete_playlist(playlist_id: int):
     conn = get_connection()

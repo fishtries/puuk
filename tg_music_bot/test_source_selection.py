@@ -209,3 +209,21 @@ def test_soundcloud_failure_uses_youtube_music(tmp_path):
                            download=lambda s, c, d: {'provider': c.provider})
     assert result['track']['provider'] == 'youtube'
     assert calls == ['soundcloud', 'youtube']
+
+
+def test_report_explains_unavailable_original_and_omits_rejected_covers(tmp_path):
+    from yt_dlp.utils import DownloadError
+
+    original = Candidate('12345', 'завтра', ('тёмный принц',), 91, 'MILITANTUM', True,
+                         'soundcloud', 'https://soundcloud.com/artist/track')
+
+    class Client:
+        def search(self, *args, **kwargs):
+            return [{**rows()[0], 'artists': [{'name': 'Cover Artist'}]}]
+
+    def protected(*args):
+        raise DownloadError('ERROR: This video is DRM protected')
+
+    result = download_song(song(), tmp_path, primary=lambda s: ([original], ['Не совпадает длительность']),
+                           client=Client(), download=protected)
+    assert result['error'] == 'SoundCloud: запись защищена DRM; YouTube Music: нужная версия не найдена'

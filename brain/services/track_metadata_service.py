@@ -510,6 +510,7 @@ def mutate_track_metadata(track_id: str, payload, current_user: Dict[str, Any], 
                 album_id=album_id,
                 lyrics=actual_meta.lyrics,
                 cover_version_inc=cover_inc,
+                clear_import_cover=cover_inc,
                 album_track_position=album_track_pos
             )
 
