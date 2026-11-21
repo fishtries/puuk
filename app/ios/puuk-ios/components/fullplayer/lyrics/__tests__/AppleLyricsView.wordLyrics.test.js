@@ -143,7 +143,7 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     expect(wordSweepProgress(segment, 1100)).toBe(0.1);
   });
 
-  it('allocates masks only for sounding words, including overlaps and backward seeks', () => {
+  it('prepares masks for nearby words, including overlaps and backward seeks', () => {
     const segments = Array.from({ length: 100 }, (_, i) => ({
       id: String(i), text: 'word', isWord: true, startMs: i * 1000, endMs: i * 1000 + 1500,
     }));
@@ -151,7 +151,7 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     const props = { text: 'words', index: 0, activeIndex: 0,
       segments, hasWordTimings: true, playbackMs };
     let renderer;
-    act(() => { renderer = TestRenderer.create(<AnimatedLyricLine {...props} currentMs={1250} />); });
+    act(() => { renderer = TestRenderer.create(<AnimatedLyricLine {...props} wordWindowSecond={1} />); });
     expect(renderer.root.findAllByType(MaskedView)).toHaveLength(0);
     const measureWords = () => {
       act(() => {
@@ -161,14 +161,14 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
       });
     };
     measureWords();
-    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(2);
-    act(() => { renderer.update(<AnimatedLyricLine {...props} currentMs={101000} />); });
+    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(3);
+    act(() => { renderer.update(<AnimatedLyricLine {...props} wordWindowSecond={101} />); });
     expect(renderer.root.findAllByType(MaskedView)).toHaveLength(0);
-    act(() => { renderer.update(<AnimatedLyricLine {...props} currentMs={250} />); });
+    act(() => { renderer.update(<AnimatedLyricLine {...props} wordWindowSecond={0} />); });
     // The measured word survives completion and a backward seek.
-    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(1);
+    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(2);
     measureWords();
-    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(1);
+    expect(renderer.root.findAllByType(MaskedView)).toHaveLength(2);
     act(() => { renderer.unmount(); });
   });
 
@@ -177,11 +177,10 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     const props = { text: 'hello', index: 0, activeIndex: 0, segments: [segment],
       hasWordTimings: true, playbackMs: { value: 1250 } };
     let renderer;
-    act(() => { renderer = TestRenderer.create(<AnimatedLyricLine {...props} currentMs={0} />); });
+    act(() => { renderer = TestRenderer.create(<AnimatedLyricLine {...props} wordWindowSecond={0} />); });
     const measuredWord = renderer.root.findAllByType(View).find(node =>
       node.props.accessible === false && node.props.onLayout);
     act(() => { measuredWord.props.onLayout({ nativeEvent: { layout: { width: 100 } } }); });
-    act(() => { renderer.update(<AnimatedLyricLine {...props} currentMs={1250} />); });
     expect(renderer.root.findAllByType(MaskedView)).toHaveLength(1);
     const reveal = renderer.root.findAllByType(View).find(node =>
       Array.isArray(node.props.style) && node.props.style[0]?.width === 300);
@@ -189,7 +188,7 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     expect(reveal.props.style[0].transform[0].translateX).toBe(-210);
     expect(reveal.props.style[1].transform[0].translateX).toBe(-180);
     expect(reveal.props.style[1].width).toBeUndefined();
-    act(() => { renderer.update(<AnimatedLyricLine {...props} currentMs={2100} />); });
+    act(() => { renderer.update(<AnimatedLyricLine {...props} wordWindowSecond={3} />); });
     expect(renderer.root.findAllByType(View).find(node =>
       node.props.accessible === false && node.props.onLayout)).toBe(measuredWord);
     expect(renderer.root.findAllByType(MaskedView)).toHaveLength(0);
@@ -247,7 +246,6 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     // Line 0 words: word 0 ("Hello,") is active at 1200ms
     const activeLine = lines[0];
-    expect(activeLine.props.currentMs).toBe(1000);
     expect(activeLine.props.playbackMs.value).toBe(1200);
   });
 
@@ -272,7 +270,6 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     let lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[0].props.isActive).toBe(true);
-    expect(lines[0].props.currentMs).toBe(1000);
     const firstWordProps = lines[0].props;
     await act(async () => {
       jest.advanceTimersByTime(300);
@@ -292,7 +289,6 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
     });
     lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[0].props.isActive).toBe(true);
-    expect(lines[0].props.currentMs).toBe(1000);
     expect(lines[0].props.playbackMs.value).toBe(1850);
 
     // 3. Inside second word (2.0s -> 2000ms, word-0002: 1900..2500ms)
@@ -300,12 +296,11 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
       renderer.update(<AppleLyricsView {...defaultProps} currentTime={2.0} />);
     });
     lines = renderer.root.findAllByType(AnimatedLyricLine);
-    expect(lines[0].props.currentMs).toBe(1900);
     expect(lines[0].props.playbackMs.value).toBe(2000);
     await act(async () => {
       renderer.update(<AppleLyricsView {...defaultProps} currentTime={1.4} />);
     });
-    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props.currentMs).toBe(1000);
+    expect(renderer.root.findAllByType(AnimatedLyricLine)[0].props.playbackMs.value).toBe(1400);
   });
 
   it('renders line with repeating words and preserves distinct word occurrences', async () => {
@@ -356,7 +351,6 @@ describe('AppleLyricsView with wordLyrics (Contract v1)', () => {
 
     const lines = renderer.root.findAllByType(AnimatedLyricLine);
     expect(lines[2].props.isActive).toBe(true);
-    expect(lines[2].props.currentMs).toBe(5800);
     expect(lines[2].props.playbackMs.value).toBe(5900);
   });
 

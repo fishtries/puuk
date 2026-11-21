@@ -4,6 +4,7 @@ import React, {
   useRef,
   useCallback,
   useMemo,
+  useLayoutEffect,
 } from 'react';
 import {
   View,
@@ -18,7 +19,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { parseLyricsResult } from '../../../offline/lyrics/provider';
 import { getTrackId } from '../../../shared/domain/trackAdapter';
-import { usePlaybackPosition } from '../../../hooks/playbackStatus';
+import { subscribePlaybackSnapshot } from '../../../hooks/playbackStatus';
 
 import Animated, {
   useSharedValue,
@@ -150,6 +151,7 @@ const createLyricsStyles = ({
 const AppleLyricsView = ({
   lyricsResult,
   player,
+  sourceAttemptId,
   isLyricsView,
   isLyricsMounted,
   currentTrack,
@@ -181,8 +183,6 @@ const AppleLyricsView = ({
   onRegisterResetTimer,
   isControlsInteractionActive = false,
 }) => {
-  const position = usePlaybackPosition(player, isPlayerVisible);
-  const currentTime = player ? position.currentTime : fallbackTime;
   const trackId = getTrackId(currentTrack);
   const { lines: lyrics, plainText: plainLyricsText, isSynced: hasSyncedLyrics, hasWords: hasWordLyrics } =
     useMemo(() => parseLyricsResult(lyricsResult, trackId), [lyricsResult, trackId]);
@@ -229,6 +229,29 @@ const AppleLyricsView = ({
   const [scrollWindowY, setScrollWindowY] = useState(0);
   const heightRef = useRef(height);
   heightRef.current = height;
+
+  const playbackMs = useSharedValue(0);
+  const audioSample = useSharedValue(null);
+  // The word colors and the gradient use the same clock. Predict only as far
+  // as the next native sample, then hold if the audio stops reporting progress.
+  useAnimatedReaction(() => audioSample.value, (sample, previous) => {
+    if (!sample) {
+      cancelAnimation(playbackMs);
+      return;
+    }
+    const { ms, end, rate } = sample;
+    const drift = playbackMs.value - ms;
+    if (!rate || !previous?.rate || previous.attempt !== sample.attempt ||
+        sample.discontinuity || Math.abs(drift) > 100 * rate) {
+      playbackMs.value = ms;
+    }
+    if (rate && end > playbackMs.value) {
+      playbackMs.value = withTiming(end, {
+        duration: (end - playbackMs.value) / rate,
+        easing: Easing.linear,
+      });
+    }
+  });
 
   // Track dragging AND native decay on the UI thread. React moves its render
   // window only every half viewport; the finger never waits for a React frame.
@@ -432,14 +455,65 @@ const AppleLyricsView = ({
     };
   }, []);
 
-  // Active lyric index computation (word-level or line-level)
-  const activeIndex = useMemo(() => {
+  const findActiveIndex = useCallback((currentTime) => {
     if (!hasSyncedLyrics || lyrics.length === 0) return -1;
     if (hasWordLyrics) {
       return computeActiveWordLineIndex(lyrics, currentTime);
     }
     return computeActiveLyricIndex(lyrics, currentTime);
-  }, [hasSyncedLyrics, hasWordLyrics, lyrics, currentTime]);
+  }, [hasSyncedLyrics, hasWordLyrics, lyrics]);
+  const [playbackWindow, setPlaybackWindow] = useState({ index: -1, second: 0 });
+  const followsAudio = isPlayerVisible && !isQueueVisible && hasSyncedLyrics;
+  const animatesWords = followsAudio && isLyricsView && hasWordLyrics;
+  const activeIndex = player ? playbackWindow.index : findActiveIndex(fallbackTime || 0);
+  const wordWindowSecond = player ? playbackWindow.second : Math.floor(fallbackTime || 0);
+
+  useLayoutEffect(() => {
+    if (!player || !followsAudio) return undefined;
+    let lastTime = null;
+    let lastAttempt = null;
+    let seeking = false;
+    let lastIndex;
+    let lastSecond;
+    const receive = (event) => {
+      if (event.sourceIdentityVersion === 1 && sourceAttemptId !== undefined &&
+          event.sourceAttemptId !== sourceAttemptId) return;
+      const time = Number.isFinite(event.currentTime) ? event.currentTime : 0;
+      const index = findActiveIndex(time);
+      const second = animatesWords ? Math.floor(time) : 0;
+      if (index !== lastIndex || second !== lastSecond) {
+        lastIndex = index;
+        lastSecond = second;
+        setPlaybackWindow(previous => previous.index === index && previous.second === second
+          ? previous : { index, second });
+      }
+      if (!animatesWords) return;
+      const attempt = event.sourceAttemptId;
+      const seek = event.nativeEvent === 'seek' || event.nativeEvent === 'seekIntent';
+      if (seek || attempt !== lastAttempt) seeking = event.nativeEvent === 'seekIntent';
+      const ms = time * 1000;
+      const isMoving = !seeking && event.isLoaded && event.playing &&
+        !event.isBuffering && !event.didJustFinish && !event.error;
+      if (isMoving && time === lastTime && attempt === lastAttempt &&
+          event.nativeEvent && event.nativeEvent !== 'progress') return;
+      const rate = !reducedMotion && isMoving &&
+        (lastTime === null || time > lastTime)
+        ? Math.max(0, event.playbackRate ?? 1) : 0;
+      const end = Math.min(ms + 100 * rate, event.duration > 0 ? event.duration * 1000 : Infinity);
+      audioSample.value = { ms, end, rate, attempt, discontinuity: seek || time < lastTime };
+      lastTime = time;
+      lastAttempt = attempt;
+    };
+    const unsubscribe = subscribePlaybackSnapshot(player, receive);
+    return () => {
+      unsubscribe();
+      if (animatesWords) audioSample.value = null;
+    };
+  }, [player, followsAudio, animatesWords, sourceAttemptId, findActiveIndex, reducedMotion, audioSample]);
+
+  useLayoutEffect(() => {
+    if (!player && animatesWords) playbackMs.value = (fallbackTime || 0) * 1000;
+  }, [player, animatesWords, fallbackTime, playbackMs]);
 
   // Resolve focus in the same render as highlighting. An effect-driven target
   // gives the new active line one commit of color with its old position.
@@ -668,31 +742,6 @@ const AppleLyricsView = ({
     [width, height, insets?.top, insets?.bottom, isEffectivelyCompact],
   );
 
-  const currentMs = Math.round((currentTime || 0) * 1000);
-  // React only needs word phase transitions. The shared audio clock below
-  // supplies intermediate sweep positions without rebuilding every lyric row.
-  const wordBoundaries = useMemo(() => [...new Set(lyrics.flatMap(line =>
-    (line.words || []).flatMap(word => [word.startMs, word.endMs + 60])
-  ))].sort((a, b) => a - b), [lyrics]);
-  let boundaryLow = 0;
-  let boundaryHigh = wordBoundaries.length;
-  while (boundaryLow < boundaryHigh) {
-    const middle = (boundaryLow + boundaryHigh) >>> 1;
-    if (wordBoundaries[middle] <= currentMs) boundaryLow = middle + 1;
-    else boundaryHigh = middle;
-  }
-  const wordRenderMs = boundaryLow > 0 ? wordBoundaries[boundaryLow - 1] : -1;
-  const playbackMs = useSharedValue(currentMs);
-  const lastPlaybackMs = useRef(currentMs);
-  useEffect(() => {
-    const delta = currentMs - lastPlaybackMs.current;
-    lastPlaybackMs.current = currentMs;
-    // Smooth observed audio positions only; never extrapolate past a pause.
-    playbackMs.value = reducedMotion || delta <= 0 || delta > 250
-      ? currentMs
-      : withTiming(currentMs, { duration: 100, easing: Easing.linear });
-  }, [currentMs, playbackMs, reducedMotion]);
-
   const linePressHandlers = useMemo(
     () => lyrics.map((line) => () => handleLineClick(line.time)),
     [lyrics, handleLineClick],
@@ -730,9 +779,7 @@ const AppleLyricsView = ({
           words={line.words}
           segments={line.segments}
           hasWordTimings={Boolean(line.hasWordTimings)}
-          currentMs={line.hasWordTimings
-            ? wordRenderMs < line.startMs ? -1 : Math.min(wordRenderMs, line.endMs + 60)
-            : 0}
+          wordWindowSecond={animatesWords && line.hasWordTimings ? wordWindowSecond : null}
           playbackMs={playbackMs}
         />
       );
@@ -760,7 +807,8 @@ const AppleLyricsView = ({
     styles.lyricLine,
     handleLineLayout,
     linePressHandlers,
-    wordRenderMs,
+    wordWindowSecond,
+    animatesWords,
     playbackMs,
   ]);
 

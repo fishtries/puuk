@@ -16,8 +16,8 @@ export default function usePlayerLyrics(track, playbackMediaKey) {
     String(playbackMediaKey.trackId) === trackId ? playbackMediaKey.contentVersion : undefined;
   const version = playedVersion ?? track?.content_version;
   const [mediaChange, setMediaChange] = useState(0);
-  const selection = useMemo(() => ({ session, generation, trackId, version, mediaChange }),
-    [session, generation, trackId, version, mediaChange]);
+  const selection = useMemo(() => ({ session, generation, trackId, version }),
+    [session, generation, trackId, version]);
   const [snapshot, setSnapshot] = useState(null);
 
   useEffect(() => subscribeOfflineIndex(event => {
@@ -34,10 +34,21 @@ export default function usePlayerLyrics(track, playbackMediaKey) {
     const controller = new AbortController();
     readSelectedLyrics(selection.session, selection.trackId, selection.version, { signal: controller.signal })
       .then(result => {
-        if (!controller.signal.aborted) setSnapshot({ selection, result });
+        if (controller.signal.aborted) return;
+        setSnapshot(previous => {
+          const saved = previous?.result;
+          if (previous?.selection === selection && saved?.state === 'ready') {
+            if (result.state === 'unknown') return previous;
+            if (result.state === 'ready' && saved.lyricsRevision != null &&
+                saved.lyricsRevision === result.lyricsRevision &&
+                saved.contentVersion === result.contentVersion &&
+                saved.payload?.lyrics === result.payload?.lyrics) return previous;
+          }
+          return { selection, result };
+        });
       });
     return () => controller.abort();
-  }, [selection]);
+  }, [selection, mediaChange]);
 
   if (snapshot?.selection === selection) return snapshot.result;
   return { state: trackId === null ? 'unknown' : 'loading' };

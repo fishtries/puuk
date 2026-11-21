@@ -26,13 +26,18 @@ export const wordSweepProgress = (segment, currentMs) => {
   return Math.max(0, Math.min(1, (currentMs - segment.startMs) / (segment.endMs - segment.startMs)));
 };
 
-const wordPhase = (segment, ms) => ms < segment.startMs ? 0 : ms >= segment.endMs + 60 ? 2 : 1;
+const hasWordSweep = (segment, second) => second !== null &&
+  segment.endMs >= second * 1000 - 150 && segment.startMs <= second * 1000 + 1250;
+const isPastWord = (segment, second) => second !== null && segment.endMs <= second * 1000;
 
-// Only sounding words run a sweep worklet and allocate a native mask.
 const WordSweep = ({ width, segment, playbackMs, textStyle }) => {
-  const sweepStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: -width * 2.1 + width * 1.2 * wordSweepProgress(segment, playbackMs.value) }],
-  }));
+  const sweepStyle = useAnimatedStyle(() => {
+    const progress = wordSweepProgress(segment, playbackMs.value);
+    return {
+      opacity: progress > 0 && progress < 1 ? 1 : 0,
+      transform: [{ translateX: -width * 2.1 + width * 1.2 * progress }],
+    };
+  });
   return (
     <MaskedView pointerEvents="none" accessible={false}
       style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}
@@ -47,18 +52,20 @@ const WordSweep = ({ width, segment, playbackMs, textStyle }) => {
   );
 };
 
-// Keep the measured word mounted across all phases. Both the initial native
-// style and the worklet start the sweep outside the glyphs, without layout work.
-const TimedWord = memo(({ segment, playbackMs, textStyle, phase }) => {
+const TimedWord = memo(({ segment, playbackMs, textStyle, isPast }) => {
   const [width, setWidth] = useState(0);
   const handleLayout = useCallback((event) => {
     const measured = event.nativeEvent.layout.width;
     setWidth((previous) => Math.abs(previous - measured) > 0.5 ? measured : previous);
   }, []);
+  const wordColor = useAnimatedStyle(() => ({
+    color: (playbackMs ? playbackMs.value >= segment.endMs : isPast)
+      ? '#fff' : 'rgba(215,215,225,0.40)',
+  }));
   return (
     <View accessible={false} onLayout={handleLayout}>
-      <Text style={[textStyle, { color: phase === 2 ? '#fff' : 'rgba(215,215,225,0.40)' }]}>{segment.text}</Text>
-      {phase === 1 && width > 0 && <WordSweep width={width} segment={segment}
+      <Animated.Text style={[textStyle, wordColor]}>{segment.text}</Animated.Text>
+      {playbackMs && width > 0 && <WordSweep width={width} segment={segment}
         playbackMs={playbackMs} textStyle={textStyle} />}
     </View>
   );
@@ -94,7 +101,7 @@ const AnimatedLyricLine = ({
   words,
   segments,
   hasWordTimings = false,
-  currentMs = 0,
+  wordWindowSecond = null,
   playbackMs,
 }) => {
   const reducedMotion = useLyricsReducedMotion();
@@ -240,14 +247,11 @@ const AnimatedLyricLine = ({
           );
         }
 
-        const phase = wordPhase(seg, currentMs);
-        if (!playbackMs) {
-          return <Text key={seg.id || `word-${i}`} style={[wordTextStyle,
-            { color: phase === 2 ? '#fff' : 'rgba(215,215,225,0.40)' }]}>{seg.text}</Text>;
-        }
+        const sweeps = hasWordSweep(seg, wordWindowSecond);
         return (
           <TimedWord key={seg.id || `word-${i}`} segment={seg}
-            playbackMs={playbackMs} textStyle={wordTextStyle} phase={phase} />
+            playbackMs={sweeps ? playbackMs : undefined} textStyle={wordTextStyle}
+            isPast={!sweeps && isPastWord(seg, wordWindowSecond)} />
         );
       });
     }
@@ -281,15 +285,18 @@ const AnimatedLyricLine = ({
   );
 };
 
-// Status updates need a React render only when a word changes state or the
-// line's layout/focus props change. Pauses and seeks use the same comparison.
 export default memo(AnimatedLyricLine, (previous, next) => {
   const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
   for (const key of keys) {
-    if (key !== 'currentMs' && !Object.is(previous[key], next[key])) return false;
+    if (key !== 'wordWindowSecond' && !Object.is(previous[key], next[key])) return false;
   }
-  if (!next.hasWordTimings) return true;
-  if (previous.currentMs === next.currentMs) return true;
-  return (next.segments || []).every((segment) => !segment.isWord ||
-    wordPhase(segment, previous.currentMs) === wordPhase(segment, next.currentMs));
+  if (previous.wordWindowSecond === next.wordWindowSecond || !next.hasWordTimings) return true;
+  const previousSecond = previous.wordWindowSecond ?? null;
+  const nextSecond = next.wordWindowSecond ?? null;
+  return (next.segments || []).every(segment => {
+    if (!segment.isWord) return true;
+    const swept = hasWordSweep(segment, previousSecond);
+    if (swept !== hasWordSweep(segment, nextSecond)) return false;
+    return swept || isPastWord(segment, previousSecond) === isPastWord(segment, nextSecond);
+  });
 });

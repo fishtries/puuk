@@ -3,6 +3,7 @@ import {
   captureDesiredVersion,
   confirmDesiredVersion,
   isOfflineSessionCurrent,
+  markMissing,
   readMediaKey,
 } from '..';
 import { reconcileRetention } from '.';
@@ -26,8 +27,9 @@ function pump() {
 }
 async function probe(session, id) {
   try {
-    if (!isOfflineSessionCurrent(session) || !(await readMediaKey(session, id)))
-      return;
+    if (!isOfflineSessionCurrent(session)) return;
+    const media = await readMediaKey(session, id);
+    if (!media) return;
     const expected = await captureDesiredVersion(session, id);
     if (!expected || !isOfflineSessionCurrent(session)) return;
     const response = await authFetch(
@@ -41,6 +43,10 @@ async function probe(session, id) {
     if (!response.ok) return;
     const data = await response.json();
     if (!isOfflineSessionCurrent(session)) return;
+    if (data?.audio_unavailable) {
+      await markMissing(session, media, 'recording_mismatch');
+      return;
+    }
     if (
       await confirmDesiredVersion(session, id, expected, data?.content_version)
     )

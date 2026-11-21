@@ -16,6 +16,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Alert,
+  DeviceEventEmitter,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -78,6 +79,8 @@ export default function PlaylistScreen({
   const [savedCollection, setSavedCollection] = useState(false);
   const [hasCompleteSnapshot, setHasCompleteSnapshot] = useState(false);
   const [progress, setProgress] = useState(null);
+  const [isImported, setIsImported] = useState(false);
+  const lastImport = useRef([]);
   const snapshotRevision = useRef(0);
   useEffect(() => {
     if (!offlineSession || isCustomOrReadOnly) return;
@@ -182,11 +185,45 @@ export default function PlaylistScreen({
   useEffect(() => {
     const controller = new AbortController();
     setHasCompleteSnapshot(false);
+    setIsImported(false);
+    lastImport.current = [];
     if (!hasInitialTracks) {
       fetchPlaylist(controller.signal);
     }
     return () => controller.abort();
   }, [playlistId, hasInitialTracks, offlineSession]);
+
+  useEffect(() => {
+    if (!isImported) return;
+    const controller = new AbortController();
+    let loading = false;
+    const timer = setInterval(async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const response = await authFetch(`/api/playlists/${playlistId}`, {
+          signal: controller.signal, retry: 0,
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (controller.signal.aborted || !Array.isArray(data.tracks)) return;
+        const refreshed = data.tracks.map((track) => normalizeTrack(track, { serverUrl: SERVER_URL })).filter(Boolean);
+        const known = new Set(lastImport.current.map((track) => track.playlist_entry_id));
+        const added = refreshed.filter((track) => !known.has(track.playlist_entry_id));
+        lastImport.current = refreshed;
+        setTracks(refreshed);
+        if (added.length) DeviceEventEmitter.emit('PUUK_PLAYLIST_POSITIONS_READY', { refreshed, added });
+      } catch {
+        // The last loaded playlist is still available while the network recovers.
+      } finally {
+        loading = false;
+      }
+    }, 5000);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [isImported, playlistId, offlineSession]);
 
   const fetchPlaylist = async (signal) => {
     const revision = snapshotRevision.current;
@@ -266,11 +303,12 @@ export default function PlaylistScreen({
             tracks: raw,
           }, { requireSaved: true, replaceSnapshot: true, expectedUpdatedAt: saved?.updatedAt ?? null });
         if (signal.aborted || revision !== snapshotRevision.current || (offlineSession && !isOfflineSessionCurrent(offlineSession))) return;
-        setTracks(
-          raw
-            .map((t) => normalizeTrack(t, { serverUrl: SERVER_URL }))
-            .filter(Boolean),
-        );
+        const tracks = raw.map((t) => normalizeTrack(t, { serverUrl: SERVER_URL })).filter(Boolean);
+        if (data.playlist?.is_imported) {
+          lastImport.current = tracks;
+          setIsImported(true);
+        }
+        setTracks(tracks);
       }
     } catch (error) {
       if (
@@ -290,6 +328,7 @@ export default function PlaylistScreen({
 
   const handleRemoveTrack = async (trackOrId) => {
     const trackId = getTrackId(trackOrId);
+    const entryId = isFavorites ? null : trackOrId?.playlist_entry_id;
     if (trackId === null) return;
 
     Alert.alert(
@@ -309,19 +348,19 @@ export default function PlaylistScreen({
                   await saveRatingWithFeedback(offlineSession, trackOrId, 'neutral');
                 else
                   await authFetch(
-                    `/api/tracks/${encodeURIComponent(String(trackId))}/like`,
+                    `/api/${entryId == null ? `tracks/${encodeURIComponent(String(trackId))}` : `entries/${entryId}`}/like`,
                     { method: 'DELETE' },
                   );
               } else {
                 await authFetch(
-                  `/api/playlists/${encodeURIComponent(String(playlistId))}/tracks/${encodeURIComponent(String(trackId))}`,
+                  `/api/playlists/${encodeURIComponent(String(playlistId))}/${entryId == null ? `tracks/${encodeURIComponent(String(trackId))}` : `entries/${entryId}`}`,
                   {
                     method: 'DELETE',
                   },
                 );
               }
               setTracks((prev) =>
-                prev.filter((t) => !areTrackIdsEqual(t, trackId)),
+                prev.filter((t) => entryId == null ? !areTrackIdsEqual(t, trackId) : t.playlist_entry_id !== entryId),
               );
             } catch (e) {
               console.error('Remove track error', e);
@@ -424,7 +463,8 @@ export default function PlaylistScreen({
       ) : (
         <FlatList
           data={tracks}
-          keyExtractor={(item, idx) => `${getTrackId(item) ?? idx}-${idx}`}
+          keyExtractor={(item, idx) => item.playlist_entry_id == null
+            ? `${getTrackId(item) ?? idx}-${idx}` : `entry:${item.playlist_entry_id}`}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <View style={styles.playlistHeader}>

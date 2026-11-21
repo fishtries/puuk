@@ -1284,7 +1284,7 @@ describe('usePlayerController', () => {
     expect(authFetch.mock.calls.some(([url]) => /history|feedback/.test(url))).toBe(false);
   });
 
-  test('rapid consecutive fetchNextTrack calls advance only once (debounced by lock)', async () => {
+  test('each manual Next advances the queue, including during playback startup', async () => {
     const list = [
       { id: 1, title: 'T1' },
       { id: 2, title: 'T2' },
@@ -1302,9 +1302,8 @@ describe('usePlayerController', () => {
       await Promise.all([p1, p2]);
     });
 
-    // Only one transition happened: currentTrack is T2, T3 remains in queue
-    expect(controller.currentTrack.id).toBe(2);
-    expect(controller.upNextQueue.map((t) => t.id)).toEqual([3]);
+    expect(controller.currentTrack.id).toBe(3);
+    expect(controller.upNextQueue).toEqual([]);
   });
 
   describe('normalizeTrackDto', () => {

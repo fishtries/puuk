@@ -17,6 +17,7 @@ function getStore(player) {
   let subscription;
   const stateListeners = new Set();
   const positionListeners = new Set();
+  const snapshotListeners = new Set();
   const receive = (event) => {
     const previous = latest;
     latest = event;
@@ -30,17 +31,18 @@ function getStore(player) {
     if (positionChanged) position = { currentTime: event.currentTime || 0, duration: event.duration || 0 };
     if (stateChanged) for (const listener of stateListeners) listener();
     if (positionChanged) for (const listener of positionListeners) listener();
+    for (const listener of snapshotListeners) listener(event);
   };
   const subscribe = (listeners, listener) => {
-    listeners.add(listener);
     if (!subscription) {
       subscription = player.addListener('playbackStatusUpdate', receive);
       // Catch changes between render and subscription, including a remount.
       if (player.currentStatus) receive(player.currentStatus);
     }
+    listeners.add(listener);
     return () => {
       listeners.delete(listener);
-      if (stateListeners.size === 0 && positionListeners.size === 0) {
+      if (stateListeners.size === 0 && positionListeners.size === 0 && snapshotListeners.size === 0) {
         subscription?.remove();
         subscription = undefined;
       }
@@ -52,6 +54,7 @@ function getStore(player) {
     latest: () => latest,
     subscribeState: listener => subscribe(stateListeners, listener),
     subscribePosition: listener => subscribe(positionListeners, listener),
+    subscribeSnapshot: listener => subscribe(snapshotListeners, listener),
   };
   stores.set(player, store);
   return store;
@@ -59,6 +62,13 @@ function getStore(player) {
 
 export function getPlaybackSnapshot(player) {
   return player ? getStore(player).latest() : EMPTY;
+}
+
+export function subscribePlaybackSnapshot(player, listener) {
+  const store = getStore(player);
+  const unsubscribe = store.subscribeSnapshot(listener);
+  listener(store.latest());
+  return unsubscribe;
 }
 
 export function usePlaybackState(player) {

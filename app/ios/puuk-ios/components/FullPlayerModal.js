@@ -1155,6 +1155,23 @@ const FullPlayerModal = ({
         if (onAddToPlaylist) onAddToPlaylist(activeTrack);
       } else if (nativeEvent.event === 'edit_track') {
         if (onEditTrack) onEditTrack(activeTrack);
+      } else if (nativeEvent.event === 'wrong_recording' && activeTrack.audio_revision) {
+        const trackId = getTrackId(activeTrack);
+        authFetch(`/api/tracks/${encodeURIComponent(trackId)}/recording-review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision: activeTrack.audio_revision }),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error('Recording review unavailable');
+          const { status } = await response.json();
+          Alert.alert({
+            queued: 'Трек отправлен на проверку',
+            running: 'Проверка трека уже идёт',
+            confirmed: 'Версия трека подтверждена',
+            mismatch: 'Подтвердилась другая версия',
+            changed: 'Аудиофайл уже изменился',
+          }[status] || 'Для этого трека нет эталона для проверки');
+        }).catch(() => Alert.alert('Не удалось отправить трек на проверку'));
       }
     },
     [activeTrack, onAddToPlaylist, onEditTrack, onToggleDislike, dislikePending],
@@ -1163,6 +1180,11 @@ const FullPlayerModal = ({
   const menuActions = useMemo(
     () => [
       ...(SHARE_LINKS_ENABLED ? [{ id: 'share', title: 'Поделиться', image: Platform.select({ ios: 'square.and.arrow.up' }) }] : []),
+      ...(currentTrack?.audio_revision ? [{
+        id: 'wrong_recording',
+        title: 'Не та версия',
+        image: Platform.select({ ios: 'flag' }),
+      }] : []),
       ...(onToggleDislike ? [{
         id: 'dislike',
         title: trackIsDisliked ? 'Remove Dislike' : 'Dislike',
@@ -1213,6 +1235,7 @@ const FullPlayerModal = ({
           <AppleLyricsView
             lyricsResult={lyricsResult}
             player={player}
+            sourceAttemptId={currentPlayback?.sourceAttemptId ?? undefined}
             isLyricsView={isLyricsView}
             isLyricsMounted={isLyricsMounted}
             currentTrack={activeTrack}

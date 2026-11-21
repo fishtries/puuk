@@ -671,6 +671,47 @@ describe('usePlayerController with accepted real coordinator', () => {
     expect(mockPlayer.intent).toBe('pause');
   });
 
+  test('applies only the latest seek when a pending source loads and honors pause', async () => {
+    let resolveTicket;
+    mockCoordinator.resolveMedia = () => new Promise(resolve => { resolveTicket = resolve; });
+    await select();
+    await act(async () => {
+      await controller.seekTo(18);
+      await controller.seekTo(34);
+      await controller.togglePlayPause();
+    });
+    expect(mockPlayer.seekForAttempt).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveTicket({ uri: 'https://puuk.app/api/stream/A', headers: {}, delivery: 'direct', usableUntil: Infinity });
+      await flush();
+    });
+    await retryReady();
+    expect(mockPlayer.seekForAttempt).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.seekForAttempt).toHaveBeenCalledWith(mockPlayer.attempt, 34, null);
+    expect(mockPlayer.playForAttempt).not.toHaveBeenCalled();
+    expect(controller.currentPlayback.positionSeconds).toBe(34);
+  });
+
+  test('a rejected seek leaves subsequent audio progress available', async () => {
+    await select();
+    await progress(8);
+    mockPlayer.seekForAttempt.mockReturnValueOnce(false);
+    await act(async () => controller.seekTo(35));
+    expect(mockCoordinator.getState().current.positionSeconds).toBe(8);
+    await progress(9);
+    expect(mockCoordinator.getState().current.positionSeconds).toBe(9);
+  });
+
+  test('progress remains exact without publishing every sample to the player UI', async () => {
+    await select();
+    await progress(8);
+    const currentPlayback = controller.currentPlayback;
+    await progress(8.1);
+    await progress(8.2);
+    expect(controller.currentPlayback).toBe(currentPlayback);
+    expect(mockCoordinator.getState().current.positionSeconds).toBe(8.2);
+  });
+
   test('A/B/A and same-track explicit selections have distinct IDs; obsolete/missing status and skip are inert', async () => {
     await select();
     const a = mockPlayer.event({ nativeEvent: 'finish', didJustFinish: true });

@@ -1,6 +1,6 @@
 import { saveRatingWithFeedback, showRatingError } from '../features/downloads/ratingFeedback';
 import { normalizeStreamUrl } from '../utils/streamUrl';
-import { AppState } from 'react-native';
+import { AppState, DeviceEventEmitter } from 'react-native';
 import defaultAudioCache from '../utils/audioCache';
 import defaultPreloadScheduler from '../utils/preloadScheduler';
 import { boundedMediaOperation, mediaDelivery } from '../shared/api/media';
@@ -243,6 +243,33 @@ export default function usePlayerController({ setTracks }) {
 
   // Сессия волны: prefetch рекомендаций подмешивает в буфер только в wave-сессии
   const isWaveSessionRef = useRef(false);
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener('PUUK_PLAYLIST_POSITIONS_READY', ({ refreshed, added }) => {
+      const current = currentTrackRef.current?.playlist_entry_id;
+      if (current == null || shuffleEnabled || isWaveSessionRef.current) return;
+      const position = refreshed.findIndex((track) => track.playlist_entry_id === current);
+      if (position < 0) return;
+      const ready = new Set(added.map((track) => track.playlist_entry_id));
+      const queue = [...queueRef.current];
+      const cycle = [...cycleTracksRef.current];
+      for (let index = refreshed.length - 1; index > position; index--) {
+        const item = refreshed[index];
+        if (!ready.has(item.playlist_entry_id) ||
+            queue.some((track) => track.playlist_entry_id === item.playlist_entry_id)) continue;
+        const next = refreshed[index + 1];
+        const insert = (list) => {
+          const anchor = list.findIndex((track) => track.playlist_entry_id === next?.playlist_entry_id);
+          if (next && anchor >= 0) list.splice(anchor, 0, item);
+          else if (!next) list.push(item);
+        };
+        insert(queue);
+        insert(cycle);
+      }
+      cycleTracksRef.current = cycle;
+      if (queue.length !== queueRef.current.length) setUpNextQueue(queue);
+    });
+    return () => subscription.remove();
+  }, [setUpNextQueue, shuffleEnabled]);
   const durableWaveRef = useRef(false);
   const reconnectPendingRef = useRef(false);
   const waveRetryAtRef = useRef(0);
@@ -563,10 +590,12 @@ export default function usePlayerController({ setTracks }) {
 
   const isPlaying = status.playing;
   const holdPosition = networkUX.current?.error?.holdTrack;
+  const matchesSource = status.sourceIdentityVersion !== 1 ||
+    status.sourceAttemptId === networkUX.current?.sourceAttemptId;
   const currentTime = holdPosition
     ? networkUX.current.positionSeconds
-    : status.currentTime || 0;
-  const duration = status.duration || (holdPosition ? currentTrack?.duration || 0 : 0);
+    : (matchesSource ? status.currentTime || 0 : 0);
+  const duration = (matchesSource && status.duration) || Number(currentTrack?.duration) || 0;
 
   useEffect(() => {
     // Legacy presentation remains available without attributing v1 events.
@@ -744,11 +773,10 @@ export default function usePlayerController({ setTracks }) {
   const creditSetTracksRef = useRef(setTracks);
   creditSetTracksRef.current = setTracks;
   const creditContextRef = useRef(null);
-  const creditContextKey = JSON.stringify([
-    getTrackId(currentTrack),
-    upNextQueue.map(getTrackId),
-    history.map(getTrackId),
-  ]);
+  const currentTrackId = getTrackId(currentTrack);
+  const creditContextKey = useMemo(() => JSON.stringify([
+    currentTrackId, upNextQueue.map(getTrackId), history.map(getTrackId),
+  ]), [currentTrackId, upNextQueue, history]);
   const creditContextEpoch =
     (creditContextRef.current?.epoch || 0) +
     (creditContextRef.current?.key === creditContextKey ? 0 : 1);
@@ -1136,9 +1164,7 @@ export default function usePlayerController({ setTracks }) {
     }, { replaceRecommendations: true });
   }, [fetchQueue]);
 
-  const wavePositionKey = JSON.stringify([
-    getTrackId(currentTrack), upNextQueue.map(getTrackId), history.map(getTrackId),
-  ]);
+  const wavePositionKey = creditContextKey;
   useEffect(saveCurrentWave, [saveCurrentWave, wavePositionKey]);
 
   useEffect(() => {
@@ -1340,7 +1366,12 @@ export default function usePlayerController({ setTracks }) {
       const history = historyRef.current;
       if (!mountedRef.current || !currentTrack || !currentRequestIdRef.current)
         return;
-      if (isAdvancingRef.current) return;
+      if (isAdvancingRef.current) {
+        if (finished || forceLocal || !upNextQueue.length) return;
+        // A manual skip can supersede an unfinished selection with a known next track.
+        queueEpochRef.current += 1;
+        queueRequestRef.current?.controller.abort();
+      }
       isAdvancingRef.current = true;
       const epoch = queueEpochRef.current;
       const transition = transitionEpochRef.current;
@@ -1429,7 +1460,7 @@ export default function usePlayerController({ setTracks }) {
           }
 
           const result = await playPromise;
-          if (durableWaveRef.current && valid() && result?.error) {
+          if (durableWaveRef.current && valid() && !result?.superseded && result?.error) {
             waveRetryAtRef.current = Date.now() + WAVE_RETRY_DELAY;
             awaitingRecommendationsRef.current = true;
             await advanceLocal([nextTrack]);

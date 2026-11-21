@@ -194,6 +194,7 @@ export default function LibraryScreen({
   );
   const [favorites, setFavorites] = useState([]);
   const [playlists, setPlaylists] = useState([]);
+  const [savedAlbums, setSavedAlbums] = useState([]);
   const [history, setHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -225,6 +226,7 @@ export default function LibraryScreen({
       if (!currentUser) {
         setFavorites([]);
         setPlaylists([]);
+      setSavedAlbums([]);
         setHistory([]);
         setIsLoading(false);
         setIsRefreshing(false);
@@ -306,6 +308,12 @@ export default function LibraryScreen({
               }
             },
           }),
+          (async () => {
+            const response = await authFetch('/api/albums/saved', { signal: controller.signal });
+            if (!response.ok) return;
+            const albums = await response.json();
+            if (canUpdate()) setSavedAlbums(Array.isArray(albums) ? albums : []);
+          })(),
           fetchCatalogWithCache('/api/history', {
             key: 'history',
             userId: currentUser.id,
@@ -346,6 +354,7 @@ export default function LibraryScreen({
     if (!currentUser) {
       setFavorites([]);
       setPlaylists([]);
+      setSavedAlbums([]);
       setHistory([]);
       setIsLoading(false);
       setIsRefreshing(false);
@@ -354,6 +363,7 @@ export default function LibraryScreen({
     // Очищаем списки предыдущего пользователя при смене учетной записи
     setFavorites([]);
     setPlaylists([]);
+    setSavedAlbums([]);
     setHistory([]);
     setIsLoading(true);
     fetchLibraryData(false);
@@ -627,6 +637,21 @@ export default function LibraryScreen({
     );
   };
 
+  const renderAlbumCard = (album) => (
+    <TouchableOpacity
+      key={`album-${album.id}`}
+      accessibilityRole="button"
+      style={styles.playlistCard}
+      onPress={() => navigation.navigate('Album', { albumId: album.id })}
+    >
+      <View style={styles.playlistCardCover}>
+        <CoverImage source={album.coverArt} style={styles.playlistCardImage} />
+      </View>
+      <Text style={styles.playlistCardTitle} numberOfLines={1}>{album.title}</Text>
+      <Text style={styles.playlistCardSubtitle} numberOfLines={1}>{album.album_artist || album.artist}</Text>
+    </TouchableOpacity>
+  );
+
   // ─── Playlist Card Render ────────────────────────────────────
   const renderPlaylistCard = (playlist, index) => (
     <AnimatedTouchable
@@ -747,6 +772,7 @@ export default function LibraryScreen({
             </AnimatedTouchable>
 
             {/* 3. User Playlists */}
+            {savedAlbums.map(renderAlbumCard)}
             {playlists.map((pl, idx) => renderPlaylistCard(pl, idx))}
           </ScrollView>
 

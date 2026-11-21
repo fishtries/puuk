@@ -557,6 +557,9 @@ export class PlaybackCoordinator {
     this.current.source = null;
     this.current.intent = 'pause';
 
+    this._pendingUserSeek = null;
+    this._seekPending = false;
+
     this.currentTrack = null;
     this.currentTrackId = null;
     this.currentPlayUri = null;
@@ -688,35 +691,43 @@ export class PlaybackCoordinator {
     }
 
     if (type === 'seek') {
-      const targetSeconds =
-        typeof positionSeconds === 'number' ? positionSeconds : 0;
-      this._lastSeekTarget = targetSeconds;
-      this.current.positionSeconds = targetSeconds;
-      this._seekPending = true;
+      if (!Number.isFinite(positionSeconds)) return;
+      this._pendingUserSeek = Math.max(0, positionSeconds);
+      this.current.positionSeconds = this._pendingUserSeek;
       this._cancelRetry('user_seek');
       this._recordDiagnostic('intent_seek');
       this._notifyState();
 
-      if (player) {
-        try {
-          if (
-            this.identityAvailable &&
-            typeof player.seekForAttempt === 'function' &&
-            this.current.sourceAttemptId
-          ) {
-            player.seekForAttempt(
-              this.current.sourceAttemptId,
-              targetSeconds,
-              null,
-            );
-          } else if (typeof player.seekTo === 'function') {
-            await player.seekTo(targetSeconds);
-          }
-        } catch (err) {
-          this._warn('[Coordinator] player seek failed in setIntent');
-        }
+      return this._applyPendingUserSeek(player);
+    }
+  }
+
+  async _applyPendingUserSeek(player) {
+    const { sourceAttemptId, requestId } = this.current;
+    const target = this._pendingUserSeek;
+    if (target == null || !player || this.current.error) return;
+    if (this.identityAvailable
+      ? this._loadedAttemptId !== sourceAttemptId
+      : !this.currentPlayUri) return;
+
+    this._pendingUserSeek = null;
+    this._lastSeekTarget = target;
+    this._seekPending = this.identityAvailable;
+    try {
+      if (this.identityAvailable) {
+        if (player.seekForAttempt(sourceAttemptId, target, null) === true) return;
+      } else if (typeof player.seekTo === 'function') {
+        await player.seekTo(target);
+        return;
       }
-      return;
+    } catch {
+      this._warn('[Coordinator] user seek failed');
+    }
+    if (this.current.requestId === requestId && this.current.sourceAttemptId === sourceAttemptId &&
+        this._lastSeekTarget === target && this._pendingUserSeek == null) {
+      this._seekPending = false;
+      this.current.positionSeconds = this._lastConfirmedPosition ?? 0;
+      this._notifyState();
     }
   }
 
@@ -1099,6 +1110,10 @@ export class PlaybackCoordinator {
         });
       }
       this._notifyState();
+      if (!sourceError && event.isLoaded === true) {
+        this._loadedAttemptId = event.sourceAttemptId;
+        void this._applyPendingUserSeek(player);
+      }
       return { accepted: true, didStart: false, didFinish: false };
     }
 
@@ -1138,6 +1153,7 @@ export class PlaybackCoordinator {
 
     if (event.nativeEvent === 'seekIntent') {
       if (event.seekOrigin === 'user') {
+        this._pendingUserSeek = null;
         this._seekPending = true;
         if (typeof event.seekTargetSeconds === 'number') {
           this._lastSeekTarget = event.seekTargetSeconds;
@@ -1154,6 +1170,7 @@ export class PlaybackCoordinator {
         this._loadedCompletionCallback(event);
         this._loadedCompletionCallback = null;
       }
+      void this._applyPendingUserSeek(player);
       return { accepted: true, didStart: false, didFinish: false };
     }
 
@@ -1166,18 +1183,27 @@ export class PlaybackCoordinator {
         if (this._seekCompletionCallback === callback)
           this._seekCompletionCallback = null;
       }
-      if (event.seekCompleted === true) {
+      if (typeof event.seekCompleted === 'boolean') {
         this._seekPending = false;
         const pos =
-          typeof event.currentTime === 'number'
+          Number.isFinite(event.currentTime)
             ? event.currentTime
-            : this._lastSeekTarget || 0;
+            : (event.seekCompleted ? this._lastSeekTarget : this._lastConfirmedPosition) ?? 0;
         this.current.positionSeconds = pos;
         this._lastConfirmedPosition = pos;
         this._progressEvents = [];
         this._hasStableProof = false;
+        this._notifyState();
       }
       return { accepted: true, didStart: false, didFinish: false };
+    }
+
+    if (!sourceError && event.isLoaded === true) {
+      this._loadedAttemptId = event.sourceAttemptId;
+      if (this._pendingUserSeek != null) {
+        void this._applyPendingUserSeek(player);
+        if (event.nativeEvent === 'progress') return { accepted: true, didStart: false, didFinish: false };
+      }
     }
 
     // Strict confirmation requirements (§4.2):
@@ -1201,6 +1227,8 @@ export class PlaybackCoordinator {
 
     if (isConfirmedProgress) {
       const now = this.clock();
+      const stateChanged = this.current.status !== 'playing' ||
+        this.networkStatus !== 'good' || !this._confirmedPlaybackStarted;
       this.current.positionSeconds = event.currentTime;
       this._lastConfirmedPosition = event.currentTime;
 
@@ -1255,7 +1283,7 @@ export class PlaybackCoordinator {
         }
       }
 
-      this._notifyState();
+      if (stateChanged) this._notifyState();
     }
 
     if (!sourceError && (event.nativeEvent === 'finish' || event.didJustFinish)) {
@@ -1633,6 +1661,8 @@ export class PlaybackCoordinator {
     this._acceptedIntentRevision = -1;
     this._lastSeekTarget = null;
     this._seekPending = false;
+    this._pendingUserSeek = null;
+    this._loadedAttemptId = null;
     this._progressEvents = [];
     this._hasStableProof = false;
     this._clearStallWatchdog();
@@ -1652,6 +1682,7 @@ export class PlaybackCoordinator {
 
     this._explicitInstallAttempt = sourceAttemptId;
     this._recordDiagnostic('play');
+    this._notifyState();
 
     if (
       this.scheduler &&
@@ -2023,25 +2054,8 @@ export class PlaybackCoordinator {
       title: track?.title,
     });
 
-    try {
-      if (!offlineLease) await this.updateLockScreenMetadata(player, track, isCurrent);
-    } catch (lockErr) {
-      this._warn(
-        '[Coordinator][Stage 5: lock_screen FAILED]',
-        lockErr?.message,
-      );
-    }
-
-    if (!isCurrent()) {
-      return {
-        isLocal: false,
-        uri: null,
-        requestId,
-        sourceAttemptId,
-        confirmation: this.identityAvailable ? 'pending' : 'unavailable',
-        superseded: true,
-      };
-    }
+    if (!offlineLease) void this.updateLockScreenMetadata(player, track, isCurrent);
+    if (!this.identityAvailable) void this._applyPendingUserSeek(player);
 
     // Сбрасываем ошибку сети при успешном начале воспроизведения
     this.networkError = null;
