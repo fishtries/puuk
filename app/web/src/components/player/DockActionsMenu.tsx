@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { ListMusic, Tag, ListPlus, MoreHorizontal, Share2, Music2 } from 'lucide-react';
+import { ListMusic, Tag, ListPlus, MoreHorizontal, Share2, Music2, Flag } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Track } from '../../types/track';
+import { requestRecordingReview } from '../../api/tracks';
 import { SHARE_LINKS_ENABLED, entityShareId, shareEntityUrl } from '../../utils/shareLinks';
 import { useShareNavigationStore } from '../../store/useShareNavigationStore';
 import styles from './DockActionsMenu.module.css';
@@ -123,6 +124,28 @@ export const DockActionsMenu: React.FC<DockActionsMenuProps> = ({
                 if (id) useShareNavigationStore.getState().navigateToTarget({ type: 'track', id });
               }}><Music2 size={16} /><span>Открыть трек</span></button>
             </>}
+            {track?.audio_revision && (
+              <button type="button" role="menuitem" className={styles.menuItem} onClick={async () => {
+                close();
+                try {
+                  const status = await requestRecordingReview(track.id, track.audio_revision!);
+                  const messages: Record<string, string> = {
+                    queued: 'Трек отправлен на проверку',
+                    running: 'Проверка трека уже идёт',
+                    confirmed: 'Версия трека подтверждена',
+                    mismatch: 'Подтвердилась другая версия',
+                    changed: 'Аудиофайл уже изменился',
+                  };
+                  if (messages[status]) toast.info(messages[status]);
+                  else toast.error('Для этого трека нет эталона для проверки');
+                } catch {
+                  toast.error('Не удалось отправить трек на проверку');
+                }
+              }}>
+                <span className={styles.menuItemIcon}><Flag size={16} /></span>
+                <span>Не та версия</span>
+              </button>
+            )}
             {onEditTags && (
               <button
                 type="button"

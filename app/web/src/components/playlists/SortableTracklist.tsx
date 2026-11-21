@@ -3,7 +3,8 @@ import { ChevronDown, ChevronUp, Music2, Loader2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { reorderPlaylistTracks } from '../../api/tracks';
-import { Track } from '../../types/track';
+import type { Track } from '../../types/track';
+import { trackRowKey } from '../../utils/trackRowKey';
 import { toast } from 'sonner';
 import cdStyles from '../collection/CollectionDetail.module.css';
 import styles from './SortableTracklist.module.css';
@@ -15,7 +16,7 @@ interface SortableTracklistProps {
 }
 
 function idsSignature(tracks: Track[]): string {
-  return tracks.map((t) => t.id).join('|');
+  return tracks.map(trackRowKey).join('|');
 }
 
 function moveItem(list: Track[], from: number, to: number): Track[] {
@@ -52,8 +53,8 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
     const state = usePlayerStore.getState();
     const sameCollection = state.autoplayAfterQueue && !state.isWaveActive
       && state.queue.length === ordered.length
-      && state.queue.every((item, index) => item.id === ordered[index].id);
-    if (currentTrack?.id === track.id && sameCollection) {
+      && state.queue.every((item, index) => trackRowKey(item) === trackRowKey(ordered[index]));
+    if (currentTrack != null && trackRowKey(currentTrack) === trackRowKey(track) && sameCollection) {
       togglePlay();
     } else {
       if (state.isShuffled) state.toggleShuffle();
@@ -66,7 +67,9 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
     if (signature === orderedSignature.current) return;
 
     const previous = ordered;
-    const trackIds = next.map((t) => t.id);
+    const entryIds = next.every((track) => track.playlist_entry_id != null)
+      ? next.map((track) => track.playlist_entry_id!)
+      : undefined;
 
     // Optimistic: apply the new order right away
     setOrdered(next);
@@ -74,7 +77,7 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
     setIsSaving(true);
 
     try {
-      await reorderPlaylistTracks(playlistId, trackIds);
+      await reorderPlaylistTracks(playlistId, next.map((t) => t.id), entryIds);
       toast.success('Порядок треков сохранён');
       void queryClient.invalidateQueries({ queryKey: ['playlist', playlistId] });
     } catch {
@@ -117,7 +120,7 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
       ) : (
         <ol className={`${cdStyles.tracklist} ${isSaving ? styles.tracklistSaving : ''}`}>
           {ordered.map((track, index) => {
-            const isCurrent = currentTrack?.id === track.id;
+            const isCurrent = currentTrack != null && trackRowKey(currentTrack) === trackRowKey(track);
             const isRowPlaying = isCurrent && status === 'playing';
             const isDropTarget =
               canReorderNow && dragIndex !== null && overIndex === index && dragIndex !== index;
@@ -125,7 +128,7 @@ export const SortableTracklist: React.FC<SortableTracklistProps> = ({
 
             return (
               <li
-                key={track.id}
+                key={trackRowKey(track)}
                 className={[
                   cdStyles.trackRow,
                   isCurrent ? cdStyles.trackRowActive : '',

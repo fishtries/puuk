@@ -1,4 +1,7 @@
 export interface Track {
+  audio_revision?: string | null;
+  audio_unavailable?: boolean;
+  playlist_entry_id?: number;
   id: string;
   share_id?: string;
   title: string;
@@ -92,6 +95,7 @@ export interface LyricsSearchResultDTO {
 }
 
 export interface Album {
+  is_saved?: boolean;
   id: string;
   share_id?: string;
   title: string;
@@ -129,6 +133,7 @@ export interface AlbumEditResult {
 }
 
 export interface Playlist {
+  is_imported?: boolean;
   id: string;
   name: string;
   title?: string;

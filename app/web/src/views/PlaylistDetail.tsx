@@ -7,8 +7,10 @@ import {
 } from '../api/tracks';
 import { CollectionDetail } from '../components/collection/CollectionDetail';
 import { PlaylistActionsMenu } from '../components/playlists/PlaylistActionsMenu';
-import { Playlist, Track } from '../types/track';
+import type { Playlist, Track } from '../types/track';
+import { trackRowKey } from '../utils/trackRowKey';
 import { useAuthStore } from '../store/useAuthStore';
+import { usePlayerStore } from '../store/usePlayerStore';
 import { toast } from 'sonner';
 
 const FAVORITES_ID = '__favorites__';
@@ -62,7 +64,35 @@ export const PlaylistDetail: React.FC<PlaylistDetailProps> = ({
     queryFn: () => fetchPlaylistTracks(playlistId),
     enabled: !isFav && !hasPropTracks && Boolean(token && user),
     staleTime: 60000,
+    refetchInterval: (query) => query.state.data?.playlist.is_imported ? 5000 : false,
   });
+
+  const previousImport = React.useRef<{ id: string; tracks: Track[] } | null>(null);
+  React.useEffect(() => {
+    if (!detail?.playlist.is_imported) return;
+    const previous = previousImport.current;
+    previousImport.current = { id: playlistId, tracks: detail.tracks };
+    if (previous?.id !== playlistId) return;
+    const state = usePlayerStore.getState();
+    if (state.isShuffled || state.isWaveActive || state.currentTrack?.playlist_entry_id == null) return;
+    const currentKey = trackRowKey(state.currentTrack);
+    const current = detail.tracks.findIndex((item) => trackRowKey(item) === currentKey);
+    if (current < 0 || !previous.tracks.some((item) => trackRowKey(item) === currentKey)) return;
+    const known = new Set(previous.tracks.map(trackRowKey));
+    const queue = [...state.queue];
+    for (let index = detail.tracks.length - 1; index > current; index--) {
+      const item = detail.tracks[index];
+      if (known.has(trackRowKey(item))) continue;
+      const next = detail.tracks[index + 1];
+      const place = next
+        ? queue.findIndex((entry, position) => position > state.currentTrackIndex &&
+            trackRowKey(entry) === trackRowKey(next))
+        : -1;
+      if (place >= 0) queue.splice(place, 0, item);
+      else if (!next) queue.push(item);
+    }
+    if (queue.length !== state.queue.length) usePlayerStore.setState({ queue });
+  }, [detail, playlistId]);
 
   const tracks = isFav
     ? favData
@@ -110,12 +140,12 @@ export const PlaylistDetail: React.FC<PlaylistDetailProps> = ({
     if (previous) {
       queryClient.setQueryData(detailKey, {
         ...previous,
-        tracks: previous.tracks.filter((t) => t.id !== track.id),
+        tracks: previous.tracks.filter((t) => trackRowKey(t) !== trackRowKey(track)),
       });
     }
 
     try {
-      await removeTrackFromPlaylist(playlistId, track.id);
+      await removeTrackFromPlaylist(playlistId, track.id, track.playlist_entry_id);
       toast.success('Трек удалён из плейлиста');
       void queryClient.invalidateQueries({ queryKey: detailKey });
       void queryClient.invalidateQueries({ queryKey: ['playlists', userId ?? null] });

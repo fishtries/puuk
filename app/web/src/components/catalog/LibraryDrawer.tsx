@@ -68,11 +68,13 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
   });
 
   const { data: albums = [] } = useQuery({
-    queryKey: ['albums'],
+    queryKey: ['albums', user?.id],
+    enabled: isOpen && !!token,
     queryFn: () => fetchAlbums(),
     staleTime: 60000,
   });
 
+  const orderedAlbums = [...albums].sort((a, b) => Number(!!b.is_saved) - Number(!!a.is_saved));
   const tracks = serverTracks;
   const isPlaying = status === 'playing';
 
@@ -202,7 +204,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
               {/* Albums View */}
               {activeTab === 'albums' ? (
                 <div className={styles.albumGrid}>
-                  {albums.map((album: Album) => {
+                  {orderedAlbums.map((album: Album) => {
                     const cover = getCoverUrl(album);
                     return (
                       <button
@@ -224,7 +226,10 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({ isOpen, onClose })
                             </div>
                           )}
                         </div>
-                        <span className={styles.albumName}>{album.title}</span>
+                        <span className={styles.albumName}>
+                          {album.is_saved && <Heart size={14} aria-label="Сохранено в медиатеке" />}
+                          {album.title}
+                        </span>
                         <span className={styles.albumArtist}>
                           {album.album_artist || album.artist}
                           {album.year ? ` · ${album.year}` : ''}

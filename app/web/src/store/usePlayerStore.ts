@@ -1,3 +1,4 @@
+import { trackRowKey } from '../utils/trackRowKey';
 import { create } from 'zustand';
 import type { PlayerStoreState, RepeatMode, ActiveView, RightPanelTab, PlaybackStatus } from '../types/player';
 import type { Track } from '../types/track';
@@ -515,7 +516,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       }
       const state = get();
       const updatedQueue = source === 'search' ? [track] : newQueue || (state.queue.length > 0 ? state.queue : [track]);
-      const index = updatedQueue.findIndex((t) => t.id === track.id);
+      const index = updatedQueue.findIndex((t) => trackRowKey(t) === trackRowKey(track));
       ++audioLoadGeneration;
       cancelAudio();
       desiredPlaying = true;
@@ -731,7 +732,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         if (index < currentTrackIndex) {
           currentTrackIndex -= 1;
         } else if (state.currentTrack) {
-          const realIndex = newQueue.findIndex((t) => t.id === state.currentTrack?.id);
+          const realIndex = newQueue.findIndex((t) => state.currentTrack && trackRowKey(t) === trackRowKey(state.currentTrack));
           currentTrackIndex = realIndex >= 0 ? realIndex : currentTrackIndex;
         }
 

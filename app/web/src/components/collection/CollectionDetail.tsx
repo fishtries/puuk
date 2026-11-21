@@ -2,7 +2,8 @@ import React, { useMemo } from 'react';
 import { Heart, Play, Shuffle, Music2, Loader2, Tag, ListPlus, Trash2 } from 'lucide-react';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useTagEditorStore } from '../../store/useTagEditorStore';
-import { Track } from '../../types/track';
+import type { Track } from '../../types/track';
+import { trackRowKey } from '../../utils/trackRowKey';
 import { SortableTracklist } from '../playlists/SortableTracklist';
 import styles from './CollectionDetail.module.css';
 import { AuthorizedImage } from '../common/AuthorizedImage';
@@ -48,8 +49,8 @@ export const Tracklist: React.FC<TracklistProps> = ({
     const state = usePlayerStore.getState();
     const sameCollection = state.autoplayAfterQueue && !state.isWaveActive
       && state.queue.length === tracks.length
-      && state.queue.every((item, index) => item.id === tracks[index].id);
-    if (currentTrack?.id === track.id && sameCollection) {
+      && state.queue.every((item, index) => trackRowKey(item) === trackRowKey(tracks[index]));
+    if (currentTrack != null && trackRowKey(currentTrack) === trackRowKey(track) && sameCollection) {
       togglePlay();
     } else {
       if (state.isShuffled) state.toggleShuffle();
@@ -78,12 +79,12 @@ export const Tracklist: React.FC<TracklistProps> = ({
   return (
     <ol className={styles.tracklist}>
       {tracks.map((track, index) => {
-        const isCurrent = currentTrack?.id === track.id;
+        const isCurrent = currentTrack != null && trackRowKey(currentTrack) === trackRowKey(track);
         const isRowPlaying = isCurrent && status === 'playing';
 
         return (
           <li
-            key={`${track.id}-${index}`}
+            key={track.playlist_entry_id ?? `${track.id}-${index}`}
             className={`${styles.trackRow} ${isCurrent ? styles.trackRowActive : ''}`}
             onClick={() => handleRowClick(track)}
             onKeyDown={(e) => e.key === 'Enter' && handleRowClick(track)}

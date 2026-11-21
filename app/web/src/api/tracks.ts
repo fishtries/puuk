@@ -42,6 +42,14 @@ export async function fetchTrack(trackId: string): Promise<Track> {
   return apiClient<Track>(`/api/tracks/${trackId}`);
 }
 
+export async function requestRecordingReview(trackId: string, revision: string): Promise<string> {
+  const result = await apiClient<{ status: string }>(`/api/tracks/${encodeURIComponent(trackId)}/recording-review`, {
+    method: 'POST',
+    body: JSON.stringify({ revision }),
+  });
+  return result.status;
+}
+
 export async function fetchAlbums(): Promise<Album[]> {
   return apiClient<Album[]>('/api/albums');
 }
@@ -128,20 +136,23 @@ export async function addTrackToPlaylist(
 
 export async function removeTrackFromPlaylist(
   playlistId: string | number,
-  trackId: string
+  trackId: string,
+  entryId?: number,
 ): Promise<void> {
-  await apiClient<{ status: string }>(`/api/playlists/${playlistId}/tracks/${trackId}`, {
+  const member = entryId == null ? `tracks/${trackId}` : `entries/${entryId}`;
+  await apiClient<{ status: string }>(`/api/playlists/${playlistId}/${member}`, {
     method: 'DELETE',
   });
 }
 
 export async function reorderPlaylistTracks(
   playlistId: string | number,
-  trackIds: string[]
+  trackIds: string[],
+  entryIds?: number[],
 ): Promise<void> {
   await apiClient<{ status: string }>(`/api/playlists/${playlistId}/tracks/order`, {
     method: 'PUT',
-    body: JSON.stringify({ track_ids: trackIds }),
+    body: JSON.stringify(entryIds ? { entry_ids: entryIds } : { track_ids: trackIds }),
   });
 }
 
