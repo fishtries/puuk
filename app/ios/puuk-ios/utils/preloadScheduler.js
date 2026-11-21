@@ -564,16 +564,13 @@ export class PreloadScheduler {
     for (const cand of candidates) {
       this._clearGraceTimer(cand.trackId);
       this.pendingCancelCount.delete(cand.trackId);
-      const downloadState =
-        typeof this.cache.getDownloadState === 'function'
-          ? this.cache.getDownloadState(cand.trackId)
-          : this.cache.isCached(cand.trackId)
-            ? { status: 'cached' }
-            : { status: 'idle' };
-
-      if (downloadState.status === 'cached') {
+      const downloadState = this.cache.getDownloadState?.(cand.trackId);
+      const cachedUri = downloadState?.status === 'cached'
+        ? downloadState.uri
+        : this.cache.getCachedUri(cand.trackId);
+      if (cachedUri) {
         this._setStatus(cand.trackId, TRACK_STATUS.READY, {
-          uri: downloadState.uri,
+          uri: cachedUri,
           purpose: cand.purpose,
         });
         continue;
@@ -591,7 +588,7 @@ export class PreloadScheduler {
       }
 
       // Если загрузка уже идёт напрямую через cache (например, из PlaybackCoordinator.play):
-      if (downloadState.status === 'downloading') {
+      if (downloadState?.status === 'downloading') {
         this._setStatus(cand.trackId, TRACK_STATUS.DOWNLOADING, {
           purpose: cand.purpose,
         });

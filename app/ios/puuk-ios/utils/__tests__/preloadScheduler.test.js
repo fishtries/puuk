@@ -37,14 +37,11 @@ describe('PreloadScheduler', () => {
       }),
       getDownloadState: jest.fn((id) => {
         const idStr = String(id);
-        if (mockCache.cachedIds.has(idStr)) {
-          return { status: 'cached', uri: `file:///mock/${idStr}.audio` };
-        }
         const fetch = activeFetches.get(idStr);
         if (fetch && !fetch.cancelled) {
           return { status: 'downloading', promise: fetch.promise };
         }
-        return { status: 'idle' };
+        return null;
       }),
       isDownloading: jest.fn((id) => {
         const fetch = activeFetches.get(String(id));
