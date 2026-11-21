@@ -99,12 +99,22 @@ export function overlayDislikeIds(dislikes, ratings) {
   return ids;
 }
 
-export async function getLocalDislikeIds(session) {
+export async function getLocalRatingIds(session) {
   const [snapshot, ratings] = await Promise.all([
     outbox.readRatingSnapshot(session),
     getRatingOverlay(session),
   ]);
-  return overlayDislikeIds(snapshot?.dislikes || [], ratings);
+  const favorites = new Set(snapshot?.favoriteIds || []);
+  for (const { trackId, rating, state } of ratings) {
+    if (state === 'failed') continue;
+    if (state !== 'missing' && rating === 'like') favorites.add(trackId);
+    else favorites.delete(trackId);
+  }
+  return { favorites, dislikes: overlayDislikeIds(snapshot?.dislikes || [], ratings) };
+}
+
+export async function getLocalDislikeIds(session) {
+  return (await getLocalRatingIds(session)).dislikes;
 }
 
 async function fetchRatings(job) {

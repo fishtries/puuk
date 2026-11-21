@@ -1,8 +1,8 @@
 import { fetch } from 'expo/fetch';
 import { AppState } from 'react-native';
 import { FileMode } from 'expo-file-system';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/hashes/utils';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { mediaDelivery } from '../shared/api/media';
 import { getTrackId } from '../shared/domain/trackAdapter';
 import {

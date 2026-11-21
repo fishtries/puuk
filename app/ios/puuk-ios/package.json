@@ -18,7 +18,7 @@
       "<rootDir>/jest.setup.js"
     ],
     "transformIgnorePatterns": [
-      "node_modules/(?!((jest-)?react-native|@react-native(-community)?|@react-native-menu/.*|expo(nent)?|@expo(nent)?/.*|expo-.*|@react-navigation/.*|react-native-.*)/.*)"
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?|@react-native-menu/.*|@noble/hashes|expo(nent)?|@expo(nent)?/.*|expo-.*|@react-navigation/.*|react-native-.*)/.*)"
     ],
     "testMatch": [
       "**/__tests__/**/*.test.js"
@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
-    "@noble/hashes": "^1.8.0",
+    "@noble/hashes": "2.4.0",
     "@react-native-community/slider": "5.2.1",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@react-native-menu/menu": "^2.0.0",

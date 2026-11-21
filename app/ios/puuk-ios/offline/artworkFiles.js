@@ -1,6 +1,6 @@
 import { Directory, File } from 'expo-file-system';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import { getOfflineRootUri } from './storage';
 
 export function offlineCoverFile(owner, trackId) {
