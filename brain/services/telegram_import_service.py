@@ -236,9 +236,11 @@ def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None
                     refresh=MAX(telegram_import_analysis.refresh,excluded.refresh)""",
                              (track_id, revision, int(replaced)))
         evidence = {**(artifact.get('evidence') or {})}
-        if song.get('preview_url') and evidence.get('audio_match'):
-            evidence['reference'] = {'preview_url': song['preview_url'], 'duration': song['duration']}
-            conn.execute('UPDATE tracks SET audio_review_blocked=0 WHERE id=?', (track_id,))
+        if evidence.get('audio_match'):
+            if song.get('preview_url'):
+                evidence['reference'] = {'preview_url': song['preview_url'], 'duration': song['duration']}
+            if evidence.get('reference'):
+                conn.execute('UPDATE tracks SET audio_review_blocked=0 WHERE id=?', (track_id,))
         conn.execute("""INSERT INTO telegram_track_imports(source,track_id,sha256,evidence) VALUES (?,?,?,?)
             ON CONFLICT(source) DO UPDATE SET track_id=excluded.track_id,sha256=excluded.sha256,
             evidence=excluded.evidence""",
