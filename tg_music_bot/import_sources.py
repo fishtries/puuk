@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from zipfile import ZipFile
 
 from spotify_metadata import album_songs, cover_url, fetch_entity, preview_url
+from spotify_playlist import INCOMPLETE as SPOTIFY_PLAYLIST_INCOMPLETE, read_public_playlist
 
 
 MAX_POSITIONS = 1000
@@ -75,6 +76,38 @@ def _spotify_song(track, row):
             'preview_url': preview_url(row, track), 'cover_url': cover_url(track)}
 
 
+def _spotify_large_playlist(ident, embed_rows):
+    playlist, items = read_public_playlist(ident, MAX_POSITIONS)
+    owner = ((playlist.get('ownerV2') or {}).get('data') or {}).get('uri')
+    kind = 'catalog' if owner == 'spotify:user:spotify' else 'playlist'
+    previews = {row['uri']: url for row in embed_rows if row.get('uri') and (url := preview_url(row))}
+    sources = []
+    for item in items:
+        track = ((item.get('itemV2') or {}).get('data') or {})
+        uri = track.get('uri') or ''
+        match = re.fullmatch(r'spotify:track:([A-Za-z0-9]{22})', uri)
+        title = track.get('name')
+        artists = [(artist.get('profile') or {}).get('name')
+                   for artist in (track.get('artists') or {}).get('items', [])]
+        duration = (track.get('trackDuration') or {}).get('totalMilliseconds')
+        if (not match or not title or not artists or not all(artists)
+                or not isinstance(duration, (int, float)) or duration <= 0):
+            sources.append({'type': 'unavailable', 'title': title or 'Недоступная запись',
+                            'occurrence': item['uid']})
+            continue
+        images = ((track.get('albumOfTrack') or {}).get('coverArt') or {}).get('sources') or []
+        rating = (track.get('contentRating') or {}).get('label')
+        song = {'song_id': match[1], 'name': title, 'artists': artists, 'artist': artists[0],
+                'duration': duration / 1000, 'explicit': {'EXPLICIT': True, 'NONE': False}.get(rating),
+                'url': f'https://open.spotify.com/track/{match[1]}', 'preview_url': previews.get(uri),
+                'cover_url': max(images, key=lambda image: image.get('width') or 0, default={}).get('url')}
+        source = {'type': 'spotify', 'key': uri, 'title': title, 'song': song, 'occurrence': item['uid']}
+        if not song['preview_url']:
+            source['spotify_preview_from_track'] = True
+        sources.append(source)
+    return playlist['name'], kind, sources
+
+
 def _spotify(url):
     kind, ident = urlsplit(url).path.split('/')[-2:]
     if kind == 'album':
@@ -88,8 +121,10 @@ def _spotify(url):
             songs = [_spotify_song(entity, entity)]
         else:
             rows = entity.get('trackList') or []
-            if not rows or len(rows) >= 100:
-                raise ValueError('По этой ссылке мне недоступен полный список треков Spotify')
+            if len(rows) >= 100:
+                return _spotify_large_playlist(ident, rows)
+            if not rows:
+                raise ValueError(SPOTIFY_PLAYLIST_INCOMPLETE)
             ids = [re.fullmatch(r'spotify:track:([A-Za-z0-9]{22})', row.get('uri', '')) for row in rows]
             if not all(ids):
                 raise ValueError('Spotify вернул позицию без доступного музыкального трека')
@@ -480,7 +515,16 @@ def download_import_cover(source, directory):
 
 
 def _download_with_cover(source, directory):
+    if source.get('spotify_preview_from_track'):
+        song = source['song']
+        track = fetch_entity('track', song['song_id'])
+        if track.get('uri') != source['key']:
+            raise ValueError('Spotify вернул другую запись')
+        song = {**song, 'preview_url': preview_url(track)}
+        source = {**source, 'song': song}
     artifact = download_source(source, directory)
+    if source.get('spotify_preview_from_track') and artifact.get('evidence', {}).get('audio_match'):
+        artifact['evidence']['reference'] = {'preview_url': song['preview_url'], 'duration': song['duration']}
     if cover := download_import_cover(source, directory):
         artifact['cover'] = cover
     return artifact

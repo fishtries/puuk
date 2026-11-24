@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from audio_match import SAMPLE_RATE, matches_excerpt
-from import_sources import canonical_link, resolve_attachment
+from import_sources import canonical_link, resolve_attachment, resolve_link
 
 
 def test_track_link_takes_precedence_over_playlist():
@@ -19,6 +19,74 @@ def test_vk_legacy_playlist_link_keeps_access_parameters():
             == 'https://vk.ru/music/playlist/429568221_15')
     assert (canonical_link('https://m.vk.com/audio_playlist-123_4_a1b2/?access_key=x%2By#share')
             == 'https://vk.com/music/playlist/-123_4_a1b2?access_key=x%2By')
+
+
+def test_large_spotify_playlist_keeps_order_repeats_and_unavailable_positions(monkeypatch):
+    playlist_id, track_id = 'a' * 22, 'b' * 22
+    uri = f'spotify:track:{track_id}'
+    track = {'uri': uri, 'name': 'Track', 'trackDuration': {'totalMilliseconds': 240000},
+             'artists': {'items': [{'profile': {'name': 'Artist'}}]}, 'contentRating': {'label': 'EXPLICIT'}}
+    items = [{'uid': 'first', 'itemV2': {'data': track}}, {'uid': 'missing'},
+             {'uid': 'second', 'itemV2': {'data': track}}]
+    monkeypatch.setattr('import_sources.fetch_entity', lambda *_: {'title': 'Playlist', 'trackList': [{}] * 100})
+    monkeypatch.setattr('import_sources.read_public_playlist', lambda *_: ({'name': 'Playlist'}, items))
+
+    title, kind, sources = resolve_link(f'https://open.spotify.com/playlist/{playlist_id}')
+
+    assert (title, kind) == ('Playlist', 'playlist')
+    assert [(source['type'], source['slot']) for source in sources] == [
+        ('spotify', 'first:1'), ('unavailable', 'missing:1'), ('spotify', 'second:1')]
+    assert sources[0]['song']['duration'] == 240
+    assert sources[0]['song']['explicit'] is True
+    assert sources[0]['spotify_preview_from_track'] is True
+
+
+@pytest.mark.parametrize('last_page_total', [3, 4])
+def test_spotify_pages_must_agree_on_total(monkeypatch, last_page_total):
+    from contextlib import nullcontext
+    import spotify_playlist
+
+    class Browser:
+        def execute_cdp_cmd(self, *_):
+            pass
+
+        def get(self, _):
+            pass
+
+    def pages(_, uri, __):
+        yield 2, {'content': {'totalCount': last_page_total, 'pagingInfo': {'offset': 2},
+                              'items': [{'uid': 'third'}]}}
+        yield 0, {'name': 'Playlist', 'uri': uri, 'content': {'totalCount': 3, 'pagingInfo': {'offset': 0},
+                                                             'items': [{'uid': 'first'}, {'uid': 'second'}]}}
+
+    monkeypatch.setattr(spotify_playlist, 'music_browser', lambda _: nullcontext(Browser()))
+    monkeypatch.setattr(spotify_playlist, '_pages', pages)
+
+    if last_page_total == 3:
+        _, rows = spotify_playlist.read_public_playlist('a' * 22, 1000)
+        assert [row['uid'] for row in rows] == ['first', 'second', 'third']
+    else:
+        with pytest.raises(ValueError, match='не показал полный список'):
+            spotify_playlist.read_public_playlist('a' * 22, 1000)
+
+
+def test_deferred_spotify_preview_is_saved_with_checked_audio(monkeypatch, tmp_path):
+    from import_sources import _download_with_cover
+
+    uri = 'spotify:track:' + 'b' * 22
+    url = 'https://p.scdn.co/mp3-preview/example'
+    source = {'key': uri, 'song': {'song_id': 'b' * 22, 'duration': 240},
+              'spotify_preview_from_track': True}
+    monkeypatch.setattr('import_sources.fetch_entity', lambda *_: {'uri': uri, 'audioPreview': {'url': url}})
+    monkeypatch.setattr('import_sources.download_import_cover', lambda *_: None)
+
+    def download(resolved, _):
+        assert resolved['song']['preview_url'] == url
+        return {'evidence': {'audio_match': 'spotify-preview-original-speed'}}
+
+    monkeypatch.setattr('import_sources.download_source', download)
+
+    assert _download_with_cover(source, tmp_path)['evidence']['reference'] == {'preview_url': url, 'duration': 240}
 
 
 def test_original_speed_passes_and_slowed_version_fails(monkeypatch):

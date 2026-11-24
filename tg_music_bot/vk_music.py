@@ -1,11 +1,8 @@
 """Download the selected recording from the public VK Music player."""
 import base64
-from contextlib import contextmanager
 import json
-import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import time
 from typing import NamedTuple
@@ -13,6 +10,8 @@ from urllib.parse import unquote_plus, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import requests
+
+from music_browser import music_browser
 
 
 PLAYLIST_TITLE = '[data-testid="MusicPlaylistPage_Title"]'
@@ -37,27 +36,6 @@ class Playback(NamedTuple):
 
 class ExpiredMedia(OSError):
     pass
-
-
-@contextmanager
-def _browser():
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-
-    binary = os.getenv('PUUK_VK_CHROMIUM_PATH') or shutil.which('chromium') or shutil.which('google-chrome')
-    driver = os.getenv('PUUK_VK_CHROMEDRIVER_PATH') or shutil.which('chromedriver')
-    if not binary or not driver:
-        raise ValueError('На сервере недоступен гостевой браузер VK Музыки')
-    options = webdriver.ChromeOptions()
-    options.binary_location = binary
-    options.page_load_strategy = 'eager'
-    for flag in ('--headless', '--mute-audio', '--autoplay-policy=no-user-gesture-required'):
-        options.add_argument(flag)
-    options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
-    with webdriver.Chrome(service=Service(driver), options=options) as browser:
-        browser.set_page_load_timeout(22)
-        browser.set_script_timeout(8)
-        yield browser
 
 
 def _source(base, row, album=None, track=None):
@@ -123,7 +101,7 @@ def _load_playlist(browser, expected):
 
 
 def resolve(url):
-    with _browser() as browser:
+    with music_browser('VK Музыки') as browser:
         browser.get(url)
         selector = PLAYLIST_TITLE + ', ' + SINGLE_TITLE
         _wait_for(browser, lambda d: d.execute_script('return document.querySelector(arguments[0]) != null', selector),
@@ -410,7 +388,7 @@ def download(source, directory):
     from mutagen import File
 
     evidence = {'provider': 'vk', 'recording': source['provider_id']}
-    with _browser() as browser:
+    with music_browser('VK Музыки') as browser:
         for attempt in range(2):
             playback = _media(browser, source)
             if playback.size is None:
