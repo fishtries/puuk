@@ -4,6 +4,7 @@ import {
   displayTrack,
   isOfflineSessionCurrent,
   readMediaKey,
+  readPlayableIds,
   listDownloadJobs,
   cleanupUnretainedMedia,
   retryMediaCleanup,
@@ -291,19 +292,17 @@ export async function isCollectionSaved(session, key) {
   );
 }
 export async function collectionProgress(session, tracks) {
-  const jobs = await listDownloadJobs(session);
-  const states = await Promise.all(
-    tracks.map(async (track) => {
-      const id = idOf(track);
-      const ready = await readMediaKey(session, id);
-      return {
-        trackId: id,
-        state: ready
-          ? 'ready'
-          : jobs.find((job) => String(job.trackId) === id)?.state || 'queued',
-      };
-    }),
-  );
+  const ids = tracks.map(idOf);
+  const [jobs, ready] = await Promise.all([listDownloadJobs(session), readPlayableIds(session, ids)]);
+  const jobStates = new Map();
+  for (const job of jobs) {
+    const id = String(job.trackId);
+    if (!jobStates.has(id)) jobStates.set(id, job.state);
+  }
+  const states = ids.map(trackId => ({
+    trackId,
+    state: ready.has(trackId) ? 'ready' : jobStates.get(trackId) || 'queued',
+  }));
   return {
     total: states.length,
     ready: states.filter((item) => item.state === 'ready').length,

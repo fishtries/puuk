@@ -200,39 +200,64 @@ export class AudioCache {
     this.isInitialized = true;
     return this;
   }
-  async prepareTrack(track, { signal } = {}) {
+  async prepareTrack(track, { signal, resolveTicket } = {}) {
     if (!this.online || !this.sessionValid()) return;
     const id = String(track?.id ?? track?.track_id ?? track), s = this.session(), generation = this.generation;
     const key = `${s.origin}|${s.userId}|${id}`;
     const validated = this.validated.get(key);
-    if (validated && this.now() < validated.until && (!track?.content_version || track.content_version === validated.version)) return;
+    if (validated && this.now() < validated.until && (!track?.content_version || track.content_version === validated.version))
+      return this.getCachedUri(id);
+    this.validated.delete(key);
+    if (!Object.values(this.manifest).some(e =>
+      e.origin === s.origin && e.userId === s.userId && e.trackId === id)) return;
+    const current = () => !signal?.aborted && this.sessionValid() && this.online &&
+      generation === this.generation && JSON.stringify(s) === JSON.stringify(this.session());
     try {
-      const dto = await boundedMediaOperation(async requestSignal => {
-        const response = await authFetch(`/api/tracks/${id}?credits_only=true`, { retry: 0, timeout: 3000, signal: requestSignal, cache: 'no-store' });
-        if (!response.ok) { if ([404, 410].includes(response.status)) return { content_version: null }; throw new MediaDeliveryError('metadata', response.status); }
-        return response.json();
-      }, { signal, timeout: 3000 });
-      if (generation !== this.generation || JSON.stringify(s) !== JSON.stringify(this.session())) return;
-      this.validated.set(key, { version: dto.content_version ?? null, until: this.now() + 30000 });
+      const ticket = await resolveTicket?.();
+      if (!current()) return;
+      let version, until;
+      if (ticket && !ticket.legacy) {
+        if (ticket.trackId !== id || JSON.stringify(ticket.session) !== JSON.stringify(s)) return;
+        const entry = this.manifest[keyOf(s, id, ticket.contentVersion)];
+        if (entry && (!ticket.cacheable || entry.size !== ticket.contentLength)) return;
+        version = ticket.contentVersion;
+        until = Math.min(ticket.reuseUntil, ticket.usableUntil);
+      } else {
+        // Older servers do not include the content version in the ticket.
+        const dto = await boundedMediaOperation(async requestSignal => {
+          const response = await authFetch(`/api/tracks/${id}?credits_only=true`, { retry: 0, timeout: 3000, signal: requestSignal, cache: 'no-store' });
+          if (!response.ok) { if ([404, 410].includes(response.status)) return { content_version: null }; throw new MediaDeliveryError('metadata', response.status); }
+          return response.json();
+        }, { signal, timeout: 3000 });
+        if (!current()) return;
+        version = dto.content_version ?? null;
+        until = this.now() + 30000;
+      }
+      this.validated.set(key, { version, until });
       while (this.validated.size > 200) this.validated.delete(this.validated.keys().next().value);
-      for (const [k, e] of Object.entries(this.manifest)) if (e.origin === s.origin && e.userId === s.userId && e.trackId === id && e.trackId !== this.activeTrackId && !this.pinned.has(e.uri) && e.contentVersion !== dto.content_version) {
+      for (const [k, e] of Object.entries(this.manifest)) if (e.origin === s.origin && e.userId === s.userId && e.trackId === id && e.trackId !== this.activeTrackId && !this.pinned.has(e.uri) && e.contentVersion !== version) {
         safeDelete(new File(e.uri)); delete this.manifest[k];
       }
+      return this.getCachedUri(id);
     } catch { /* no metadata proof => online cache remains inaccessible */ }
   }
-  getCachedUri(track) {
+  getCachedUri(track, expectedVersion = track?.content_version) {
     if (!this.isInitialized || !this.sessionValid()) return null;
     const id = String(track?.id ?? track?.track_id ?? track), s = this.session();
     const proof = this.validated.get(`${s.origin}|${s.userId}|${id}`);
     const version = proof && this.now() < proof.until ? proof.version : null;
-    if (this.online && !version) return null;
-    for (const [key, e] of Object.entries(this.manifest)) {
-      if (e.origin !== s.origin || e.userId !== s.userId || e.trackId !== id || (this.online && e.contentVersion !== version)) continue;
-      if (!this._validEntry(e, key)) { delete this.manifest[key]; return null; }
-      e.lastAccessed = Date.now();
-      return e.uri;
-    }
-    return null;
+    if (this.online && (!version || (expectedVersion && version !== expectedVersion))) return null;
+    const selectedVersion = this.online ? version : expectedVersion;
+    const key = selectedVersion ? keyOf(s, id, selectedVersion) :
+      Object.keys(this.manifest).find(k => {
+        const e = this.manifest[k];
+        return e.origin === s.origin && e.userId === s.userId && e.trackId === id;
+      });
+    const entry = this.manifest[key];
+    if (!entry) return null;
+    if (!this._validEntry(entry, key)) { delete this.manifest[key]; return null; }
+    entry.lastAccessed = Date.now();
+    return entry.uri;
   }
   isCached(id) { return !!this.getCachedUri(id); }
   getDownloadState(id) { const r = this.ongoingDownloads.get(String(id)); return r ? { status: r.cancelled ? 'cancelled' : 'downloading', promise: r.promise } : null; }

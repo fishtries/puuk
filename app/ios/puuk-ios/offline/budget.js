@@ -225,8 +225,11 @@ export function withStorageAdmission(
             state.availableDiskBytes >=
               state.reservedBytes + OFFLINE_DISK_MARGIN_BYTES;
     };
-    if (allowEviction && !fits()) cleanupCompletedStaging(db);
-    if (allowEviction && !fits() && cache) {
+    // The serialized admission can commit immediately while the inventory is current.
+    if (fits()) return allowed() ? commit(db) : null;
+    if (!allowEviction) return null;
+    cleanupCompletedStaging(db);
+    if (cache && !fits()) {
       const state = inventory(db);
       const shortage = Math.max(
         0,
@@ -238,7 +241,7 @@ export function withStorageAdmission(
       );
       await cache.evict((freedBytes) => freedBytes >= shortage);
     }
-    if (allowEviction && !fits() && reclaim && allowed())
+    if (reclaim && allowed() && !fits())
       await reclaimWave?.(session, fits, { background, trackId });
     if (!allowed()) return null;
     return inspect(db) || (fits() ? commit(db) : null);

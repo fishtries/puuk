@@ -5,6 +5,7 @@ import {
   displayTrack,
   listDownloadJobs,
   listPlayableTracks,
+  readPlayableIds,
 } from './index';
 import {
   listReasonTracks,
@@ -199,16 +200,15 @@ export async function selectLocalWaveTracks(
   return { tracks: [...tracks, ...remaining.map(({ track }) => track)], reserveIds };
 }
 
-export async function readOfflineWaveStatus(session = getOfflineSession()) {
+export async function readOfflineWaveStatus(session = getOfflineSession(), storageBudget) {
   const queue = await readWaveQueue(session);
   if (!isOfflineSessionCurrent(session)) return null;
-  const [future, jobs, budget, playable] = await Promise.all([
+  const [future, jobs, budget] = await Promise.all([
     candidates(session, queue),
     listDownloadJobs(session),
-    readStorageBudget(session),
-    listPlayableTracks(session),
+    storageBudget === undefined ? readStorageBudget(session) : storageBudget,
   ]);
-  const readyIds = new Set(playable.map(id));
+  const readyIds = await readPlayableIds(session, future.map(id));
   const verified = future.filter((track) => readyIds.has(id(track)));
   if (!isOfflineSessionCurrent(session)) return null;
   const readySeconds = verified.reduce(
@@ -269,12 +269,13 @@ async function syncRetention(session) {
   const target = desiredTracks(await candidates(session, queue));
   const existing = await listReasonTracks(session, WAVE_REASON);
   const keep = new Set(target.map(id));
-  const ready = new Set((await listPlayableTracks(session)).map(id));
   if (queue?.current) keep.add(id(queue.current));
-  for (const trackId of existing) {
+  const replaced = existing.filter(trackId => !keep.has(trackId));
+  const ready = await readPlayableIds(session, replaced);
+  for (const trackId of replaced) {
     // Verified reserve remains available after a recommendation refresh. On
     // pressure, the reclaimer puts replaced and played entries first.
-    if (keep.has(trackId) || ready.has(trackId)) continue;
+    if (ready.has(trackId)) continue;
     await setRetentionReason(session, trackId, WAVE_REASON, false);
   }
   if (getBackgroundDownloadStatus() !== 'available') return;
@@ -352,7 +353,7 @@ export function startOfflineWave() {
         .reverse()
         .filter((track) => track !== protectedId && tracks.includes(track)),
     ];
-    const ready = new Set((await listPlayableTracks(session)).map(id));
+    const ready = await readPlayableIds(session, evict);
     for (const track of new Set(evict)) {
       if (!isOfflineSessionCurrent(session) || fits()) break;
       if (!ready.has(track)) continue;

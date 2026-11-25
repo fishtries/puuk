@@ -34,10 +34,8 @@ export default function OfflineSettings({ settings, lang, accent, visible }) {
         return;
       }
       try {
-        const [budget, wave] = await Promise.all([
-          readStorageBudget(session),
-          readOfflineWaveStatus(session),
-        ]);
+        const budget = await readStorageBudget(session);
+        const wave = await readOfflineWaveStatus(session, budget);
         if (alive && token === revision)
           setStatus(budget && wave ? { budget, wave } : null);
       } catch (_) {

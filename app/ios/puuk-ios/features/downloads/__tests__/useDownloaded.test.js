@@ -3,17 +3,12 @@ import TestRenderer, { act } from 'react-test-renderer';
 import useDownloaded from '../useDownloaded';
 let mockSession = { activationId: 'a' },
   mockListener,
-  mockStatusListener,
   mockStatus = 'available';
 jest.mock('../../../offline', () => ({
   FAVORITES_COLLECTION: { kind: 'favorites', collectionId: 'favorites' },
   getOfflineSession: () => mockSession,
   isOfflineSessionCurrent: (s) => s === mockSession,
   readCollection: jest.fn(async () => ({ title: 'Private', tracks: [] })),
-  subscribeOfflineIndex: (cb) => {
-    mockListener = cb;
-    return () => {};
-  },
 }));
 jest.mock('../../../offline/collections', () => ({
   listSavedCollections: jest.fn(async () => []),
@@ -27,18 +22,14 @@ jest.mock('../../../offline/outbox/runtime', () => ({
 }));
 jest.mock('../../../offline/downloads/runtime', () => ({
   getBackgroundDownloadStatus: () => mockStatus,
-  subscribeBackgroundDownloadStatus: (cb) => {
-    mockStatusListener = cb;
-    return () => {};
-  },
 }));
 jest.mock('../../../offline/availability', () => ({
   readStorageBudget: async () => ({}),
   readOfflineWaveStatus: async () => ({}),
-  subscribeOfflineAvailability: () => () => {},
+  subscribeOfflineAvailability: (cb) => { mockListener = cb; return () => {}; },
 }));
-function Probe() {
-  const data = useDownloaded();
+function Probe({ enabled = true }) {
+  const data = useDownloaded(enabled);
   return (
     <>
       {data
@@ -55,7 +46,7 @@ test('clears previous owner data when mockSession closes', async () => {
   expect(tree.toJSON()).toBe('Private:available');
   await act(async () => {
     mockStatus = 'unsupported';
-    mockStatusListener();
+    mockListener();
   });
   expect(tree.toJSON()).toBe('Private:unsupported');
   await act(async () => {
@@ -63,4 +54,26 @@ test('clears previous owner data when mockSession closes', async () => {
     mockListener({ type: 'closed' });
   });
   expect(tree.toJSON()).toBe('Unavailable');
+});
+
+test('a burst of download events shares a scan and a hidden screen stops refreshing', async () => {
+  const { listSavedCollections } = require('../../../offline/collections');
+  mockSession = { activationId: 'b' };
+  listSavedCollections.mockClear();
+  let finish;
+  listSavedCollections.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  let tree;
+  await act(async () => { tree = TestRenderer.create(<Probe />); });
+  const refresh = mockListener;
+  await act(async () => { for (let i = 0; i < 20; i++) refresh(); });
+  expect(listSavedCollections).toHaveBeenCalledTimes(1);
+  await act(async () => { finish([]); });
+  expect(listSavedCollections).toHaveBeenCalledTimes(2);
+  await act(async () => { tree.update(<Probe enabled={false} />); refresh(); });
+  const calls = listSavedCollections.mock.calls.length;
+  await act(async () => { refresh(); });
+  expect(listSavedCollections).toHaveBeenCalledTimes(calls);
+  await act(async () => { tree.update(<Probe />); });
+  expect(listSavedCollections).toHaveBeenCalledTimes(calls + 1);
+  await act(async () => tree.unmount());
 });

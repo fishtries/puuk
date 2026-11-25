@@ -48,14 +48,16 @@ export function createSQLiteOutboxStorage({ transaction }) {
   };
 
   return {
-    listRatingOverlay: (session) =>
+    listRatingOverlay: (session, trackId) =>
       transact(session, (sql, owner) =>
         sql
           .getAllSync(
             `SELECT track_id AS trackId, ${ratingColumns}, p.track
           FROM outbox_rating r LEFT JOIN outbox_rating_projection p USING (owner, track_id)
-          WHERE r.owner=? AND (p.track_id IS NOT NULL OR r.state='pending')`,
+          WHERE r.owner=? AND (p.track_id IS NOT NULL OR r.state='pending')
+            ${trackId == null ? '' : 'AND r.track_id=?'}`,
             owner,
+            ...(trackId == null ? [] : [trackId]),
           )
           .map((row) => ({
             ...row,

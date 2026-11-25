@@ -31,6 +31,7 @@ jest.mock('../..', () => ({
   listDownloadJobs: async () => mockJobs,
   cleanupUnretainedMedia: jest.fn(async () => true),
   retryMediaCleanup: jest.fn(async () => {}),
+  readPlayableIds: async (_session, ids) => new Set(ids.filter(id => mockReady.has(id))),
   readMediaKey: async (_session, id) =>
     mockReady.has(String(id)) ? { trackId: id } : null,
 }));

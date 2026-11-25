@@ -218,15 +218,19 @@ export function markMissing(session, key, _reason) {
   });
 }
 
+function verifiedMedia(db, session, row) {
+  if (!row) return null;
+  const file = offlineFile(row.path);
+  if (matchesFile(file, row.bytes)) return file;
+  removeMissing(db, session, row);
+  return null;
+}
+
 export function acquirePlayable(session, trackId, contentVersion) {
   return useIndex(session, null, (db, owner) => {
     const row = findMedia(db, owner, String(trackId), contentVersion);
-    if (!row) return null;
-    const file = offlineFile(row.path);
-    if (!matchesFile(file, row.bytes)) {
-      removeMissing(db, session, row);
-      return null;
-    }
+    const file = verifiedMedia(db, session, row);
+    if (!file) return null;
     leases.set(file.uri, (leases.get(file.uri) || 0) + 1);
     let released = false;
     return {
@@ -245,22 +249,62 @@ export function acquirePlayable(session, trackId, contentVersion) {
 }
 
 export async function readMediaKey(session, trackId, contentVersion) {
-  const playable = await acquirePlayable(session, trackId, contentVersion);
-  playable?.release();
-  return isOfflineSessionCurrent(session) ? playable?.mediaKey || null : null;
+  const key = await useIndex(session, null, (db, owner) => {
+    const row = findMedia(db, owner, String(trackId), contentVersion);
+    return verifiedMedia(db, session, row) ? mediaKey(session, row.track_id, row.version) : null;
+  });
+  return isOfflineSessionCurrent(session) ? key : null;
+}
+
+// Check only the displayed collection or reserve, yielding between batches on large libraries.
+export async function readPlayableIds(session, trackIds) {
+  const ids = [...new Set(trackIds.filter(id => id != null).map(String))];
+  const ready = new Set();
+  const batchSize = 32;
+  for (let start = 0; start < ids.length; start += batchSize) {
+    if (start) await new Promise(resolve => setTimeout(resolve, 0));
+    if (!isOfflineSessionCurrent(session)) return new Set();
+    const batch = ids.slice(start, start + batchSize);
+    await useIndex(session, null, (db, owner) => {
+      const rows = db.getAllSync(
+        `SELECT m.track_id, m.owner, m.path, m.version, m.bytes FROM media m
+         LEFT JOIN track_version USING (owner, track_id)
+         WHERE m.owner=? AND m.track_id IN (${batch.map(() => '?').join(',')})
+           AND (desired_version IS NULL OR m.version=desired_version)
+         ORDER BY m.verified_at DESC`, owner, ...batch,
+      );
+      const seen = new Set();
+      for (const row of rows) {
+        if (seen.has(row.track_id)) continue;
+        seen.add(row.track_id);
+        if (verifiedMedia(db, session, row)) ready.add(row.track_id);
+      }
+    });
+  }
+  return isOfflineSessionCurrent(session) ? ready : new Set();
 }
 
 export function listPlayableTracks(session) {
-  return useIndex(session, [], (db, owner) => {
-    const tracks = [];
-    for (const row of db.getAllSync(
+  return useIndex(session, [], async (db, owner) => {
+    const rows = await db.getAllAsync(
       `SELECT m.* FROM media m JOIN track_version v ON v.owner=m.owner AND
        v.track_id=m.track_id AND v.desired_version=m.version WHERE m.owner=?
        ORDER BY m.verified_at DESC, m.track_id`, owner,
-    )) {
-      if (!matchesFile(offlineFile(row.path), row.bytes)) removeMissing(db, session, row);
-      else if (row.track) tracks.push(JSON.parse(row.track));
-      else tracks.push({ id: row.track_id });
+    );
+    const tracks = [];
+    let sliceStart = Date.now();
+    for (const row of rows) {
+      if (Date.now() - sliceStart >= 6) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        sliceStart = Date.now();
+      }
+      if (!isOfflineSessionCurrent(session)) return [];
+      if (matchesFile(offlineFile(row.path), row.bytes)) {
+        tracks.push(row.track ? JSON.parse(row.track) : { id: row.track_id });
+      } else if (db.getFirstSync('SELECT 1 FROM media WHERE path=?', row.path)) {
+        // A publication or cleanup may have replaced this row since the snapshot.
+        removeMissing(db, session, row);
+      }
     }
     return tracks;
   });

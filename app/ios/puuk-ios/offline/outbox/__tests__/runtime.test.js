@@ -129,6 +129,15 @@ afterEach(() => {
 
 afterAll(() => mockDb.close());
 
+test('a single-track rating check returns only its active overlay', async () => {
+  await setLocalRating(ownerA, { id: 'one' }, 'like');
+  await setLocalRating(ownerA, { id: 'two' }, 'dislike');
+  expect(await getRatingOverlay(ownerA, 'two')).toEqual([expect.objectContaining({
+    trackId: 'two', rating: 'dislike',
+  })]);
+  expect(await getRatingOverlay(ownerA, 'three')).toEqual([]);
+});
+
 test('startup reads the durable overlay and reconnect drains before publishing the refresh', async () => {
   const track = { id: 'one', title: 'Favorite' };
   const local = await setLocalRating(ownerA, track, 'like');

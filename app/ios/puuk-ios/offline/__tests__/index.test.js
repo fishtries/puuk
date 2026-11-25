@@ -26,6 +26,7 @@ import {
   readFavoriteDownloads,
   readLyrics,
   readMediaKey,
+  readPlayableIds,
   reconcileTransfers,
   reserveTransfer,
   retryMediaCleanup,
@@ -139,6 +140,9 @@ jest.mock('expo-sqlite', () => ({
       },
       async execAsync(sql) {
         db.exec(sql);
+      },
+      async getAllAsync(sql, ...params) {
+        return db.prepare(sql).all(...params);
       },
       async getFirstAsync(sql, ...params) {
         return db.prepare(sql).get(...params) || null;
@@ -964,6 +968,24 @@ test('limit pressure removes ordinary cache, played and far Wave through retenti
     active.release();
     lease.release();
     await updateSetting('offlineBudgetBytes', settings.offlineBudgetBytes);
+  }
+});
+
+test('collection readiness batches repeated ids and read-only checks leave cleanup idle', async () => {
+  const session = await login('batch-ready', { origin: 'https://batch.test', userId: '1' });
+  await publishTrack(session, track);
+  await new Promise(resolve => setImmediate(resolve));
+  const db = await offlineDatabase();
+  const reads = jest.spyOn(db, 'getAllSync');
+  try {
+    const ids = [track.id, ...Array.from({length: 32}, (_, i) => `missing-${i}`), track.id];
+    expect(await readPlayableIds(session, ids)).toEqual(new Set([track.id]));
+    expect(reads.mock.calls.filter(([sql]) => sql.includes('FROM media m'))).toHaveLength(2);
+    expect(await readMediaKey(session, track.id)).toMatchObject({ trackId: track.id });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(reads.mock.calls.some(([sql]) => sql.includes('media_cleanup'))).toBe(false);
+  } finally {
+    reads.mockRestore();
   }
 });
 

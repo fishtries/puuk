@@ -63,7 +63,7 @@ const notify = (job, event) => {
   if (current(job)) notifyOfflineIndex({ ...event, session: job.session });
 };
 
-export const getRatingOverlay = (session) => outbox.listRatingOverlay(session);
+export const getRatingOverlay = (session, trackId) => outbox.listRatingOverlay(session, trackId);
 
 export function overlayFavoriteTracks(tracks, ratings) {
   const byId = new Map(

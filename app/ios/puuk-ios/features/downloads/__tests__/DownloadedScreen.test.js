@@ -4,6 +4,7 @@ import DownloadedScreen from '../DownloadedScreen';
 import useDownloaded from '../useDownloaded';
 import { removeOfflineCollection } from '../../../offline/collections';
 jest.mock('../useDownloaded');
+jest.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
 jest.mock('../../../offline/collections', () => ({
   removeOfflineCollection: jest.fn(() => Promise.resolve(true)),
 }));
@@ -13,6 +14,11 @@ jest.mock('../../../shared/storage/settings', () => ({
 }));
 const button = (root, label) =>
   root.findAll((node) => node.props.accessibilityLabel === label)[0];
+// Inspect rendered text without serializing the virtualized list's React element props.
+function renderedText(node) {
+  if (typeof node === 'string') return node;
+  return (node?.children || []).map(renderedText).join('');
+}
 const session = {};
 const item = {
   key: { kind: 'playlist', collectionId: '1' },
@@ -68,7 +74,7 @@ test('partial offline collection plays only ready tracks, opens and removes the 
     button(tree.root, `Remove download: ${item.title}`).props.onPress(),
   );
   expect(removeOfflineCollection).toHaveBeenCalledWith(session, item.key);
-  const text = JSON.stringify(tree.toJSON());
+  const text = renderedText(tree.toJSON());
   expect(text).toContain('6.00 GiB');
   expect(text).toContain('Waiting for network');
   expect(text).toContain('Over the limit');
@@ -81,12 +87,12 @@ test('empty and unavailable library have clear states', async () => {
       <DownloadedScreen navigation={{ goBack: jest.fn() }} />,
     );
   });
-  expect(JSON.stringify(tree.toJSON())).toContain('No downloads yet');
+  expect(renderedText(tree.toJSON())).toContain('No downloads yet');
   useDownloaded.mockReturnValue(null);
   await act(async () =>
     tree.update(<DownloadedScreen navigation={{ goBack: jest.fn() }} />),
   );
-  expect(JSON.stringify(tree.toJSON())).toContain('unavailable');
+  expect(renderedText(tree.toJSON())).toContain('unavailable');
 });
 
 test('shows each download state and unsupported without hiding playable tracks', async () => {
@@ -126,7 +132,7 @@ test('shows each download state and unsupported without hiding playable tracks',
       />,
     );
   });
-  const output = JSON.stringify(tree.toJSON());
+  const output = renderedText(tree.toJSON());
   for (const label of [
     'Waiting for network',
     'Waiting for space',
@@ -139,4 +145,24 @@ test('shows each download state and unsupported without hiding playable tracks',
   ])
     expect(output).toContain(label);
   expect(button(tree.root, 'Play Track 7, ')).toBeTruthy();
+});
+
+test('opens a large downloaded playlist without mounting every track', async () => {
+  const tracks = Array.from({ length: 2500 }, (_, id) => ({ id, title: `Song ${id}` }));
+  const states = tracks.map(() => ({ state: 'ready' }));
+  useDownloaded.mockReturnValue({ ...data, collections: [
+    { ...item, tracks, progress: { total: tracks.length, ready: tracks.length, tracks: states } },
+  ] });
+  const play = jest.fn();
+  let tree;
+  await act(async () => {
+    tree = TestRenderer.create(<DownloadedScreen navigation={{}} onPlayTrackList={play} />);
+  });
+  expect(button(tree.root, 'Play Song 0, ')).toBeTruthy();
+  const mounted = new Set(tree.root.findAll(n => n.props.accessibilityLabel?.startsWith('Play Song '))
+    .map(n => n.props.accessibilityLabel));
+  expect(mounted.size).toBeLessThan(100);
+  await act(async () => button(tree.root, 'Play Song 1, ').props.onPress());
+  expect(play).toHaveBeenCalledWith(tracks, 1);
+  await act(async () => tree.unmount());
 });

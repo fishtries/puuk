@@ -160,8 +160,8 @@ export function createOfflineOutbox({
     getRating: (session, trackId) =>
       write(session, () => storage.getRating(session, trackId)),
 
-    listRatingOverlay: (session) =>
-      write(session, () => storage.listRatingOverlay(session)),
+    listRatingOverlay: (session, trackId) =>
+      write(session, () => storage.listRatingOverlay(session, trackId)),
 
     readRatingSnapshot: (session) =>
       write(session, () => storage.readRatingSnapshot(session)),

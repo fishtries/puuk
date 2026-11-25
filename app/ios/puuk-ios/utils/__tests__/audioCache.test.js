@@ -308,6 +308,36 @@ describe('bound transfer admission and crash recovery', () => {
     valid=false; expect(cache.getCachedUri(ID)).toBeNull(); valid=true;
     session={...session,userId:'99'}; expect(cache.getCachedUri(ID)).toBeNull(); session={...session,userId:'17',origin:'https://other.test'}; expect(cache.getCachedUri(ID)).toBeNull();
   });
+  test('a cache miss skips the metadata round trip and an existing file still requires proof', async () => {
+    const metadata = jest.spyOn(require('../../shared/api/api'), 'authFetch')
+      .mockResolvedValue({ ok: true, json: async () => ({ content_version: HASH }) });
+    await cache.prepareTrack({ id: ID });
+    expect(metadata).not.toHaveBeenCalled();
+    const uri = await cache.getOrFetch(ID, descriptor());
+    cache.setOnline(false);
+    cache.setOnline(true);
+    await cache.prepareTrack({ id: ID });
+    expect(metadata).toHaveBeenCalledTimes(1);
+    expect(cache.getCachedUri(ID)).toBe(uri);
+  });
+  test.each([
+    ['matching', {}, true],
+    ['changed version', { contentVersion: 'b'.repeat(64) }, false],
+    ['different length', { contentLength: 17 }, false],
+    ['expired proof', { reuseUntil: 0 }, false],
+    ['another session', { session: { origin: 'https://api.test', userId: '17', generation: 2 } }, false],
+  ])('the playback ticket revalidates stale cache bytes without a metadata request (%s)', async (_name, changes, hit) => {
+    const uri = await cache.getOrFetch(ID, descriptor());
+    cache.revoke();
+    const fetch = jest.spyOn(require('../../shared/api/api'), 'authFetch');
+    const resolveTicket = jest.fn(async () => descriptor(ID, { usableUntil: performance.now() + 60000, ...changes }));
+    const selected = await cache.prepareTrack({ id: ID }, { resolveTicket });
+    expect(resolveTicket).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(selected || null).toBe(hit ? uri : null);
+    expect(cache.getCachedUri(ID)).toBe(hit ? uri : null);
+  });
+
   test('reconnect blocks offline bytes until authenticated metadata revalidation', async () => {
     await cache.getOrFetch(ID,descriptor()); cache.setOnline(false); expect(cache.getCachedUri(ID)).toBeTruthy();
     cache.setOnline(true); expect(cache.getCachedUri(ID)).toBeNull();

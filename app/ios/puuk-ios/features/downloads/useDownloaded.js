@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  getBackgroundDownloadStatus,
-  subscribeBackgroundDownloadStatus,
-} from '../../offline/downloads/runtime';
+import { getBackgroundDownloadStatus } from '../../offline/downloads/runtime';
 import { overlayFavorites } from '../../offline/collections/runtime';
 import { getRatingOverlay } from '../../offline/outbox/runtime';
 import {
@@ -10,7 +7,6 @@ import {
   getOfflineSession,
   isOfflineSessionCurrent,
   readCollection,
-  subscribeOfflineIndex,
 } from '../../offline';
 import {
   collectionProgress,
@@ -22,15 +18,17 @@ import {
   subscribeOfflineAvailability,
 } from '../../offline/availability';
 
-export default function useDownloaded() {
+export default function useDownloaded(enabled = true) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    let alive = true,
-      revision = 0,
-      previousSession = null;
+    if (!enabled) return;
+    let alive = true;
+    let running = false;
+    let pending = false;
+    let previousSession = getOfflineSession();
     const refresh = async () => {
-      const session = getOfflineSession(),
-        token = ++revision;
+      if (!alive) return;
+      const session = getOfflineSession();
       if (session !== previousSession) {
         previousSession = session;
         if (alive) setData(null);
@@ -39,17 +37,25 @@ export default function useDownloaded() {
         if (alive) setData(null);
         return;
       }
+      if (running) {
+        pending = true;
+        return;
+      }
+      running = true;
+      const current = () => alive && isOfflineSessionCurrent(session);
       try {
-        const [keys, budget, wave] = await Promise.all([
+        const [keys, budget] = await Promise.all([
           listSavedCollections(session),
           readStorageBudget(session),
-          readOfflineWaveStatus(session),
         ]);
+        if (!current()) return;
+        const wave = await readOfflineWaveStatus(session, budget);
+        if (!current()) return;
         const all = [
           FAVORITES_COLLECTION,
           ...keys.filter((k) => k.kind !== 'favorites'),
         ];
-        const collections = (
+        const snapshots = (
           await Promise.all(
             all.map(async (key) => {
               const snapshot = await readCollection(session, key);
@@ -61,12 +67,29 @@ export default function useDownloaded() {
                       await getRatingOverlay(session),
                     )
                   : snapshot.tracks;
-              const progress = await collectionProgress(session, tracks);
-              return { key, ...snapshot, tracks, progress };
+              return { key, ...snapshot, tracks };
             }),
           )
         ).filter(Boolean);
-        if (alive && token === revision && isOfflineSessionCurrent(session))
+        if (!current()) return;
+        const readiness = await collectionProgress(
+          session,
+          snapshots.flatMap((item) => item.tracks),
+        );
+        let offset = 0;
+        const collections = snapshots.map((item) => {
+          const tracks = readiness.tracks.slice(
+            offset,
+            offset + item.tracks.length,
+          );
+          offset += tracks.length;
+          const ready = tracks.reduce(
+            (count, track) => count + Number(track.state === 'ready'),
+            0,
+          );
+          return { ...item, progress: { total: tracks.length, tracks, ready } };
+        });
+        if (current())
           setData({
             session,
             collections,
@@ -75,20 +98,21 @@ export default function useDownloaded() {
             downloadStatus: getBackgroundDownloadStatus(),
           });
       } catch (_) {
-        if (alive && token === revision) setData(null);
+        if (current()) setData(null);
+      } finally {
+        running = false;
+        if (alive && pending) {
+          pending = false;
+          void refresh();
+        }
       }
     };
     refresh();
-    const a = subscribeOfflineIndex(refresh),
-      b = subscribeOfflineAvailability(refresh),
-      c = subscribeBackgroundDownloadStatus(refresh);
+    const unsubscribe = subscribeOfflineAvailability(refresh);
     return () => {
       alive = false;
-      revision++;
-      a();
-      b();
-      c();
+      unsubscribe();
     };
-  }, []);
-  return data;
+  }, [enabled]);
+  return data && isOfflineSessionCurrent(data.session) ? data : null;
 }
