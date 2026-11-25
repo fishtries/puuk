@@ -104,36 +104,23 @@ const FullPlayerModal = ({
   onArtistPress,
   onAlbumPress,
 }) => {
-  const [coverAccentColor, setCoverAccentColor] = useState(
-    () => currentTrack?.cover_color || null,
-  );
+  const trackId = getTrackId(currentTrack);
+  const coverVersion = currentTrack?.cover_version;
+  const [fetchedAccent, setFetchedAccent] = useState(null);
+  const coverAccentColor = currentTrack?.cover_color ||
+    (fetchedAccent?.trackId === trackId && fetchedAccent.coverVersion === coverVersion ? fetchedAccent.color : null);
 
   useEffect(() => {
-    const tid = getTrackId(currentTrack);
-    if (!tid) {
-      setCoverAccentColor(null);
-      return;
-    }
-
-    if (currentTrack?.cover_color) {
-      setCoverAccentColor(currentTrack.cover_color);
-      return;
-    }
-
-    let isCancelled = false;
-    authFetch(`/api/color/${encodeURIComponent(String(tid))}`)
-      .then((res) => (res && res.ok ? res.json() : null))
-      .then((data) => {
-        if (!isCancelled && data?.color) {
-          setCoverAccentColor(data.color);
-        }
+    if (!isPlayerVisible || trackId === null || coverAccentColor) return;
+    const controller = new AbortController();
+    authFetch(`/api/color/${encodeURIComponent(String(trackId))}`, { signal: controller.signal })
+      .then(response => response?.ok ? response.json() : null)
+      .then(data => {
+        if (!controller.signal.aborted && data?.color) setFetchedAccent({ trackId, coverVersion, color: data.color });
       })
       .catch(() => {});
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [currentTrack]);
+    return () => controller.abort();
+  }, [isPlayerVisible, trackId, coverVersion, coverAccentColor]);
 
   const trackIsLiked =
     isLiked !== undefined ? isLiked : !!currentTrack?.is_liked;
@@ -155,7 +142,7 @@ const FullPlayerModal = ({
   const lyricsTransition = useSharedValue(0);
   const lyricsRotation = useSharedValue(0);
 
-  const lyricsResult = usePlayerLyrics(currentTrack, currentPlayback?.mediaKey);
+  const lyricsResult = usePlayerLyrics(currentTrack, currentPlayback?.mediaKey, isPlayerVisible);
   const hasLyrics = lyricsResult.state === 'ready' ||
     (lyricsResult.state !== 'absent' && Boolean(
       currentTrack?.has_lyrics ?? (typeof currentTrack?.lyrics === 'string' && currentTrack.lyrics.trim()),
@@ -398,13 +385,14 @@ const FullPlayerModal = ({
   }, [effectivePrevTrack]);
 
   useEffect(() => {
+    if (!isPlayerVisible) return;
     if (effectiveNextTrack?.coverArt) {
       prefetchCover(effectiveNextTrack.coverArt);
     }
     if (effectivePrevTrack?.coverArt) {
       prefetchCover(effectivePrevTrack.coverArt);
     }
-  }, [effectiveNextTrack?.coverArt, effectivePrevTrack?.coverArt]);
+  }, [isPlayerVisible, effectiveNextTrack?.coverArt, effectivePrevTrack?.coverArt]);
 
   const albumSwipeX = useSharedValue(0);
   const isSwipingAlbum = useSharedValue(false);
@@ -1227,6 +1215,7 @@ const FullPlayerModal = ({
             isSlidingShared={isSlidingShared} slideProgressShared={slideProgressShared} />
           <AmbientBackground
             currentTrack={activeTrack}
+            color={coverAccentColor}
             isPlaying={isPlaying}
             isPlayerVisible={isPlayerVisible}
             expandProgress={expandProgress}
@@ -1473,6 +1462,7 @@ const FullPlayerModal = ({
                 onSkip={fetchNextTrack}
               />
               <PlayerControls
+                player={isPlayerVisible ? player : null}
                 styles={styles}
                 isEffectivelyCompact={isEffectivelyCompact}
                 isPlaying={

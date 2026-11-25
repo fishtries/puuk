@@ -76,6 +76,22 @@ describe('MiniPlayerBar', () => {
     expect(renderedTexts).toContain('Next Artist');
   });
 
+  it('shows the selected song and allows pause while its audio is loading', async () => {
+    const togglePlayPause = jest.fn();
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(<MiniPlayerBar currentTrack={mockCurrent}
+        isStartingPlayback togglePlayPause={togglePlayPause} />);
+    });
+    expect(renderer.root.findAllByType('Text').map(node => node.props.children)).toContain(mockCurrent.title);
+    const play = renderer.root.findByProps({ testID: 'mini-play-button' });
+    expect(play.props.accessibilityState.busy).toBe(true);
+    expect(play.props.accessibilityLabel).toBe('Пауза');
+    act(() => play.props.onPress({ stopPropagation() {} }));
+    expect(togglePlayPause).toHaveBeenCalledTimes(1);
+    act(() => renderer.unmount());
+  });
+
   it('opens the full player when pressing the current track', () => {
     const handleExpand = jest.fn();
     let renderer;

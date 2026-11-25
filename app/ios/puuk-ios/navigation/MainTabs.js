@@ -4,6 +4,7 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { SymbolView } from 'expo-symbols';
@@ -35,6 +36,7 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   playTrack,
   playTrackList,
   startWave,
+  isModalOpen,
   setTrackToManage,
   currentUser,
   onOpenAuthModal,
@@ -51,6 +53,7 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
   syncStatus,
   onRetry,
 }) {
+  const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState('Home');
   const [accentColor, setAccentColor] = useState(
     () => getSettings().accentColor || '#FFDAB9',
@@ -85,7 +88,7 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
     (tabProps) => (
       <HomeScreen
         {...tabProps}
-        isVisible={!isPlayerVisible && activeTab === 'Home'}
+        isVisible={isFocused && !isModalOpen && !isPlayerVisible && activeTab === 'Home'}
         tracks={tracks}
         isPlaying={isPlaying}
         currentTrack={currentTrack}
@@ -103,6 +106,8 @@ const MainTabsScreen = React.memo(function MainTabsScreen({
       />
     ),
     [
+      isFocused,
+      isModalOpen,
       isPlayerVisible,
       activeTab,
       tracks,

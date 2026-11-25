@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { getTrackId } from '../../../shared/domain/trackAdapter';
 import {
   addSessionListener, getAuthSessionGeneration, getOfflineSession,
   isOfflineSessionCurrent, readSelectedLyrics, subscribeOfflineIndex,
 } from '../../../offline/lyrics';
 
-export default function usePlayerLyrics(track, playbackMediaKey) {
+export default function usePlayerLyrics(track, playbackMediaKey, enabled = true) {
   const id = getTrackId(track);
   const trackId = id === null ? null : String(id);
   const session = useSyncExternalStore(subscribeOfflineIndex, getOfflineSession);
@@ -19,6 +19,7 @@ export default function usePlayerLyrics(track, playbackMediaKey) {
   const selection = useMemo(() => ({ session, generation, trackId, version }),
     [session, generation, trackId, version]);
   const [snapshot, setSnapshot] = useState(null);
+  const lastRead = useRef(null);
 
   useEffect(() => subscribeOfflineIndex(event => {
     if ((event?.type === 'published' || event?.type === 'missing') &&
@@ -30,11 +31,13 @@ export default function usePlayerLyrics(track, playbackMediaKey) {
   }), [session, trackId, version]);
 
   useEffect(() => {
-    if (selection.trackId === null) return undefined;
+    if (!enabled || selection.trackId === null) return;
+    if (lastRead.current?.selection === selection && lastRead.current.mediaChange === mediaChange) return;
     const controller = new AbortController();
     readSelectedLyrics(selection.session, selection.trackId, selection.version, { signal: controller.signal })
       .then(result => {
         if (controller.signal.aborted) return;
+        if (result.state === 'ready' || result.state === 'absent') lastRead.current = { selection, mediaChange };
         setSnapshot(previous => {
           const saved = previous?.result;
           if (previous?.selection === selection && saved?.state === 'ready') {
@@ -48,7 +51,7 @@ export default function usePlayerLyrics(track, playbackMediaKey) {
         });
       });
     return () => controller.abort();
-  }, [selection, mediaChange]);
+  }, [enabled, selection, mediaChange]);
 
   if (snapshot?.selection === selection) return snapshot.result;
   return { state: trackId === null ? 'unknown' : 'loading' };

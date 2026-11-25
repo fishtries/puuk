@@ -20,7 +20,7 @@ jest.mock('react-native-reanimated', () => ({
   __esModule: true,
   default: { View: require('react-native').View },
   useAnimatedStyle: (fn) => fn(),
-  runOnJS: (fn) => fn,
+  runOnJS: jest.fn((fn) => fn),
   withTiming: (to) => to,
   Easing: { linear: value => value },
 }));
@@ -68,6 +68,11 @@ it('keeps a scrub gesture attached through state updates and cancels without see
   act(() => { renderer = TestRenderer.create(<ProgressBar {...props} currentTime={10} />); });
   const gesture = renderer.root.findByType(GestureDetector).props.gesture;
   act(() => { gesture._onBegin({ x: 25 }); });
+  const { runOnJS } = require('react-native-reanimated');
+  runOnJS.mockClear();
+  act(() => { gesture._onUpdate({ x: 25.2 }); gesture._onUpdate({ x: 25.4 }); });
+  expect(runOnJS).not.toHaveBeenCalled();
+  expect(props.slideProgressShared.value).toBeCloseTo(0.254);
   expect(props.isSlidingShared.value).toBe(true);
   expect(renderer.root.findByType(GestureDetector).props.gesture).toBe(gesture);
   act(() => { renderer.update(<ProgressBar {...props} currentTime={10.1} />); });

@@ -107,20 +107,22 @@ describe('YourMixCard', () => {
     expect(hasPillText).toBe(false);
   });
 
-  test('triggers onPress and haptics when tapped', () => {
-    const onPressMock = jest.fn();
+  test('shows pending playback immediately and shares a rapid double tap', async () => {
+    let finish;
+    const onPress = jest.fn(() => new Promise(resolve => { finish = resolve; }));
     let renderer;
     act(() => {
-      renderer = TestRenderer.create(<YourMixCard onPress={onPressMock} />);
+      renderer = TestRenderer.create(<YourMixCard onPress={onPress} />);
     });
-
-    const root = renderer.root;
-    const touchable = root.findByType(TouchableOpacity);
+    const button = renderer.root.findByType(TouchableOpacity);
     act(() => {
-      touchable.props.onPress();
+      button.props.onPress();
+      button.props.onPress();
     });
-
-    expect(onPressMock).toHaveBeenCalledTimes(1);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(button.props.accessibilityState.busy).toBe(true);
+    await act(async () => finish());
+    expect(button.props.disabled).toBe(false);
   });
 
   test('renders top-to-bottom base gradient with sunset flame palette', () => {
@@ -180,7 +182,9 @@ describe('YourMixCard', () => {
     });
     expect(particlesContainer).toBeDefined();
     expect(particlesContainer.props.pointerEvents).toBe('none');
-    expect(particlesContainer.props.children.length).toBeGreaterThan(15);
+    const groups = particlesContainer.props.children;
+    expect(groups).toHaveLength(3);
+    expect(groups.flatMap(group => group.props.children)).toHaveLength(25);
   });
 
   test('does not render any blob, orb or blur view elements', () => {

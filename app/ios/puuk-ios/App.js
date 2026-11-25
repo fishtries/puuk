@@ -257,19 +257,17 @@ function AppContent() {
   const dismissDragY = useSharedValue(0);
   const dismissProgress = useSharedValue(currentTrack ? 0 : 1);
 
-  useEffect(() => {
-    if (currentTrack) {
-      dismissProgress.value = withTiming(0, {
-        duration: 250,
-        easing: Easing.bezier(0.25, 1, 0.5, 1),
-      });
+  const selectedTrackId = getTrackId(currentTrack);
+  useLayoutEffect(() => {
+    if (selectedTrackId !== null) {
+      dismissProgress.value = 0;
     } else {
       dismissProgress.value = withTiming(1, {
         duration: 250,
         easing: Easing.bezier(0.25, 1, 0.5, 1),
       });
     }
-  }, [currentTrack]);
+  }, [selectedTrackId, dismissProgress]);
 
   const handleClose = useCallback(() => {
     setIsPlayerVisible(false);
@@ -854,7 +852,6 @@ function AppContent() {
         onClose={handleClose}
         currentTrack={activeTrack}
         isPlaying={isPlaying}
-        currentTime={status.currentTime}
         duration={status.duration}
         togglePlayPause={togglePlayPause}
         fetchNextTrack={fetchNextTrack}
@@ -913,6 +910,7 @@ function AppContent() {
             playTrack={playTrack}
             playTrackList={playTrackList}
             startWave={startWave}
+            isModalOpen={Boolean(trackToManage || trackToAdd || isAuthModalVisible)}
             setTrackToManage={setTrackToManage}
             currentUser={currentUser}
             onOpenAuthModal={handleOpenAuthModal}
@@ -935,7 +933,6 @@ function AppContent() {
           <GlowTrackBoundary
             player={player}
             isVisible={!isPlayerVisible}
-            currentTime={isPlayerVisible ? 0 : status.currentTime}
             duration={status.duration}
             isPlaying={isPlaying && !isPlayerVisible}
             accentColor={accentColor}
@@ -956,6 +953,7 @@ function AppContent() {
           currentTrack={activeTrack}
           displayTitle={displayTitle}
           isPlaying={isPlaying}
+          isStartingPlayback={isStartingPlayback}
           isPlayerVisible={isPlayerVisible}
           handleExpand={handleExpand}
           togglePlayPause={handleMiniPlayPause}

@@ -20,6 +20,7 @@ const RootNavigator = React.memo(function RootNavigator({
   playTrack,
   playTrackList,
   startWave,
+  isModalOpen,
   setTrackToManage,
   currentUser,
   onOpenAuthModal,
@@ -48,6 +49,7 @@ const RootNavigator = React.memo(function RootNavigator({
             playTrack={playTrack}
             playTrackList={playTrackList}
             startWave={startWave}
+            isModalOpen={isModalOpen}
             setTrackToManage={setTrackToManage}
             currentUser={currentUser}
             onOpenAuthModal={onOpenAuthModal}
@@ -71,7 +73,7 @@ const RootNavigator = React.memo(function RootNavigator({
           <AlbumScreen
             {...props}
             onPlayTrackList={playTrackList}
-            onPressEllipsis={(track) => setTrackToManage(track)}
+            onPressEllipsis={setTrackToManage}
           />
         )}
       </Stack.Screen>
@@ -102,7 +104,7 @@ const RootNavigator = React.memo(function RootNavigator({
         )}
       </Stack.Screen>
       <Stack.Screen name="Downloaded">
-        {(props) => <DownloadedScreen {...props} onPlayTrackList={playTrackList} onOpenAuthModal={onOpenAuthModal} />}
+        {(props) => <DownloadedScreen {...props} isCovered={isModalOpen || isPlayerVisible} onPlayTrackList={playTrackList} onOpenAuthModal={onOpenAuthModal} />}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>

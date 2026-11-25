@@ -1,6 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { getPlaybackSnapshot, usePlaybackPosition, usePlaybackState } from '../playbackStatus';
+import { getPlaybackSnapshot, usePlaybackPosition, usePlaybackSecond, usePlaybackState } from '../playbackStatus';
 
 function nativePlayer() {
   const callbacks = new Set();
@@ -25,10 +25,13 @@ test('one native subscription isolates exact positions from transport renders an
   let state, position, stateRenders = 0, positionRenders = 0;
   function State() { state = usePlaybackState(player); stateRenders++; return null; }
   function Position() { position = usePlaybackPosition(player); positionRenders++; return null; }
+  let second, secondRenders = 0;
+  function Seconds() { second = usePlaybackSecond(player); secondRenders++; return null; }
   let renderer;
-  act(() => { renderer = TestRenderer.create(<><State /><Position /></>); });
+  act(() => { renderer = TestRenderer.create(<><State /><Position /><Seconds /></>); });
   expect(player.addListener).toHaveBeenCalledTimes(1);
   const initialRenders = stateRenders;
+  const initialSecondRenders = secondRenders;
   const initialPositionRenders = positionRenders;
   for (let i = 1; i <= 9; i++) {
     act(() => { player.emit({ currentTime: i / 10 }); });
@@ -39,7 +42,9 @@ test('one native subscription isolates exact positions from transport renders an
   expect(position.currentTime).toBe(0.9);
   expect(getPlaybackSnapshot(player).currentTime).toBe(0.9);
   act(() => { player.emit({ currentTime: 1 }); });
-  expect(stateRenders).toBe(initialRenders + 1);
+  expect(stateRenders).toBe(initialRenders);
+  expect(secondRenders).toBe(initialSecondRenders + 1);
+  expect(second).toBe(1);
   act(() => { player.emit({ playing: false, currentTime: 1.05 }); });
   expect(state.playing).toBe(false);
   act(() => { player.emit({ currentTime: 0.2, nativeEvent: 'seekIntent' }); });

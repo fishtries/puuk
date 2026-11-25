@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Dimensions } from 'react-native';
+import { ActivityIndicator, TouchableOpacity, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   useAnimatedStyle,
@@ -17,6 +17,7 @@ const MiniPlayerBar = ({
   currentTrack,
   displayTitle,
   isPlaying,
+  isStartingPlayback,
   isPlayerVisible,
   handleExpand,
   togglePlayPause,
@@ -177,6 +178,9 @@ const MiniPlayerBar = ({
         </TouchableOpacity>
         <TouchableOpacity
           testID="mini-play-button"
+          accessibilityRole="button"
+          accessibilityLabel={isPlaying || isStartingPlayback ? 'Пауза' : 'Воспроизвести'}
+          accessibilityState={{ busy: !!isStartingPlayback }}
           style={styles.miniPlayerButton}
           onPress={(e) => {
             e.stopPropagation();
@@ -185,11 +189,9 @@ const MiniPlayerBar = ({
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
         >
-          <Ionicons
-            name={isPlaying ? 'pause' : 'play'}
-            size={26}
-            color="#ffffff"
-          />
+          {isStartingPlayback
+            ? <ActivityIndicator size="small" color="#ffffff" />
+            : <Ionicons name={isPlaying ? 'pause' : 'play'} size={26} color="#ffffff" />}
         </TouchableOpacity>
       </Animated.View>
     </Animated.View>

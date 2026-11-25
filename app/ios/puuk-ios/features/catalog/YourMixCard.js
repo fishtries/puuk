@@ -1,10 +1,11 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -270,6 +271,8 @@ const PARTICLES = [
   },
 ];
 
+const particleGroups = [1, 2, 3].map(group => PARTICLES.filter(particle => particle.group === group));
+
 export default function YourMixCard({ onPress, isVisible = true }) {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -477,10 +480,18 @@ export default function YourMixCard({ onPress, isVisible = true }) {
     pressScale.value = withSpring(1, { damping: 20, stiffness: 240 });
   };
 
-  const handlePress = () => {
+  const starting = useRef(false);
+  const [isStarting, setStarting] = useState(false);
+  const handlePress = async () => {
+    if (!onPress || starting.current) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    if (onPress) {
-      onPress();
+    starting.current = true;
+    setStarting(true);
+    try {
+      await onPress();
+    } finally {
+      starting.current = false;
+      setStarting(false);
     }
   };
 
@@ -497,6 +508,8 @@ export default function YourMixCard({ onPress, isVisible = true }) {
         style={styles.touchable}
         accessibilityRole="button"
         accessibilityLabel="your mix"
+        accessibilityState={{ busy: isStarting, disabled: isStarting }}
+        disabled={isStarting}
         testID="your-mix-card"
       >
         <AnimatedView
@@ -786,35 +799,27 @@ export default function YourMixCard({ onPress, isVisible = true }) {
             pointerEvents="none"
             testID="your-mix-particles"
           >
-            {PARTICLES.map((p) => {
-              const groupStyle =
-                p.group === 1
-                  ? floatGroup1
-                  : p.group === 2
-                    ? floatGroup2
-                    : floatGroup3;
-              const left = p.x * W - p.size / 2;
-              const top = p.y * cardHeight - p.size / 2;
-
-              return (
-                <AnimatedView
-                  key={p.id}
-                  style={[
-                    styles.particleDot,
-                    {
-                      left,
-                      top,
-                      width: p.size,
-                      height: p.size,
-                      borderRadius: p.size / 2,
-                      backgroundColor: p.color,
-                      opacity: p.opacity,
-                    },
-                    groupStyle,
-                  ]}
-                />
-              );
-            })}
+            {[floatGroup1, floatGroup2, floatGroup3].map((motion, index) => (
+              <AnimatedView key={index} style={[StyleSheet.absoluteFill, motion]}>
+                {particleGroups[index].map(particle => (
+                  <View
+                    key={particle.id}
+                    style={[
+                      styles.particleDot,
+                      {
+                        left: particle.x * W - particle.size / 2,
+                        top: particle.y * cardHeight - particle.size / 2,
+                        width: particle.size,
+                        height: particle.size,
+                        borderRadius: particle.size / 2,
+                        backgroundColor: particle.color,
+                        opacity: particle.opacity,
+                      },
+                    ]}
+                  />
+                ))}
+              </AnimatedView>
+            ))}
           </View>
 
           {/* 5. Smooth Bottom Transition Gradient into black catalog */}
@@ -839,6 +844,7 @@ export default function YourMixCard({ onPress, isVisible = true }) {
             ]}
           >
             <Text style={styles.titleText}>your mix</Text>
+            {isStarting && <ActivityIndicator color="#fff" style={styles.loading} />}
           </View>
         </AnimatedView>
       </TouchableOpacity>
@@ -875,6 +881,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 2,
   },
+  loading: { position: 'absolute', bottom: 0 },
   titleText: {
     fontSize: 36,
     fontWeight: '800',

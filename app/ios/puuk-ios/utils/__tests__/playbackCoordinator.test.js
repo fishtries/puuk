@@ -92,6 +92,22 @@ describe('PlaybackCoordinator', () => {
     );
   });
 
+  test.each([
+    [null, 'remote'],
+    ['file:///mock/verified.mp3', 'local'],
+  ])('one ticket selects the current source after file validation (%s)', async (cachedUri, source) => {
+    const resolveMedia = jest.spyOn(coordinator, 'resolveMedia');
+    mockCache.prepareTrack = jest.fn(async (_track, { resolveTicket }) => {
+      await resolveTicket();
+      return cachedUri;
+    });
+    const result = await coordinator.play(mockPlayer, { id: 2, title: 'Updated version' });
+    expect(result.isLocal).toBe(Boolean(cachedUri));
+    expect(coordinator.getState().current.source).toBe(source);
+    expect(resolveMedia).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.play).toHaveBeenCalledTimes(1);
+  });
+
   test('play() delays background cache for five seconds after starting the remote stream', async () => {
     const track = {
       id: 2,

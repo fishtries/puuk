@@ -193,6 +193,28 @@ describe('FullPlayerModal - Album Swipe to switch next/prev track', () => {
     expect(albumView.props.accessibilityLabel).toContain('Artist One');
   });
 
+  it('defers the color request until expansion and shares its result with both consumers', async () => {
+    const api = require('../../../shared/api/api');
+    const fetch = jest.spyOn(api, 'authFetch').mockResolvedValue({
+      ok: true, json: async () => ({ color: '#9933ff' }),
+    });
+    const renderPlayer = visible => <FullPlayerModal isPlayerVisible={visible}
+      currentTrack={mockCurrentTrack} nextTrack={mockNextTrack} />;
+    let renderer;
+    try {
+      await act(async () => { renderer = TestRenderer.create(renderPlayer(false)); });
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith('/api/color/'))).toHaveLength(0);
+      expect(CoverImageModule.prefetchCover).not.toHaveBeenCalled();
+      await act(async () => { renderer.update(renderPlayer(true)); });
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith('/api/color/'))).toHaveLength(1);
+      expect(renderer.root.findByType('AmbientBackground').props.color).toBe('#9933ff');
+      expect(renderer.root.findByType('PlayerControls').props.accentColor).toBe('#9933ff');
+    } finally {
+      await act(async () => { renderer?.unmount(); });
+      fetch.mockRestore();
+    }
+  });
+
   it('prefetches next and previous cover images', async () => {
     await act(async () => {
       TestRenderer.create(

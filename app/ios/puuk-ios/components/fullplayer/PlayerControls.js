@@ -28,6 +28,7 @@ const PlayerControls = ({
   isEffectivelyCompact,
   isPlaying,
   isLoading,
+  player,
   currentTime,
   duration,
   togglePlayPause,
@@ -365,6 +366,7 @@ const PlayerControls = ({
                 }}
               >
                 <ProgressBar
+                  player={player}
                   styles={styles}
                   isSliding={isSliding}
                   setIsSliding={setIsSliding}

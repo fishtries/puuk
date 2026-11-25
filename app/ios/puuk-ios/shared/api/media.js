@@ -31,6 +31,27 @@ export function hasOfflineSession() {
 const sessionKey = (s) => `${s.origin}|${s.userId}|${s.generation}`;
 export const isMediaSessionCurrent = (s) => sessionKey(s) === sessionKey(mediaSession());
 
+// A scheduler task and a playback selection can own the same HTTP request.
+// Cancel the transport only after its last caller has left.
+function waitForTicket(entry, caller) {
+  const { signal } = caller;
+  entry.waiters.add(caller);
+  return new Promise((resolve, reject) => {
+    const leave = () => {
+      entry.waiters.delete(caller);
+      signal?.removeEventListener('abort', cancel);
+    };
+    const cancel = () => {
+      leave();
+      if (!entry.waiters.size) entry.controller.abort();
+      reject(new MediaDeliveryError('abort'));
+    };
+    entry.promise.then(resolve, reject).finally(leave);
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener('abort', cancel, { once: true });
+  });
+}
+
 // Own timeout includes SecureStore, transport AND JSON decoding. A canceled
 // transport may finish later; callers must still fence publication after awaits.
 export async function boundedMediaOperation(work, { signal, timeout = 3000 } = {}) {
@@ -110,30 +131,32 @@ export class MediaDelivery {
     this.cache.clear(); this.negative.clear();
     for (const entry of this.pending.values()) entry.controller.abort();
   }
-  resolve(track, { mode = this.enabled ? 'cdn' : 'direct', force = false, signal, priority = 'current', timeout = 3000, consumeNegotiation = () => false } = {}) {
+  resolve(track, { mode = this.enabled ? 'cdn' : 'direct', force = false, signal, priority = 'current', timeout = 3000, consumeNegotiation, pendingOnly = false } = {}) {
+    if (pendingOnly && !this.pending.size) return null;
     const trackId = String(track?.id ?? track?.track_id ?? track);
-    if (!UUID.test(trackId)) return Promise.reject(new MediaDeliveryError('invalid_ticket'));
+    if (!UUID.test(trackId)) return pendingOnly ? null : Promise.reject(new MediaDeliveryError('invalid_ticket'));
     const s = this.session(), now = this.clock();
     if (!Number.isFinite(now)) { this.invalidate(); return Promise.reject(new MediaDeliveryError('invalid_ticket')); }
     if (now < this.lastClock) this.invalidate();
     this.lastClock = now;
     const key = `${sessionKey(s)}|${trackId}|${track?.content_version || ''}|${mode}`;
-    const hit = this.cache.get(key);
-    if (!force && hit && now < hit.reuseUntil) { this.cache.delete(key); this.cache.set(key, hit); return Promise.resolve({ ...hit, headers: {} }); }
     const existing = this.pending.get(key);
+    if (pendingOnly && (!existing || existing.controller.signal.aborted)) return null;
+    if (signal?.aborted) return Promise.reject(new MediaDeliveryError('abort'));
+    const hit = this.cache.get(key);
+    if (!pendingOnly && !force && hit && now < hit.reuseUntil) { this.cache.delete(key); this.cache.set(key, hit); return Promise.resolve({ ...hit, headers: {} }); }
+    const caller = { signal, priority, consumeNegotiation };
+    const hasCurrentCaller = entry => [...entry.waiters].some(waiter => waiter.priority === 'current');
     if (existing && !existing.controller.signal.aborted) {
-      if (priority === 'current' && existing.priority !== 'current') existing.controller.abort();
-      else return existing.promise;
+      const forceNewTicket = !pendingOnly && force && priority === 'current' && !hasCurrentCaller(existing);
+      if (!forceNewTicket) return waitForTicket(existing, caller);
     }
     // Reserve a lane for current playback; canceled lanes remain occupied until settlement.
-    if (priority === 'current') for (const e of this.pending.values()) if (e.priority !== 'current') e.controller.abort();
+    if (priority === 'current') for (const e of this.pending.values()) if (!hasCurrentCaller(e)) e.controller.abort();
     if (this.running.size >= (priority === 'current' ? 8 : 7)) return Promise.reject(new MediaDeliveryError('busy'));
     const controller = new AbortController(), epoch = this.epoch;
-    const cancel = () => controller.abort();
-    signal?.addEventListener('abort', cancel, { once: true });
-    if (signal?.aborted) controller.abort();
     const current = () => !controller.signal.aborted && this.epoch === epoch && sessionKey(this.session()) === sessionKey(s);
-    const entry = { controller, priority, promise: null };
+    const entry = { controller, waiters: new Set(), promise: null };
     this.running.add(entry);
 
     entry.promise = boundedMediaOperation(requestSignal => {
@@ -156,7 +179,8 @@ export class MediaDelivery {
         if ([404, 405, 422].includes(response.status)) { try { detail = await response.json(); } catch {} }
         const absent = response.status === 405 || (response.status === 404 && detail?.detail === 'Not Found');
         const unsupportedDelivery = response.status === 422 && Array.isArray(detail?.detail) && detail.detail.some(e => e.loc?.join('.') === 'body.delivery' && /extra|unexpected|unsupported/.test(e.type || ''));
-        if ((absent || unsupportedDelivery) && consumeNegotiation()) {
+        if (!current() || requestSignal.aborted) throw new MediaDeliveryError('abort');
+        if ((absent || unsupportedDelivery) && [...entry.waiters].some(waiter => waiter.consumeNegotiation?.())) {
           if (absent) {
             this.negative.set(s.origin, this.clock() + 300000);
             while (this.negative.size > 8) this.negative.delete(this.negative.keys().next().value);
@@ -185,9 +209,9 @@ export class MediaDelivery {
       // Never retain raw native/fetch errors, which may contain permission URLs.
       if (e instanceof MediaDeliveryError) throw e;
       throw new MediaDeliveryError(e?.type === 'abort' ? 'abort' : e?.type === 'timeout' ? 'timeout' : 'network');
-    }).finally(() => { if (controller.signal.aborted && !entry.started) this.running.delete(entry); signal?.removeEventListener('abort', cancel); if (this.pending.get(key) === entry) this.pending.delete(key); });
+    }).finally(() => { if (!entry.started) this.running.delete(entry); if (this.pending.get(key) === entry) this.pending.delete(key); });
     this.pending.set(key, entry);
-    return entry.promise;
+    return waitForTicket(entry, caller);
   }
 }
 export const mediaDelivery = new MediaDelivery();

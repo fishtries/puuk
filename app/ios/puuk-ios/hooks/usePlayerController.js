@@ -12,7 +12,7 @@ import {
   setWavePlaybackMode,
   waveTrackDuration,
 } from '../offline/wave';
-import { readMediaKey } from '../offline';
+import { readMediaKey, readPlayableIds } from '../offline';
 import { DEFAULT_WAVE_RESERVE_MINUTES } from '../offline/policy';
 import { getCurrentNetworkPolicy, subscribeNetworkPolicy } from '../utils/networkPolicy';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
@@ -99,13 +99,46 @@ const MAX_EXCLUDE_IDS = 100;
 const MAX_QUEUE_BUFFER = 400;
 const WAVE_RETRY_DELAY = 30_000;
 const WAVE_REQUEST = { retry: 0, timeout: 3500 };
+const WAVE_RESERVE_DELAY_MS = 400;
+const MAX_HISTORY = 50;
+let selectionSequence = 0;
+
 const requestWave = (url, signal) => boundedMediaOperation(async requestSignal => {
   const response = await authFetch(url, { ...WAVE_REQUEST, signal: requestSignal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }, { signal, timeout: WAVE_REQUEST.timeout });
-const MAX_HISTORY = 50;
-let selectionSequence = 0;
+
+async function readyReserveBeforeResponse(request, session, reserve, recent, dislikes) {
+  if (!Array.isArray(reserve) || !reserve.length) return null;
+  let timer;
+  const local = new Promise(resolve => {
+    timer = setTimeout(async () => {
+      const candidates = reserve.filter(track => {
+        const id = String(getTrackId(track));
+        return !recent.has(id) && !dislikes.has(id);
+      }).slice(0, LOCAL_WAVE_BATCH_SIZE);
+      try {
+        const ready = await readPlayableIds(session, candidates.map(getTrackId));
+        const tracks = candidates.filter(track => ready.has(String(getTrackId(track))));
+        if (tracks.length) resolve({ tracks, reserveIds: ready });
+      } catch {
+        // The online request remains available if the offline index cannot be read.
+      }
+    }, WAVE_RESERVE_DELAY_MS);
+  });
+  try {
+    return await Promise.race([request.response.then(() => null), local]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function sameTrackOrder(previous, next) {
+  return previous === next || (previous.length === next.length && next.every(
+    (track, index) => track === previous[index] || getTrackId(track) === getTrackId(previous[index]),
+  ));
+}
 
 function capIds(ids, limit = MAX_EXCLUDE_IDS) {
   const valid = (ids || []).map(getTrackId).filter((id) => id !== null);
@@ -114,8 +147,8 @@ function capIds(ids, limit = MAX_EXCLUDE_IDS) {
 }
 
 /** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
-function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [] } = {}) {
-  const params = new URLSearchParams({ limit: '50' });
+function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [], limit = 50 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
   const canonicalId = getTrackId(trackId);
   if (canonicalId !== null) {
     params.append('current_track_id', String(canonicalId));
@@ -161,6 +194,16 @@ export default function usePlayerController({ setTracks }) {
       : favoriteIdsRef.current ? favoriteIdsRef.current.has(id) : !!track.is_liked;
     return liked === !!track.is_liked ? track : carryQueueIdentity(track, { ...track, is_liked: liked });
   }, []);
+  const projectTrackRatings = useCallback((tracks) => {
+    let result = tracks;
+    tracks.forEach((track, index) => {
+      const updated = projectRating(track);
+      if (updated === track) return;
+      if (result === tracks) result = tracks.slice();
+      result[index] = updated;
+    });
+    return result;
+  }, [projectRating]);
   const [currentTrack, commitCurrentTrack] = useState(null);
   const currentTrackRef = useRef(null);
   const setCurrentTrack = useCallback((update) => {
@@ -168,7 +211,7 @@ export default function usePlayerController({ setTracks }) {
     const next = projectRating(
       typeof update === 'function' ? update(currentTrackRef.current) : update,
     );
-    if (previous && next && areTrackIdsEqual(previous, next)) {
+    if (previous && next && previous !== next && areTrackIdsEqual(previous, next)) {
       carryQueueIdentity(previous, next);
       cycleTracksRef.current = cycleTracksRef.current.map((track) =>
         track === previous ? next : track,
@@ -194,10 +237,14 @@ export default function usePlayerController({ setTracks }) {
   const [autoplayEnabled, setAutoplayEnabled] = useState(false);
   const [queueUndo, setQueueUndo] = useState(null);
   const undoRef = useRef(null);
+  const commitPreparedQueue = useCallback((tracks) => {
+    queueRef.current = tracks;
+    commitQueue(tracks);
+  }, []);
   const setUpNextQueue = useCallback((update) => {
     const incoming = typeof update === 'function' ? update(queueRef.current) : update;
-    const projected = incoming.map(projectRating);
-    const next = projected.every((track, index) => track === incoming[index]) ? incoming : projected;
+    const next = projectTrackRatings(incoming);
+    if (next === queueRef.current) return;
     // Preserve occurrence identity when metadata refresh replaces DTO objects.
     const replacements = new Map();
     const upcoming = new Set(next);
@@ -224,17 +271,16 @@ export default function usePlayerController({ setTracks }) {
         unshuffledRef.current = unshuffledRef.current.map(replace);
     }
     next.forEach(queueKey);
-    queueRef.current = next;
-    commitQueue(next);
-  }, [projectRating]);
+    commitPreparedQueue(next);
+  }, [commitPreparedQueue, projectTrackRatings]);
   const [history, commitHistory] = useState([]);
   const historyRef = useRef([]);
   const setHistory = useCallback((update) => {
     const incoming = typeof update === 'function' ? update(historyRef.current) : update;
-    const next = incoming.map(projectRating);
+    const next = projectTrackRatings(incoming);
     historyRef.current = next;
     commitHistory(next);
-  }, [projectRating]);
+  }, [projectTrackRatings]);
 
   // Состояние сети и предзагрузки для Network UX
   const [networkUX, setNetworkUX] = useState(
@@ -286,7 +332,7 @@ export default function usePlayerController({ setTracks }) {
     getCurrentNetworkPolicy()?.isConnected !== false &&
     !reconnectPendingRef.current && (ignoreBackoff || Date.now() >= waveRetryAtRef.current), []);
   const autoplayAfterQueueRef = useRef(false);
-  const collectionTrackIdsRef = useRef([]);
+  const collectionTracksRef = useRef([]);
   const removedQueueIdsRef = useRef(new Set());
   const queueRequestRef = useRef(null);
   const recommendationsRef = useRef(new Set());
@@ -312,11 +358,13 @@ export default function usePlayerController({ setTracks }) {
       const cycle = cycleTracksRef.current;
       invalidateQueueRequest();
       setUpNextQueue(next);
+      const upcoming = new Set(next);
+      const previous = new Set(before);
       cycleTracksRef.current = cycle.filter(
         (track) =>
           track === currentTrackRef.current ||
-          next.includes(track) ||
-          !before.includes(track),
+          upcoming.has(track) ||
+          !previous.has(track),
       );
       if (message) {
         const undo = {
@@ -434,12 +482,14 @@ export default function usePlayerController({ setTracks }) {
   const toggleShuffle = useCallback(() => {
     const original = unshuffledRef.current;
     const before = [...queueRef.current];
-    const next = original
-      ? [
-          ...original.filter((track) => queueRef.current.includes(track)),
-          ...queueRef.current.filter((track) => !original.includes(track)),
-        ]
-      : shuffledTracks(queueRef.current);
+    let next;
+    if (original) {
+      const upcoming = new Set(before);
+      const originalSet = new Set(original);
+      next = [...original.filter(track => upcoming.has(track)), ...before.filter(track => !originalSet.has(track))];
+    } else {
+      next = shuffledTracks(before);
+    }
     editQueue(next);
     unshuffledRef.current = original ? null : before;
     setShuffleEnabled(!original);
@@ -451,9 +501,10 @@ export default function usePlayerController({ setTracks }) {
     setRepeatMode(next);
     if (next === 'all') {
       const cycle = cycleTracksRef.current;
+      const members = new Set(cycle);
       cycleTracksRef.current = [
         ...cycle,
-        ...queueRef.current.filter((track) => !cycle.includes(track)),
+        ...queueRef.current.filter((track) => !members.has(track)),
       ];
     }
     invalidateQueueRequest();
@@ -661,7 +712,7 @@ export default function usePlayerController({ setTracks }) {
         isAdvancingRef.current = false;
         isWaveSessionRef.current = false;
         autoplayAfterQueueRef.current = false;
-        collectionTrackIdsRef.current = [];
+        collectionTracksRef.current = [];
         removedQueueIdsRef.current.clear();
         cycleTracksRef.current = [];
         unshuffledRef.current = null;
@@ -774,14 +825,12 @@ export default function usePlayerController({ setTracks }) {
   creditSetTracksRef.current = setTracks;
   const creditContextRef = useRef(null);
   const currentTrackId = getTrackId(currentTrack);
-  const creditContextKey = useMemo(() => JSON.stringify([
-    currentTrackId, upNextQueue.map(getTrackId), history.map(getTrackId),
-  ]), [currentTrackId, upNextQueue, history]);
-  const creditContextEpoch =
-    (creditContextRef.current?.epoch || 0) +
-    (creditContextRef.current?.key === creditContextKey ? 0 : 1);
+  const previousContext = creditContextRef.current;
+  const sameSelection = previousContext && previousContext.currentTrackId === currentTrackId &&
+    sameTrackOrder(previousContext.upNextQueue, upNextQueue) && sameTrackOrder(previousContext.history, history);
+  const creditContextEpoch = (previousContext?.epoch || 0) + (sameSelection ? 0 : 1);
   creditContextRef.current = {
-    key: creditContextKey,
+    currentTrackId,
     epoch: creditContextEpoch,
     currentTrack,
     upNextQueue,
@@ -974,7 +1023,7 @@ export default function usePlayerController({ setTracks }) {
 
   /** Делегируем воспроизведение координатору */
   const loadAndPlay = useCallback(
-    (track, context = isWaveSessionRef.current ? 'wave' : 'manual', { offlineOnly = false } = {}) => {
+    (track, context = isWaveSessionRef.current ? 'wave' : 'manual', { offlineOnly = false, startingRequest } = {}) => {
       if (!mountedRef.current) return Promise.resolve({ superseded: true });
       track = projectRating(track);
       const trackId = getTrackId(track);
@@ -986,7 +1035,7 @@ export default function usePlayerController({ setTracks }) {
       const request = ++playbackRequestRef.current;
       const requestId = `selection_${++selectionSequence}`;
       const authEpoch = authEpochRef.current;
-      queueRequestRef.current?.controller.abort();
+      if (queueRequestRef.current !== startingRequest) queueRequestRef.current?.controller.abort();
       completePlayback(playbackEpisodeRef.current, 'skip');
       playbackEpisodeRef.current = createPlaybackEpisode(
         requestId, trackId, context,
@@ -1061,7 +1110,7 @@ export default function usePlayerController({ setTracks }) {
     }).catch(() => {});
   }, [canRequestWave]);
 
-  const fetchQueue = useCallback((trackId, exclusions = {}, { replaceRecommendations = false } = {}) => {
+  const fetchQueue = useCallback((trackId, exclusions = {}, { replaceRecommendations = false, startingRequest } = {}) => {
     const epoch = queueEpochRef.current;
     const selection = currentRequestIdRef.current;
     const session = getOfflineSession();
@@ -1073,9 +1122,9 @@ export default function usePlayerController({ setTracks }) {
     if (pending?.epoch === epoch && pending.selection === selection && !pending.controller.signal.aborted) {
       return pending.promise;
     }
-    pending?.controller.abort();
+    if (pending !== startingRequest) pending?.controller.abort();
     const hardExclusions = [
-      ...collectionTrackIdsRef.current,
+      ...collectionTracksRef.current.map(getTrackId),
       ...removedQueueIdsRef.current,
       ...dislikeIdsRef.current,
     ];
@@ -1086,13 +1135,13 @@ export default function usePlayerController({ setTracks }) {
         .filter((id) => id !== null && id !== undefined)
         .map(String),
     );
-    const controller = new AbortController();
+    const controller = startingRequest?.controller ?? new AbortController();
     const { signal } = controller;
     const request = { epoch, selection, controller };
     queueRequestRef.current = request;
     request.promise = (async () => {
       try {
-        const data = await requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), signal);
+        const data = await (startingRequest?.response ?? requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), signal));
         if (!isCurrent() || signal.aborted) return [];
         if (durable && !canRequestWave()) return [];
         if (!Array.isArray(data)) throw new Error('Invalid Wave queue');
@@ -1118,6 +1167,7 @@ export default function usePlayerController({ setTracks }) {
             (!replaceRecommendations && previousRecommendations.has(queueKey(track))),
         ).map(queueKey));
         setUpNextQueue(next);
+        if (startingRequest) cycleTracksRef.current = [currentTrackRef.current, ...queueRef.current];
         if (durable && normalizedQueue.length) {
           waveRetryAtRef.current = 0;
           awaitingRecommendationsRef.current = false;
@@ -1164,8 +1214,7 @@ export default function usePlayerController({ setTracks }) {
     }, { replaceRecommendations: true });
   }, [fetchQueue]);
 
-  const wavePositionKey = creditContextKey;
-  useEffect(saveCurrentWave, [saveCurrentWave, wavePositionKey]);
+  useEffect(saveCurrentWave, [saveCurrentWave, creditContextEpoch]);
 
   useEffect(() => {
     const trackId = getTrackId(currentTrackRef.current);
@@ -1178,7 +1227,7 @@ export default function usePlayerController({ setTracks }) {
       excludeIds: historyRef.current.map(getTrackId),
       queuedIds: queueRef.current.map(getTrackId),
     });
-  }, [wavePositionKey, canRequestWave, fetchQueue]);
+  }, [creditContextEpoch, canRequestWave, fetchQueue]);
 
   const applyWaveSnapshot = useCallback((snapshot) => {
     const projected = [snapshot.current, ...snapshot.future, ...snapshot.history].map(normalizeTrackDto);
@@ -1296,15 +1345,15 @@ export default function usePlayerController({ setTracks }) {
     setShuffleEnabled(false);
     undoRef.current = null;
     setQueueUndo(null);
-    collectionTrackIdsRef.current = [];
+    collectionTracksRef.current = [];
   }, []);
 
-  const tryWaveTrack = useCallback(async (track, { offlineOnly = false } = {}) => {
+  const tryWaveTrack = useCallback(async (track, options) => {
     const selection = {};
     pendingWaveSelectionRef.current = selection;
     try {
       setCurrentTrack(track);
-      const playback = loadAndPlay(track, 'wave', { offlineOnly });
+      const playback = loadAndPlay(track, 'wave', options);
       const requestId = currentRequestIdRef.current;
       const result = await playback;
       return requestId === currentRequestIdRef.current ? result : { superseded: true };
@@ -1314,9 +1363,9 @@ export default function usePlayerController({ setTracks }) {
   }, [loadAndPlay, setCurrentTrack]);
 
   const advanceLocalWave = useCallback(async ({
-    session, valid, current, future = [], previous, exclude = [], restart = false,
+    session, valid, current, future = [], previous, exclude = [], restart = false, readyReserve, startingRequest,
   }) => {
-    const { tracks, reserveIds } = await selectLocalWaveTracks(session, {
+    const { tracks, reserveIds } = readyReserve ?? await selectLocalWaveTracks(session, {
       current: restart ? null : current,
       future, history: previous, exclude: restart ? exclude : [...exclude, ...removedQueueIdsRef.current],
     });
@@ -1329,7 +1378,7 @@ export default function usePlayerController({ setTracks }) {
       if (dislikeIdsRef.current.has(trackId)) continue;
       const next = normalizeTrackDto(track);
       if (!next) continue;
-      const result = await tryWaveTrack(next, { offlineOnly: true });
+      const result = await tryWaveTrack(next, { offlineOnly: true, startingRequest });
       if (!valid({ allowIntentChange: true }) || result?.superseded) return false;
       if (result?.error) {
         if (!valid()) return false;
@@ -1352,7 +1401,7 @@ export default function usePlayerController({ setTracks }) {
       saveCurrentWave();
       return true;
     }
-    if (valid()) {
+    if (!readyReserve && valid()) {
       if (currentTrackRef.current !== current) setCurrentTrack(current);
       setWaveMode('empty');
     }
@@ -1397,25 +1446,24 @@ export default function usePlayerController({ setTracks }) {
           await loadAndPlay(currentTrack, playbackEpisodeRef.current?.context);
           return;
         }
-        let nextTrack;
-        let newQueue = [...upNextQueue];
+        let candidates = upNextQueue;
 
-        if (newQueue.length === 0 && repeatModeRef.current === 'all') {
+        if (candidates.length === 0 && repeatModeRef.current === 'all') {
           const cycle = cycleTracksRef.current.length
             ? cycleTracksRef.current
             : [currentTrack];
-          newQueue = unshuffledRef.current ? shuffledTracks(cycle) : [...cycle];
+          candidates = unshuffledRef.current ? shuffledTracks(cycle) : cycle;
           if (isWaveSessionRef.current)
-            newQueue = newQueue.filter((track) => !dislikeIdsRef.current.has(String(getTrackId(track))));
+            candidates = candidates.filter((track) => !dislikeIdsRef.current.has(String(getTrackId(track))));
         }
 
         // A collection remains ordered until its final track has finished.
         if (
-          newQueue.length === 0 &&
+          candidates.length === 0 &&
           autoplayAfterQueueRef.current &&
           repeatModeRef.current === 'off'
         ) {
-          newQueue = await fetchQueue(getTrackId(currentTrack), {
+          candidates = await fetchQueue(getTrackId(currentTrack), {
             excludeIds: history.map(getTrackId).filter((id) => id !== null),
             queuedIds: [],
           });
@@ -1425,16 +1473,16 @@ export default function usePlayerController({ setTracks }) {
           )
             return;
           isWaveSessionRef.current = true;
-          if (durableWaveRef.current && newQueue.length === 0 && await advanceLocal()) return;
+          if (durableWaveRef.current && candidates.length === 0 && await advanceLocal()) return;
           if (durableWaveRef.current && !valid()) return;
         }
 
-        if (newQueue.length > 0) {
-          nextTrack = newQueue.shift();
-          setUpNextQueue(newQueue);
-        }
-
+        const nextTrack = candidates[0];
         if (nextTrack) {
+          const newQueue = candidates.slice(1);
+          // Slicing the active queue preserves every remaining occurrence and rating.
+          if (candidates === queueRef.current) commitPreparedQueue(newQueue);
+          else setUpNextQueue(newQueue);
           setHistory((prev) => [...prev, currentTrack].slice(-MAX_HISTORY));
           const nextTrackId = getTrackId(nextTrack);
           const currentTrackId = getTrackId(currentTrack);
@@ -1480,7 +1528,7 @@ export default function usePlayerController({ setTracks }) {
         }
       }
     },
-    [player, loadAndPlay, fetchQueue, refreshFutureWave, setHistory, setCurrentTrack, setUpNextQueue, advanceLocalWave, canRequestWave, setWaveMode],
+    [player, loadAndPlay, fetchQueue, refreshFutureWave, setHistory, setCurrentTrack, setUpNextQueue, commitPreparedQueue, advanceLocalWave, canRequestWave, setWaveMode],
   );
 
   const fetchNextTrackRef = useRef(fetchNextTrack);
@@ -1678,8 +1726,9 @@ export default function usePlayerController({ setTracks }) {
       if (!mountedRef.current || !track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
-      const activeTrack = currentTrackRef.current || currentTrack;
+      const activeTrack = currentTrackRef.current;
       const currentId = getTrackId(activeTrack);
+      const previousHistory = historyRef.current;
 
       if (activeTrack && !areTrackIdsEqual(activeTrack, trackId)) {
         setHistory((prev) => [...prev, activeTrack].slice(-MAX_HISTORY));
@@ -1700,7 +1749,7 @@ export default function usePlayerController({ setTracks }) {
         awaitingRecommendationsRef.current = false;
         isWaveSessionRef.current = source === 'search';
         autoplayAfterQueueRef.current = source === 'search';
-        collectionTrackIdsRef.current = [];
+        collectionTracksRef.current = [];
         removedQueueIdsRef.current.clear();
         cycleTracksRef.current = [track];
         unshuffledRef.current = null;
@@ -1717,22 +1766,22 @@ export default function usePlayerController({ setTracks }) {
       queueEpochRef.current += 1;
       isAdvancingRef.current = false;
       setIsLoading(false);
-      setUpNextQueue(
+      commitPreparedQueue(
         source === 'queue' ? queueRef.current.slice(queueIndex + 1) : [],
       );
       if (source === 'search')
         fetchQueue(trackId, {
           excludeIds: [
-            ...history.map(getTrackId).filter((id) => id !== null),
+            ...previousHistory.map(getTrackId).filter((id) => id !== null),
             currentId,
           ],
           queuedIds: [],
         });
     },
     [
-      currentTrack,
-      history,
-      upNextQueue,
+      setCurrentTrack,
+      setHistory,
+      commitPreparedQueue,
       fetchQueue,
       loadAndPlay,
       setWaveMode,
@@ -1742,15 +1791,10 @@ export default function usePlayerController({ setTracks }) {
   const playTrackList = useCallback(
     (trackList, startIndex = 0) => {
       if (!mountedRef.current || !trackList || trackList.length === 0) return;
-      // Give repeated occurrences independent identities without modifying DTOs.
-      trackList = trackList.map((track) => ({ ...track }));
       const track = trackList[startIndex];
       if (!track) return;
       const trackId = getTrackId(track);
       if (trackId === null) return;
-      const queue = trackList.slice(startIndex + 1);
-
-      setHistory(trackList.slice(0, startIndex).slice(-MAX_HISTORY));
       const newSession =
         'list_' +
         Date.now().toString(36) +
@@ -1765,24 +1809,34 @@ export default function usePlayerController({ setTracks }) {
       isWaveSessionRef.current = false;
       autoplayAfterQueueRef.current = true;
       setAutoplayEnabled(true);
-      cycleTracksRef.current = trackList;
+      cycleTracksRef.current = [];
+      recommendationsRef.current.clear();
       removedQueueIdsRef.current.clear();
       unshuffledRef.current = null;
       setShuffleEnabled(false);
       undoRef.current = null;
       setQueueUndo(null);
-      collectionTrackIdsRef.current = trackList
-        .map(getTrackId)
-        .filter((id) => id !== null);
-      setCurrentTrack(track);
-      loadAndPlay(track);
-      // Ручной плейлист также инвалидирует in-flight wave queue response.
       queueEpochRef.current += 1;
       isAdvancingRef.current = false;
       setIsLoading(false);
-      setUpNextQueue(queue);
+      setCurrentTrack(track);
+      loadAndPlay(currentTrackRef.current, 'manual');
+
+      // Keep stable DTOs for ordinary rows. Only repeated references need a
+      // distinct occurrence for move, remove and undo in this new queue.
+      const seen = new Set();
+      const occurrences = trackList.map((item, index) => {
+        if (index === startIndex) return currentTrackRef.current;
+        if (item === track || seen.has(item)) return { ...item };
+        seen.add(item);
+        return item;
+      });
+      cycleTracksRef.current = occurrences;
+      collectionTracksRef.current = occurrences;
+      setHistory(occurrences.slice(Math.max(0, startIndex - MAX_HISTORY), startIndex));
+      commitPreparedQueue(projectTrackRatings(occurrences.slice(startIndex + 1)));
     },
-    [loadAndPlay, setWaveMode],
+    [commitPreparedQueue, loadAndPlay, projectTrackRatings, setCurrentTrack, setHistory, setWaveMode],
   );
 
   const applyRatingProjection = useCallback(() => {
@@ -1792,7 +1846,7 @@ export default function usePlayerController({ setTracks }) {
     dislikeIdsRef.current = dislikes;
     setDislikeIds(dislikes);
     setCurrentTrack((track) => track);
-    setTracks((tracks) => tracks.map(projectRating));
+    setTracks(projectTrackRatings);
     setHistory((tracks) => tracks);
     setUpNextQueue((tracks) => {
       const candidates = tracks.filter((track) =>
@@ -1801,7 +1855,7 @@ export default function usePlayerController({ setTracks }) {
       );
       return candidates.length === tracks.length ? tracks : candidates;
     });
-  }, [projectRating, setTracks, setCurrentTrack, setHistory, setUpNextQueue]);
+  }, [projectTrackRatings, setTracks, setCurrentTrack, setHistory, setUpNextQueue]);
 
   const syncProjectionRef = useRef(null);
   syncProjectionRef.current = (event) => {
@@ -1871,7 +1925,7 @@ export default function usePlayerController({ setTracks }) {
       else player?.setFavoriteState?.(selection || '', !!currentTrackRef.current.is_liked, false);
     }
     try {
-      const rating = (await getRatingOverlay(session)).find((entry) =>
+      const rating = (await getRatingOverlay(session, key)).find((entry) =>
         entry.trackId === key && ['pending', 'synced'].includes(entry.state),
       );
       if (!mountedRef.current || !isOfflineSessionCurrent(session)) return;
@@ -1974,28 +2028,44 @@ export default function usePlayerController({ setTracks }) {
       let failedTrack;
       if (canRequestWave({ ignoreBackoff: true })) {
         const controller = new AbortController();
-        const request = { epoch, controller };
+        const lastPlayed = new Map(played.map((track, index) => [String(getTrackId(track)), index]));
+        const response = requestWave(buildWaveQueueUrl(null, {
+          limit: 8,
+          excludeIds: [...dislikes, ...played.map(getTrackId)],
+        }), controller.signal).then(data => {
+          if (!Array.isArray(data)) return [];
+          // The server can return recent tracks after exhausting other candidates.
+          return data.filter(track => !dislikes.has(String(getTrackId(track)))).sort((a, b) =>
+            (lastPlayed.get(String(getTrackId(a))) ?? -1) - (lastPlayed.get(String(getTrackId(b))) ?? -1));
+        }).catch(() => null);
+        const request = { epoch, controller, response };
         queueRequestRef.current = request;
         let data;
         try {
-          data = await requestWave(buildWaveQueueUrl(null, {
-            excludeIds: [...dislikes, ...played.map(getTrackId)],
-          }), controller.signal);
-        } catch {
-          // Local playback also covers a network or server failure.
+          const readyReserve = await readyReserveBeforeResponse(request, session, snapshot?.reserve, recent, dislikes);
+          if (!valid()) return;
+          if (readyReserve) {
+            const started = await advanceLocalWave({
+              session, valid, current: formerTrack, previous: played, restart: true, readyReserve, startingRequest: request,
+            });
+            if (started && valid({ allowIntentChange: true })) {
+              waveRetryAtRef.current = 0;
+              void fetchQueue(getTrackId(currentTrackRef.current), {}, { replaceRecommendations: true, startingRequest: request });
+              return;
+            }
+            if (!valid()) return;
+          }
+          data = await response;
         } finally {
-          if (queueRequestRef.current === request) queueRequestRef.current = null;
+          if (queueRequestRef.current === request) {
+            controller.abort();
+            queueRequestRef.current = null;
+          }
         }
         if (!valid()) return;
         if (Array.isArray(data) && canRequestWave({ ignoreBackoff: true })) {
-          const lastPlayed = new Map(played.map((track, index) => [String(getTrackId(track)), index]));
-          const candidates = mergeUniqueQueue([], data.map(normalizeTrackDto).filter((track) => {
-            const id = String(getTrackId(track));
-            return track && !dislikes.has(id) && !dislikeIdsRef.current.has(id);
-          }));
-          // The server may return recent tracks after it runs out of other candidates.
-          candidates.sort((a, b) => (lastPlayed.get(String(getTrackId(a))) ?? -1) -
-            (lastPlayed.get(String(getTrackId(b))) ?? -1));
+          const candidates = mergeUniqueQueue([], data.map(normalizeTrackDto).filter(track =>
+            track && !dislikeIdsRef.current.has(String(getTrackId(track)))));
           const [first, ...future] = candidates;
           if (first) {
             const result = await tryWaveTrack(first);
@@ -2036,7 +2106,7 @@ export default function usePlayerController({ setTracks }) {
         if (refreshWaveAfterAdvanceRef.current) refreshFutureWave();
       }
     }
-  }, [advanceLocalWave, beginWaveSession, canRequestWave, tryWaveTrack, refreshFutureWave, saveCurrentWave, setCurrentTrack, setHistory, setUpNextQueue, setWaveMode]);
+  }, [advanceLocalWave, beginWaveSession, canRequestWave, fetchQueue, tryWaveTrack, refreshFutureWave, saveCurrentWave, setCurrentTrack, setHistory, setUpNextQueue, setWaveMode]);
 
   const dismissPlayer = useCallback(async () => {
     completePlayback(playbackEpisodeRef.current, 'skip');
@@ -2061,7 +2131,7 @@ export default function usePlayerController({ setTracks }) {
     setWaveMode('idle');
     isWaveSessionRef.current = false;
     autoplayAfterQueueRef.current = false;
-    collectionTrackIdsRef.current = [];
+    collectionTracksRef.current = [];
     cycleTracksRef.current = [];
     removedQueueIdsRef.current.clear();
     unshuffledRef.current = null;

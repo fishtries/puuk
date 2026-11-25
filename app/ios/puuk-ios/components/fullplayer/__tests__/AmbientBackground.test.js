@@ -1,7 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import AmbientBackground from '../AmbientBackground';
-import * as apiModule from '../../../shared/api/api';
 
 jest.mock('../../../shared/media/CoverImage', () => {
   const React = require('react');
@@ -190,28 +189,12 @@ describe('AmbientBackground - Apple Music Style Full Player Ambient Background',
     expect(stops[0].props.stopColor).toBe(trackA.cover_color);
   });
 
-  it('asynchronously requests /api/color/{id} when cover_color is absent and renders orbs once resolved', async () => {
-    apiModule.authFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ color: '#9933ff' }),
-    });
-
+  it('renders the color resolved by the player when the track has no embedded color', async () => {
     let renderer;
     await act(async () => {
-      renderer = TestRenderer.create(
-        <AmbientBackground
-          currentTrack={trackWithoutColor}
-          isPlaying={true}
-          isPlayerVisible={true}
-        />,
-      );
-    });
-
-    expect(apiModule.authFetch).toHaveBeenCalledWith('/api/color/103');
-
-    // Wait for promise resolution
-    await act(async () => {
-      await Promise.resolve();
+      renderer = TestRenderer.create(<AmbientBackground
+        currentTrack={trackWithoutColor} color="#9933ff" isPlaying isPlayerVisible
+      />);
     });
 
     const root = renderer.root;

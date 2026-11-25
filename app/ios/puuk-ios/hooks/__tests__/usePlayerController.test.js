@@ -9,7 +9,7 @@ import { authFetch } from '../../shared/api/api';
 import { updateSetting } from '../../shared/storage/settings';
 import { recordPlayStart } from '../../shared/api/artists';
 import { setLocalRating } from '../../offline/outbox/runtime';
-import { readMediaKey } from '../../offline';
+import { readMediaKey, readPlayableIds } from '../../offline';
 import { notifyOfflineIndex } from '../../offline/session';
 import { readWaveQueue, saveWaveQueue, selectLocalWaveTracks } from '../../offline/wave';
 import { queueKey } from '../../utils/queueIdentity';
@@ -37,6 +37,7 @@ jest.mock('../../offline/wave', () => ({
 jest.mock('../../offline', () => ({
   ...jest.requireActual('../../offline'),
   readMediaKey: jest.fn(async () => null),
+  readPlayableIds: jest.fn(async () => new Set()),
 }));
 const isWaveStart = (url) => url.includes('/api/wave/queue') && !url.includes('current_track_id=');
 jest.mock('../../offline/outbox/runtime', () => ({
@@ -328,6 +329,26 @@ describe('usePlayerController', () => {
     expect(controller.currentTrack.id).toBe(2);
     expect(controller.playbackRate).toBe(1);
     expect(mockPlayerInstance.setPlaybackRate).toHaveBeenLastCalledWith(1);
+  });
+
+  test('next and queue selections retain the prepared tail of a large playlist', async () => {
+    const tracks = Array.from({ length: 5000 }, (_, i) => ({ id: i + 1 }));
+    const last = tracks.at(-1);
+    const readRating = jest.fn(() => true);
+    Object.defineProperty(last, 'is_liked', { get: readRating, enumerable: true });
+    await act(async () => controller.playTrackList(tracks));
+    const lastKey = queueKey(controller.upNextQueue.at(-1));
+    readRating.mockClear();
+
+    await act(async () => controller.fetchNextTrack());
+    expect(controller.currentTrack.id).toBe(2);
+    const selected = controller.upNextQueue[1200];
+    await act(async () => controller.playTrack(selected, { source: 'queue', queueIndex: 1200 }));
+    expect(controller.currentTrack).toBe(selected);
+    expect(controller.upNextQueue[0].id).toBe(selected.id + 1);
+    expect(controller.upNextQueue.at(-1)).toBe(last);
+    expect(queueKey(last)).toBe(lastKey);
+    expect(readRating).not.toHaveBeenCalled();
   });
 
   test('queue edits address occurrences, update preloading and undo without restarting audio', async () => {
@@ -927,6 +948,22 @@ describe('usePlayerController', () => {
     });
   });
 
+  test('selection from a playlist appears while audio is pending and a late completion cannot replace a newer tap', async () => {
+    const first = { id: 1, title: 'First', coverArt: 'first.jpg' };
+    const next = { id: 2, title: 'Second', coverArt: 'second.jpg' };
+    let finish;
+    defaultPlaybackCoordinator.play.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const select = controller.playTrack;
+    await act(async () => { controller.playTrackList([first, next, first]); });
+    expect(controller.currentTrack).toMatchObject(first);
+    expect(controller.upNextQueue[0]).toBe(next);
+    expect(queueKey(controller.currentTrack)).not.toBe(queueKey(controller.upNextQueue[1]));
+    expect(controller.playTrack).toBe(select);
+    await act(async () => { select(next); });
+    await act(async () => { finish({ isLocal: false, uri: 'mock://first' }); });
+    expect(controller.currentTrack).toMatchObject(next);
+  });
+
   test('playTrackList sets manual queue and plays first track', async () => {
     const list = [
       { id: 1, title: 'Track 1' },
@@ -1093,6 +1130,66 @@ describe('usePlayerController', () => {
     });
     expect(controller.currentTrack.id).toBe('first');
     expect(queueIds()).toEqual(['next']);
+  });
+
+  describe('starting Wave with a downloaded reserve', () => {
+    let reply;
+    beforeEach(() => {
+      jest.useFakeTimers();
+      readWaveQueue.mockResolvedValue({
+        current: { id: 'recent' }, history: [],
+        reserve: ['recent', 'missing', 'ready', 'also-ready'].map(id => ({ id })),
+      });
+      readPlayableIds.mockResolvedValue(new Set(['ready', 'also-ready']));
+      authFetch.mockImplementation(url => isWaveStart(url)
+        ? new Promise(resolve => {
+          reply = () => resolve({ ok: true, json: async () => [{ id: 'ready' }, { id: 'fresh', duration: 3600 }] });
+        })
+        : Promise.resolve({ ok: true, json: async () => [] }));
+    });
+    afterEach(() => jest.useRealTimers());
+
+    test.each(['play', 'switch'])('slow recommendations arrive after local playback (%s)', async action => {
+      let start;
+      await act(async () => { start = controller.startWave(); });
+      await act(async () => jest.advanceTimersByTimeAsync(399));
+      expect(defaultPlaybackCoordinator.play).not.toHaveBeenCalled();
+      await act(async () => jest.advanceTimersByTimeAsync(1));
+      await start;
+      expect(readPlayableIds).toHaveBeenCalledWith(mockSession, ['missing', 'ready', 'also-ready']);
+      expect(controller.currentTrack.id).toBe('ready');
+      expect(defaultPlaybackCoordinator.play.mock.lastCall[2].offlineOnly).toBe(true);
+      expect(queueIds()).toEqual(['also-ready']);
+      if (action === 'switch') await act(async () => controller.playTrackList([{ id: 'manual' }, { id: 'next' }]));
+      const plays = defaultPlaybackCoordinator.play.mock.calls.length;
+      await act(async () => { reply(); });
+      expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays);
+      expect(controller.currentTrack.id).toBe(action === 'switch' ? 'manual' : 'ready');
+      expect(queueIds()).toEqual(action === 'switch' ? ['next'] : ['fresh']);
+      expect(authFetch.mock.calls.filter(([url]) => url.includes('/wave/queue'))).toHaveLength(1);
+      if (action === 'play') {
+        await act(async () => controller.queueControls.cycleRepeatMode());
+        await act(async () => controller.fetchNextTrack());
+        await act(async () => controller.fetchNextTrack());
+        expect(controller.currentTrack.id).toBe('ready');
+        expect(queueIds()).toEqual(['fresh']);
+      }
+    });
+
+    test.each(['fast network', 'empty reserve', 'local playback failed'])('%s keeps the original recommendations request', async scenario => {
+      readPlayableIds.mockResolvedValue(new Set(scenario === 'empty reserve' ? [] : ['also-ready']));
+      if (scenario === 'local playback failed')
+        defaultPlaybackCoordinator.play.mockResolvedValueOnce({ error: new Error('File gone') });
+      let start;
+      await act(async () => { start = controller.startWave(); });
+      if (scenario !== 'fast network') await act(async () => jest.advanceTimersByTimeAsync(450));
+      await act(async () => { reply(); await start; });
+      if (scenario === 'fast network') expect(readPlayableIds).not.toHaveBeenCalled();
+      expect(controller.currentTrack.id).toBe('ready');
+      expect(queueIds()).toEqual(['fresh']);
+      expect(defaultPlaybackCoordinator.play.mock.lastCall[2].offlineOnly).toBeUndefined();
+      expect(authFetch.mock.calls.filter(([url]) => url.includes('/wave/queue'))).toHaveLength(1);
+    });
   });
 
   test('dislike advances the wave and does not affect a track selected during the request', async () => {

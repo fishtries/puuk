@@ -18,7 +18,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import CoverImage from '../../shared/media/CoverImage';
 import { areTrackIdsEqual, getTrackId } from '../../shared/domain/trackAdapter';
-import { authFetch } from '../../shared/api/api';
 
 const { width, height } = Dimensions.get('window');
 
@@ -165,13 +164,13 @@ const TrackVisualLayer = React.memo(
 
 const AmbientBackground = ({
   currentTrack,
+  color = currentTrack?.cover_color,
   isPlaying = false,
   isPlayerVisible = false,
   expandProgress,
 }) => {
   const [displayedTrack, setDisplayedTrack] = useState(currentTrack);
   const [outgoingTrack, setOutgoingTrack] = useState(null);
-  const [color, setColor] = useState(() => currentTrack?.cover_color || null);
 
   const crossfadeProgress = useSharedValue(1);
   const breathScale = useSharedValue(1.2);
@@ -183,39 +182,6 @@ const AmbientBackground = ({
   const orb2TranslateY = useSharedValue(0);
 
   const prevTrackIdRef = useRef(getTrackId(currentTrack));
-
-  // Asynchronously resolve track cover_color if absent on the track object
-  useEffect(() => {
-    const trackId = getTrackId(currentTrack);
-    if (!trackId) {
-      setColor(null);
-      return;
-    }
-
-    if (currentTrack?.cover_color) {
-      setColor(currentTrack.cover_color);
-      return;
-    }
-
-    let isCancelled = false;
-    authFetch(`/api/color/${encodeURIComponent(String(trackId))}`)
-      .then((res) => {
-        if (!isCancelled && res?.ok) {
-          return res.json();
-        }
-        return null;
-      })
-      .then((data) => {
-        if (!isCancelled && data?.color) {
-          setColor(data.color);
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [currentTrack]);
 
   // Double-buffering crossfade when switching tracks
   useEffect(() => {

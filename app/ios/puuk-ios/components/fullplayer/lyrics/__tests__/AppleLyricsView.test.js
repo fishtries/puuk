@@ -31,7 +31,7 @@ jest.mock('../../../../offline', () => ({
 }));
 
 function AppleLyricsView(props) {
-  const lyricsResult = usePlayerLyrics(props.currentTrack);
+  const lyricsResult = usePlayerLyrics(props.currentTrack, undefined, props.isPlayerVisible);
   return <LyricsView {...props} lyricsResult={lyricsResult} />;
 }
 
@@ -161,6 +161,23 @@ describe('AppleLyricsView', () => {
     });
     expect(JSON.stringify(renderer.toJSON())).toContain('Stored plain text');
     expect(authFetch).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
+  it('reads lyrics on expansion and keeps them when the same song is reopened', async () => {
+    getOfflineSession.mockReturnValue(null);
+    readMediaKey.mockResolvedValue(null);
+    authFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ plainLyrics: 'Fixture lyrics' }) });
+    const view = visible => <AppleLyricsView {...defaultProps} isPlayerVisible={visible} />;
+    let renderer;
+    await act(async () => { renderer = TestRenderer.create(view(false)); });
+    expect(authFetch).not.toHaveBeenCalled();
+    await act(async () => { renderer.update(view(true)); });
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Fixture lyrics');
+    await act(async () => { renderer.update(view(false)); });
+    await act(async () => { renderer.update(view(true)); });
+    expect(authFetch).toHaveBeenCalledTimes(1);
     act(() => renderer.unmount());
   });
 

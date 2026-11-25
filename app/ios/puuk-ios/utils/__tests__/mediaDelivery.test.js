@@ -118,7 +118,7 @@ describe('coordinator preserves the installed CDN source',()=>{
   jest.useFakeTimers();attempt=null;revision=0;position=0;intent='pause';logicalStarts=0;
   fetcher.mockImplementation(async(_,o)=>response(o.body.delivery==='direct'?direct({url:`/api/stream/${o.body.track_id}?mt=a.b.c`}):sourceTicket(o.body.track_id)));
   resolver.clock=()=>performance.now();
-  c=new PlaybackCoordinator({resolveMedia:(t,o)=>resolver.resolve(t,o),cache:{getCachedUri:()=>null},scheduler:{addListener:()=>()=>{},setPlaybackPressure:jest.fn(),cancelAll:jest.fn(),syncQueue:jest.fn()},clock:()=>performance.now(),bypassCache:true});
+  c=new PlaybackCoordinator({mediaDelivery:resolver,cache:{getCachedUri:()=>null},scheduler:{addListener:()=>()=>{},setPlaybackPressure:jest.fn(),cancelAll:jest.fn(),syncQueue:jest.fn()},clock:()=>performance.now(),bypassCache:true});
   p={puukSourceIdentityVersion:1,puukExpectedIntentVersion:1,
    get currentStatus(){return {sourceIdentityVersion:1,sourceAttemptId:attempt,nativeIntent:intent,intentRevision:revision};},
    replaceWithExpectedIntent:jest.fn((source,id,rev,old,expectedIntent)=>p.replaceWithAttempt(source,id,rev,old,expectedIntent)),
@@ -129,6 +129,62 @@ describe('coordinator preserves the installed CDN source',()=>{
  });
  afterEach(()=>c.destroy());
  async function start(id=ID){await c.play(p,{id,title:'Fixture',duration:100,normalization_gain_db:-3},{isUserSelection:true,headers:{Authorization:'CANARY',Cookie:'CANARY'}});position=12;emit('progress');}
+ test('startup keeps the selected ticket when playback pressure cancels the scheduler', async () => {
+   fetcher.mockImplementation(() => new Promise(resolve => {
+     setTimeout(() => resolve(response(ticket({ cache_for: 0 }))), 500);
+   }));
+   const scheduler = new AbortController();
+   const preload = resolver.resolve(ID, { priority: 'preload', signal: scheduler.signal });
+   const cancelled = expect(preload).rejects.toMatchObject({ code: 'abort' });
+   await jest.advanceTimersByTimeAsync(350);
+   c.scheduler.setPlaybackPressure.mockImplementation(({ phase }) => {
+     if (phase === 'startup') scheduler.abort();
+   });
+   const play = start();
+   await cancelled;
+   expect(fetcher.mock.calls[0][1].signal.aborted).toBe(false);
+   await jest.advanceTimersByTimeAsync(149);
+   expect(p.replaceWithAttempt).not.toHaveBeenCalled();
+   await jest.advanceTimersByTimeAsync(1);
+   await play;
+   expect(fetcher).toHaveBeenCalledTimes(1);
+   expect(p.replaceWithAttempt.mock.calls[0][0].uri).toBe(cdn);
+ });
+ test('an almost-expired preload leaves time for a fresh playback request', async () => {
+   const gate = deferred();
+   fetcher.mockImplementationOnce(() => gate.promise);
+   const preload = resolver.resolve(ID, { priority: 'preload' });
+   const timeout = expect(preload).rejects.toMatchObject({ code: 'timeout' });
+   await jest.advanceTimersByTimeAsync(2850);
+   const play = start();
+   await jest.advanceTimersByTimeAsync(150);
+   await timeout;
+   await play;
+   expect(fetcher).toHaveBeenCalledTimes(2);
+   expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
+   gate.resolve(response(ticket()));
+ });
+ test('switching tracks cancels a promoted ticket and ignores its late response', async () => {
+   const gate = deferred();
+   fetcher.mockImplementationOnce(() => gate.promise);
+   const scheduler = new AbortController();
+   const preload = resolver.resolve(ID, { priority: 'preload', signal: scheduler.signal });
+   const cancelled = expect(preload).rejects.toMatchObject({ code: 'abort' });
+   await flush();
+   c.scheduler.setPlaybackPressure.mockImplementation(({ phase }) => {
+     if (phase === 'startup') scheduler.abort();
+   });
+   const first = c.play(p, { id: ID }, { isUserSelection: true });
+   await cancelled;
+   await start(B);
+   expect(fetcher.mock.calls[0][1].signal.aborted).toBe(true);
+   gate.resolve(response(ticket()));
+   await expect(first).resolves.toMatchObject({ superseded: true });
+   await flush();
+   expect(p.replaceWithAttempt).toHaveBeenCalledTimes(1);
+   expect(c._mediaDescriptor.trackId).toBe(B);
+   expect([...resolver.cache.values()].map(value => value.trackId)).toEqual([B]);
+ });
  test.each([503, 408, 401, 403, 404, 410])('native failure %i holds position without refreshing its ticket or seeking', async status => {
   await start();
   c.upNextQueue = [{ id: B }];
@@ -174,8 +230,34 @@ describe('coordinator preserves the installed CDN source',()=>{
 test('a monotonic reset during request cannot extend or publish the capability',async()=>{
  const gate=deferred();fetcher.mockImplementation(()=>gate.promise);const p=resolver.resolve(ID);p.catch(()=>{});await ticks();now=0;gate.resolve(response(ticket()));await expect(p).rejects.toThrow();expect(resolver.cache.size).toBe(0);
 });
-test('current track does not inherit the preload cancellation signal when promoting the same ID',async()=>{
- const gate=deferred();fetcher.mockImplementationOnce(()=>gate.promise).mockResolvedValueOnce(response(ticket()));const controller=new AbortController();
- const preload=resolver.resolve(ID,{priority:'preload',signal:controller.signal});preload.catch(()=>{});await ticks();const current=resolver.resolve(ID,{priority:'current'});controller.abort();
- expect((await current).delivery).toBe('cdn');gate.resolve(response(ticket()));await expect(preload).rejects.toThrow();
+test('a promoted request uses the current selection’s compatibility allowance', async () => {
+  const gate = deferred();
+  fetcher.mockImplementationOnce(() => gate.promise);
+  const controller = new AbortController();
+  const preload = resolver.resolve(ID, { priority: 'preload', signal: controller.signal });
+  const cancelled = expect(preload).rejects.toMatchObject({ code: 'abort' });
+  await ticks();
+  const consumeNegotiation = jest.fn(() => true);
+  const current = resolver.resolve(ID, { consumeNegotiation });
+  controller.abort();
+  await cancelled;
+  gate.resolve(response({ detail: 'Not Found' }, 404));
+  await expect(current).resolves.toMatchObject({ delivery: 'direct', legacy: true });
+  expect(consumeNegotiation).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+test('looking for pending playback work requires an exact version, mode and owner', async () => {
+  const gate = deferred();
+  fetcher.mockImplementationOnce(() => gate.promise);
+  const preload = resolver.resolve({ id: ID, content_version: HASH }, { priority: 'preload' });
+  const cancelled = expect(preload).rejects.toMatchObject({ code: 'abort' });
+  await ticks();
+  const track = { id: ID, content_version: HASH };
+  expect(resolver.resolve(ID, { pendingOnly: true })).toBeNull();
+  expect(resolver.resolve(track, { mode: 'direct', pendingOnly: true })).toBeNull();
+  owner = { ...owner, generation: 2 };
+  expect(resolver.resolve(track, { pendingOnly: true })).toBeNull();
+  gate.resolve(response(ticket()));
+  await cancelled;
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

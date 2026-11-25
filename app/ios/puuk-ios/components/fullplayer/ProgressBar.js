@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { View, Text } from 'react-native';
 import Animated, { useAnimatedStyle, runOnJS, withTiming, Easing } from 'react-native-reanimated';
-import { usePlaybackPosition } from '../../hooks/playbackStatus';
+import { usePlaybackPosition, usePlaybackSecond } from '../../hooks/playbackStatus';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 export const PlaybackProgressClock = React.memo(function PlaybackProgressClock({
@@ -21,6 +21,7 @@ export const PlaybackProgressClock = React.memo(function PlaybackProgressClock({
 });
 
 const ProgressBar = ({
+  player,
   styles,
   seekTo,
   currentTime = 0,
@@ -37,18 +38,9 @@ const ProgressBar = ({
   slideValue: _slideValueProp,
 }) => {
   const [scrubSeconds, setScrubSeconds] = useState(null);
-  const lastReportedSecRef = useRef(null);
-
-  const updateScrubSec = useCallback((sec) => {
-    if (sec !== lastReportedSecRef.current) {
-      lastReportedSecRef.current = sec;
-      setScrubSeconds(sec);
-    }
-  }, []);
 
   const handleSeekEnd = useCallback(
     (targetTime) => {
-      lastReportedSecRef.current = null;
       setScrubSeconds(null);
       if (targetTime !== null && targetTime !== undefined) {
         seekTo?.(targetTime);
@@ -65,15 +57,16 @@ const ProgressBar = ({
       const ratio = Math.max(0, Math.min(1, event.x / width));
       slideProgressShared.value = ratio;
       const targetSec = Math.floor(ratio * durationShared.value);
-      runOnJS(updateScrubSec)(targetSec);
+      runOnJS(setScrubSeconds)(targetSec);
     })
     .onUpdate((event) => {
       'worklet';
       const width = sliderWidthShared.value || 1;
       const ratio = Math.max(0, Math.min(1, event.x / width));
+      const previousSec = Math.floor(slideProgressShared.value * durationShared.value);
       slideProgressShared.value = ratio;
       const targetSec = Math.floor(ratio * durationShared.value);
-      runOnJS(updateScrubSec)(targetSec);
+      if (targetSec !== previousSec) runOnJS(setScrubSeconds)(targetSec);
     })
     .onEnd(() => {
       'worklet';
@@ -88,7 +81,7 @@ const ProgressBar = ({
         runOnJS(handleSeekEnd)(null);
       }
     }), [isSlidingShared, sliderWidthShared, slideProgressShared, durationShared,
-      updateScrubSec, handleSeekEnd]);
+      handleSeekEnd]);
 
   // Hardware-accelerated GPU transforms — NO LAYOUT RECALCULATIONS
   const progressFillStyle = useAnimatedStyle(() => {
@@ -125,7 +118,8 @@ const ProgressBar = ({
     return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
-  const currentSeconds = scrubSeconds !== null ? scrubSeconds : currentTime;
+  const playbackSecond = usePlaybackSecond(player);
+  const currentSeconds = scrubSeconds ?? (player ? playbackSecond : currentTime);
   const totalDuration = duration || 0;
   const remainingSeconds = Math.max(0, totalDuration - currentSeconds);
 

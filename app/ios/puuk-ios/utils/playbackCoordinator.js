@@ -141,7 +141,8 @@ export {
 export class PlaybackCoordinator {
   constructor(options = {}) {
     this._offlineLease = null;
-    this.resolveMedia = options.resolveMedia || ((track, opts) => mediaDelivery.resolve(track, opts));
+    this.mediaDelivery = options.resolveMedia ? null : (options.mediaDelivery || mediaDelivery);
+    this.resolveMedia = options.resolveMedia || ((track, opts) => this.mediaDelivery.resolve(track, opts));
     this._mediaController = null;
     this._mediaDescriptor = null;
     this.cache = options.cache || defaultAudioCache;
@@ -344,23 +345,36 @@ export class PlaybackCoordinator {
     }
   }
 
-  async _resolveRemote(track, { force = false } = {}) {
+  async _resolveRemote(track, { force = false, pendingTicket } = {}) {
     const selection = this.playbackGeneration;
     const auth = getAuthSessionGeneration();
     const server = this._resolveServerUrl();
     const controller = this._mediaController;
     let negotiated = false;
     const descriptor = await boundedMediaOperation(
-      signal => this.resolveMedia(track, {
-        force,
-        priority: 'current',
-        signal,
-        consumeNegotiation: () => {
-          if (negotiated) return false;
-          negotiated = true;
-          return true;
-        },
-      }),
+      async signal => {
+        if (pendingTicket) {
+          let ticket;
+          try {
+            ticket = await pendingTicket;
+          } catch (error) {
+            // A preload near its deadline must not consume the user's whole attempt.
+            if (error.code !== 'timeout') throw error;
+          }
+          if (signal.aborted) throw new PlaybackError('Superseded', { type: 'abort' });
+          if (ticket && this.clock() < ticket.usableUntil) return ticket;
+        }
+        return this.resolveMedia(track, {
+          force,
+          priority: 'current',
+          signal,
+          consumeNegotiation: () => {
+            if (negotiated) return false;
+            negotiated = true;
+            return true;
+          },
+        });
+      },
       { signal: controller?.signal },
     );
     if (
@@ -1520,19 +1534,16 @@ export class PlaybackCoordinator {
     const normalizedStreamUrl = normalizeStreamUrl(track, currentServerUrl);
 
     // 2. Проверка локального кеша
-    let localUri = null;
-    if (this.bypassCache || options.bypassLocal || options.offlineOnly) {
-      this._log(
-        '[Coordinator][Stage 2: get_cached_uri] Cache BYPASSED by diagnostic flag',
-      );
-    } else {
+    const useCache = !this.bypassCache && !options.bypassLocal && !options.offlineOnly;
+    const readCache = () => {
       try {
-        localUri = this.cache.getCachedUri(trackIdStr);
+        const localUri = this.cache.getCachedUri(trackIdStr, track.content_version);
         this._log('[Coordinator][Stage 2: get_cached_uri]', {
           trackId: trackIdStr,
           hasLocalUri: Boolean(localUri),
           localUri,
         });
+        return localUri;
       } catch (cacheErr) {
         this._warn('[Coordinator][Stage 2: get_cached_uri FAILED]', {
           trackId: trackIdStr,
@@ -1546,9 +1557,13 @@ export class PlaybackCoordinator {
             trackId: trackIdStr,
           },
         );
-        localUri = null;
+        return null;
       }
-    }
+    };
+    // With downloads enabled, check ordinary cache after the asynchronous
+    // offline lookup. Only a running source needs the early idempotency check.
+    const checkBeforeLease = !offlineSession || (this._offlineLease && this.currentTrackId === trackIdStr);
+    let localUri = useCache && checkBeforeLease ? readCache() : null;
 
     const expectedUri = localUri || normalizedStreamUrl;
     const expectedIsLocal = Boolean(localUri);
@@ -1684,6 +1699,14 @@ export class PlaybackCoordinator {
     this._recordDiagnostic('play');
     this._notifyState();
 
+    // Keep this selection's in-flight ticket when startup cancels the
+    // scheduler. A local cache hit must never start a network request here.
+    const selectionSignal = this._mediaController.signal;
+    let pendingTicket = !options.offlineOnly && !localUri && this.mediaDelivery?.resolve(track, {
+      pendingOnly: true, signal: selectionSignal, consumeNegotiation: () => true,
+    });
+    if (pendingTicket) pendingTicket.catch(() => {});
+
     if (
       this.scheduler &&
       typeof this.scheduler.setPlaybackPressure === 'function'
@@ -1709,17 +1732,23 @@ export class PlaybackCoordinator {
       }
       if (offlineLease) {
         localUri = offlineLease.uri;
-        this.current.source = 'local';
+      } else if (useCache) {
+        localUri = readCache();
       }
     }
-    if (!offlineLease && !this.bypassCache && !options.bypassLocal && !options.offlineOnly && this.cache.prepareTrack) {
-      await this.cache.prepareTrack(track, { signal: this._mediaController.signal });
+    // A stale cache entry and its streaming fallback share one authorized ticket.
+    let ticketRequest;
+    const resolveTicket = () => (ticketRequest ??= this._resolveRemote(track, {
+      pendingTicket: selectionSignal.aborted ? null : pendingTicket,
+    }));
+    if (!localUri && useCache && this.cache.prepareTrack) {
+      localUri = await this.cache.prepareTrack(track, { signal: this._mediaController.signal, resolveTicket });
       if (!isCurrent()) return { superseded: true, uri: null, isLocal: false };
-      localUri = this.cache.getCachedUri(trackIdStr);
     }
 
     // СТАДИЯ 3: Native replace
     if (localUri) {
+      this.current.source = 'local';
       isLocal = true;
       playUri = localUri;
       this._log('[Coordinator][Stage 3: local_replace]', {
@@ -1781,10 +1810,13 @@ export class PlaybackCoordinator {
         );
         isLocal = false;
         playUri = null;
+        // A native replace can take time. Let the delivery cache check the
+        // ticket's remaining lifetime again before falling back to streaming.
+        ticketRequest = undefined;
+        pendingTicket = null;
         if (this.identityAvailable) {
           sourceAttemptId = `att_${++this._attemptIdCounter}_${Date.now()}`;
           this.current.sourceAttemptId = sourceAttemptId;
-          this.current.source = 'remote';
         }
       }
     }
@@ -1822,6 +1854,7 @@ export class PlaybackCoordinator {
         throw urlErr;
       }
 
+      this.current.source = 'remote';
       isLocal = false;
       playUri = normalizedStreamUrl;
       this._log('[Coordinator][Stage 3: remote_replace]', {
@@ -1830,7 +1863,7 @@ export class PlaybackCoordinator {
       });
 
       let descriptor;
-      try { descriptor = await this._resolveRemote(track); }
+      try { descriptor = await resolveTicket(); }
       catch (e) { if (!isCurrent()) return { superseded: true, uri: null, isLocal: false }; this._terminateWithError(e); throw e; }
       if (!isCurrent()) return { superseded: true, uri: null, isLocal: false };
       playUri = descriptor.uri;

@@ -95,10 +95,6 @@ export default function HomeScreen({
     isLoading: isRecentlyListenedLoading,
   } = useRecentlyListened({ currentUser });
 
-  const handleStartWave = useCallback(() => {
-    if (onStartWave) onStartWave();
-  }, [onStartWave]);
-
   const handleEndReached = useCallback(() => {
     if (
       hasMoreTracks &&
@@ -141,7 +137,7 @@ export default function HomeScreen({
   const ListHeader = useMemo(
     () => (
       <>
-        <YourMixCard onPress={handleStartWave} isVisible={isVisible} />
+        <YourMixCard onPress={onStartWave} isVisible={isVisible} />
         <GenreMixesSection
           currentUser={currentUser}
           navigation={navigation}
@@ -161,7 +157,7 @@ export default function HomeScreen({
       </>
     ),
     [
-      handleStartWave,
+      onStartWave,
       isVisible,
       currentUser,
       navigation,

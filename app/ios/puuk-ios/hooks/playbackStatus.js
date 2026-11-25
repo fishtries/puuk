@@ -6,7 +6,7 @@ const noopSubscribe = () => () => {};
 const emptySnapshot = () => EMPTY;
 
 // One native subscription per player. React's transport consumers observe
-// whole seconds and semantic changes; progress consumers observe exact audio
+// semantic changes; progress consumers observe exact audio
 // positions. Snapshots stay cached between notifications (useSyncExternalStore).
 function getStore(player) {
   let store = stores.get(player);
@@ -22,8 +22,7 @@ function getStore(player) {
     const previous = latest;
     latest = event;
     const keys = new Set([...Object.keys(previous), ...Object.keys(event)]);
-    const stateChanged = Math.floor(previous.currentTime || 0) !== Math.floor(event.currentTime || 0) ||
-      [...keys].some(key => key !== 'currentTime' && key !== 'currentOffsetFromLive' &&
+    const stateChanged = [...keys].some(key => key !== 'currentTime' && key !== 'currentOffsetFromLive' &&
         !Object.is(previous[key], event[key]));
     const positionChanged = position.currentTime !== (event.currentTime || 0) ||
       position.duration !== (event.duration || 0);
@@ -51,6 +50,7 @@ function getStore(player) {
   store = {
     state: () => state,
     position: () => position,
+    seconds: () => Math.floor(position.currentTime),
     latest: () => latest,
     subscribeState: listener => subscribe(stateListeners, listener),
     subscribePosition: listener => subscribe(positionListeners, listener),
@@ -80,4 +80,11 @@ export function usePlaybackPosition(player, enabled = true) {
   const store = player && enabled ? getStore(player) : null;
   const subscribe = useCallback(listener => store ? store.subscribePosition(listener) : () => {}, [store]);
   return useSyncExternalStore(subscribe, store?.position || emptySnapshot);
+}
+
+const zero = () => 0;
+
+export function usePlaybackSecond(player) {
+  const store = player ? getStore(player) : null;
+  return useSyncExternalStore(store?.subscribePosition || noopSubscribe, store?.seconds || zero);
 }
