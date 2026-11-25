@@ -90,6 +90,17 @@ def test_signer_independent_openssl():
     assert service.sign_path(path+'x',1763251200,'k7W9xP2mQ5vL8nJ1')!=oracle
 
 
+def test_ticket_reads_one_file_version_before_returning_the_stream_url(catalog):
+    client, tid, path, _, _, headers = catalog
+    digest = ready(tid, path)
+    with mock.patch.object(service, 'open_safe', wraps=service.open_safe) as open_file:
+        response = client.post('/api/media-ticket', json={'track_id': tid}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()['content_version'] == digest
+    assert response.json()['content_length'] == path.stat().st_size
+    open_file.assert_called_once()
+
+
 def test_disabled_legacy_and_scope(catalog):
     c,tid,path,data,user,h=catalog
     r=c.post('/api/media-ticket',json={'track_id':tid.upper(),'ignored':True},headers=h)

@@ -406,23 +406,27 @@ def _ready_or_prepare(track_id,st,deadline,cancel):
     return version
 
 
+def _open_current_track(track_id, deadline, cancel):
+    """Open the current file while the caller holds the track mutation lock."""
+    row = _track(track_id, deadline, cancel, recover=False)
+    try:
+        return open_safe(row['file_path'])
+    except (OSError, ValueError):
+        logger.warning('delivery_track track_id=%s reason=file_missing', track_id)
+        delivery.invalidate(track_id, deleting=True, unmanaged=True, deadline=deadline, cancel=cancel)
+        raise unavailable() from None
+
+
 def _pin(track_id,deadline,cancel,*,origin_version=None,if_match=None,range_present=False):
     from metadata import track_mutation_lock
-    row=_track(track_id,deadline,cancel,recover=origin_version is None)
+    _track(track_id,deadline,cancel,recover=origin_version is None)
     if not _stream_slots.acquire(blocking=False):
         raise busy()
     fd=None
     transferred=False
     try:
         with track_mutation_lock(track_id,config.get_effective_music_dir(),min(deadline,time.monotonic()+.1),cancel):
-            # Deletion may have won the lock while we waited.
-            row=_track(track_id,deadline,cancel,recover=False)
-            try:
-                fd,st,path=open_safe(row['file_path'])
-            except (OSError,ValueError):
-                logger.warning('delivery_track track_id=%s reason=file_missing',track_id)
-                delivery.invalidate(track_id,deleting=True,unmanaged=True,deadline=deadline,cancel=cancel)
-                raise unavailable() from None
+            fd,st,path=_open_current_track(track_id,deadline,cancel)
             version=_ready_or_prepare(track_id,st,deadline,cancel)
             if origin_version and (not version or version['content_version']!=origin_version):
                 raise unavailable()
@@ -444,17 +448,15 @@ def _pin(track_id,deadline,cancel,*,origin_version=None,if_match=None,range_pres
 def issue(request,track_id,requested,deadline,cancel):
     user=authenticate(request)
     track_id=canonical_uuid(track_id)
-    pinned,version=_pin(track_id,deadline,cancel)
+    # Recovery may need its own mutation lock. Re-read under the lock and keep
+    # it through version selection and exposure, using the same open file.
+    _track(track_id,deadline,cancel)
+    if not _stream_slots.acquire(blocking=False):
+        raise busy()
     try:
-        # _pin validated under the lock; reacquire and recheck for the exposure
-        # commit so a managed replace cannot intervene in permission issuance.
         from metadata import track_mutation_lock
         with track_mutation_lock(track_id,config.get_effective_music_dir(),min(deadline,time.monotonic()+.1),cancel):
-            row=_track(track_id,deadline,cancel,recover=False)
-            try:
-                fd,st,path=open_safe(row['file_path'])
-            except (OSError,ValueError):
-                raise unavailable() from None
+            fd,st,_=_open_current_track(track_id,deadline,cancel)
             try:
                 version=_ready_or_prepare(track_id,st,deadline,cancel)
                 now=int(time.time())
@@ -484,7 +486,7 @@ def issue(request,track_id,requested,deadline,cancel):
             finally:
                 os.close(fd)
     finally:
-        pinned.close()
+        _stream_slots.release()
 
 
 def stream(request,track_id,deadline,cancel,version=None):

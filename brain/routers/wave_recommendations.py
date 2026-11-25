@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import db
 from auth import get_current_user
 from config import WAVE_PERSONALIZATION_WEIGHT, get_base_url
+from services.media_locations import qdrant_point_id
 from services import recommendation_service
 from services.recommendation_service import (
     build_wave_track_payload,
@@ -59,10 +60,11 @@ def get_next_track(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"ID '{current_track_id}' не является валидным UUID.")
 
-    try:
-        existing = retrieve_track_point(current_track_id, with_payload=True)
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if existing is None:
+        try:
+            existing = retrieve_track_point(current_track_id, with_payload=True)
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     if not existing:
         raise HTTPException(status_code=404, detail=f"Трек {current_track_id} не найден.")
@@ -107,15 +109,21 @@ def get_wave_queue_endpoint(
 
     if not current_track_id or current_track_id.lower() == "random":
         recent_tracks = db.get_user_listening_history(user_id, limit=5)
-        for tid in recent_tracks:
+        recent_ids = list(dict.fromkeys(
+            point_id for tid in recent_tracks if (point_id := qdrant_point_id(tid)) is not None
+        ))
+        if recent_ids:
             try:
-                pts = client.retrieve(collection_name=recommendation_service.COLLECTION_NAME, ids=[tid])
-                if pts:
-                    current_track_id = tid
-                    existing = pts
-                    break
+                points = client.retrieve(collection_name=recommendation_service.COLLECTION_NAME,
+                                         ids=recent_ids, with_vectors=True, with_payload=True)
             except Exception:
-                continue
+                points = []
+            by_id = {str(point.id): point for point in points}
+            for point_id in recent_ids:
+                if str(point_id) in by_id:
+                    current_track_id = str(point_id)
+                    existing = [by_id[current_track_id]]
+                    break
 
         if not existing:
             records = recommendation_service.scroll_random_ready_track()

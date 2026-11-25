@@ -8,7 +8,7 @@ from config import get_effective_music_dir, COLLECTION_NAME
 from services.recommendation_service import client
 
 
-def _qdrant_point_id(track_id):
+def qdrant_point_id(track_id):
     """Return an ID accepted by Qdrant, or None for SQLite-only identifiers."""
     value = str(track_id).strip()
     try:
@@ -66,7 +66,7 @@ def locate_track_file(track_id: str, fallback_to_qdrant: bool = True) -> Optiona
     if db_track and db_track.get("file_path"):
         file_path = resolve_existing_file_path(db_track["file_path"])
 
-    point_id = _qdrant_point_id(track_id) if track_id is not None else None
+    point_id = qdrant_point_id(track_id) if track_id is not None else None
     if not file_path and fallback_to_qdrant and point_id is not None:
         try:
             records = client.retrieve(
@@ -306,7 +306,7 @@ def ensure_track_in_db(track_id: str, payload: Optional[dict] = None, *, deadlin
             return None
         if row:
             return row
-        point_id=_qdrant_point_id(track_id)
+        point_id=qdrant_point_id(track_id)
         if payload is None and point_id is not None:
             dedicated=None
             try:

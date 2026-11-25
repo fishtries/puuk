@@ -41,6 +41,23 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         resp = cls.client.post("/api/auth/login", json={"username": name, "password": "pass123"})
         cls.headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
+    def test_cold_start_reads_recent_vectors_once_in_history_order(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from services import recommendation_service as reco
+
+        missing, first, older = [str(uuid.uuid4()) for _ in range(3)]
+        point = lambda tid, vector: SimpleNamespace(id=tid, payload={}, vector=vector)
+        with patch.object(db, 'get_user_listening_history', return_value=[missing, first, first, 'legacy-id', older]), \
+             patch.object(reco.client, 'retrieve', return_value=[point(older, [0, 1]), point(first, [1, 0])]) as retrieve, \
+             patch.object(reco, 'get_or_compute_user_embedding', return_value=None), \
+             patch.object(reco.client, 'query_points', return_value=SimpleNamespace(points=[])) as query:
+            response = self.client.get('/api/wave/queue', headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        retrieve.assert_called_once_with(collection_name=reco.COLLECTION_NAME, ids=[missing, first, older],
+                                         with_vectors=True, with_payload=True)
+        self.assertEqual(query.call_args.kwargs['query'], [1.0, 0.0])
+
     def test_00_artist_key_falls_back_to_file_path(self):
         """Если artist нет ни в payload, ни в SQLite — извлекаем его из имени файла."""
         from services.recommendation_service import (

@@ -253,23 +253,22 @@ def get_smart_recommendations(
                     без него не набирается limit).
     """
     # Определяем базовые значения
-    if isinstance(existing_track, list) and existing_track:
-        payload = existing_track[0].payload
-    else:
-        payload = existing_track.payload if hasattr(existing_track, 'payload') else {}
+    seed = existing_track[0] if isinstance(existing_track, list) and existing_track else existing_track
+    payload = getattr(seed, 'payload', None) or {}
 
     base_bpm = payload.get("bpm", 0)
 
     # 1. Извлекаем вектор текущего трека
     current_vector = None
     try:
-        current_points = client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[current_track_id],
-            with_vectors=True
-        )
-        if current_points and current_points[0].vector is not None:
-            current_vector = np.array(current_points[0].vector, dtype=np.float32)
+        vector = getattr(seed, 'vector', None)
+        if vector is None:
+            current_points = client.retrieve(
+                collection_name=COLLECTION_NAME, ids=[current_track_id], with_vectors=True, with_payload=False
+            )
+            vector = current_points[0].vector if current_points else None
+        if vector is not None:
+            current_vector = np.array(vector, dtype=np.float32)
     except Exception as e:
         print(f"[SmartRec] Warning retrieving current track vector {current_track_id}: {e}")
 
@@ -435,6 +434,7 @@ def retrieve_track_point(track_id: str, with_payload: bool = True):
             collection_name=COLLECTION_NAME,
             ids=[track_id],
             with_payload=with_payload,
+            with_vectors=True,
         )
     except Exception as exc:
         raise RuntimeError(str(exc))
