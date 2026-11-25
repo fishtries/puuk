@@ -58,6 +58,7 @@ export function computeTrackNormalizationGainDb(track: Track | null | undefined,
  * Single in-flight wave request. Concurrent Next presses share one HTTP call
  * instead of stacking duplicate batches on the queue.
  */
+let waveFetchController: AbortController | null = null;
 let waveFetchPromise: Promise<Track[]> | null = null;
 
 /**
@@ -76,6 +77,8 @@ let queueGeneration = 0;
 
 function invalidateWaveRequests() {
   queueGeneration += 1;
+  waveFetchController?.abort();
+  waveFetchController = null;
   waveFetchPromise = null;
   waveAdvanceInFlight = null;
 }
@@ -86,13 +89,21 @@ function requestWaveBatch(
 ): Promise<Track[]> {
   if (waveFetchPromise) return waveFetchPromise;
 
+  const controller = new AbortController();
+  waveFetchController = controller;
+  const timeout = setTimeout(() => controller.abort(), 5000);
   const request = fetchWaveQueue({
+    signal: controller.signal,
     currentTrackId,
     limit: WAVE_BATCH_SIZE,
     excludeTrackIds: exclusions.excludeTrackIds,
     queuedTrackIds: exclusions.queuedTrackIds,
   }).finally(() => {
-    if (waveFetchPromise === request) waveFetchPromise = null;
+    clearTimeout(timeout);
+    if (waveFetchPromise === request) {
+      waveFetchPromise = null;
+      waveFetchController = null;
+    }
   });
   waveFetchPromise = request;
   return request;
@@ -132,7 +143,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     clearStall();
     const deadline = deliveryNow() + 30_000;
     let refreshUsed = recovery;
-    let directUsed = previous?.delivery === 'direct';
+    let directUsed = recovery && previous?.delivery === 'direct';
     let mode: DeliveryMode | undefined;
     let legacy = false;
     let calls = 0;
@@ -148,6 +159,8 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     audioEngine.stop();
     set({ status: 'loading' });
     try {
+      // Start within the tap, while the browser grants user activation.
+      const contextReady = audioEngine.activateAudioContext();
       while (current() && calls < 3 && attempts < 3) {
         let resolved: AudioDelivery;
         try {
@@ -184,7 +197,11 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
           });
           try {
             await Promise.race([(async () => {
-              await audioEngine.load(resolved.url, { autoplay: false, position: currentPosition, signal: sourceController.signal, timeoutMs: remaining(7000), normalizationGainDb: computeTrackNormalizationGainDb(get().currentTrack, get().isLoudnessNormalizationEnabled) });
+              await audioEngine.load(resolved.url, {
+                autoplay: false, contextReady, position: currentPosition, signal: sourceController.signal,
+                timeoutMs: remaining(7000),
+                normalizationGainDb: computeTrackNormalizationGainDb(get().currentTrack, get().isLoudnessNormalizationEnabled),
+              });
               if (!current() || sourceController.signal.aborted) return;
               if (desiredPlaying) await audioEngine.play();
             })(), timeout, cancelled]);
@@ -255,7 +272,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const tracks = await requestWaveBatch(currentTrack?.id, exclusions);
       return generation === queueGeneration ? tracks : [];
     } catch (e) {
-      console.warn('Wave queue fetch failed:', e);
+      if (generation === queueGeneration) console.warn('Wave queue fetch failed:', e);
       return [];
     } finally {
       if (generation === queueGeneration) set({ isWaveLoading: false });
@@ -379,7 +396,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       );
       set({ queue: state.currentTrack ? [state.currentTrack, ...merged] : merged, currentTrackIndex: state.currentTrack ? 0 : state.currentTrackIndex });
     } catch (e) {
-      console.warn('Wave prefetch failed:', e);
+      if (generation === queueGeneration) console.warn('Wave prefetch failed:', e);
     } finally {
       if (generation === queueGeneration) set({ isWaveLoading: false });
     }
@@ -518,7 +535,6 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       const updatedQueue = source === 'search' ? [track] : newQueue || (state.queue.length > 0 ? state.queue : [track]);
       const index = updatedQueue.findIndex((t) => trackRowKey(t) === trackRowKey(track));
       ++audioLoadGeneration;
-      cancelAudio();
       desiredPlaying = true;
       exhausted = false;
 
@@ -539,16 +555,13 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
         rawLyricsText: '',
       });
 
-      // Глушим прежний источник синхронно: UI уже показывает новый трек,
-      // и старый не должен звучать, пока запрашивается media-тикет и
-      // открывается новый поток.
-      audioEngine.stop();
+      const playback = runAudio(track, 0);
 
       get().fetchLyrics(track.id);
       get().recordHistory(track);
       if (source === 'search') void prefetchWave();
 
-      await runAudio(track, 0);
+      await playback;
       if (get().currentTrack?.id === track.id && track.loudness_status !== 'analyzed') void get().refreshTrackLoudness(track.id);
     },
 

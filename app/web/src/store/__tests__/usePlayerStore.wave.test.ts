@@ -58,7 +58,7 @@ interface RecordedFetch {
 const networkCalls: RecordedFetch[] = [];
 const waveQueueFetchUrls: string[] = [];
 let waveQueueReplies: Track[][] = [];
-let queueReplyOverride: (() => Response | Promise<Response>) | null = null;
+let queueReplyOverride: ((signal?: AbortSignal | null) => Response | Promise<Response>) | null = null;
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -72,7 +72,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (url.includes('/api/wave/feedback')) return jsonResponse({ status: 'ok' });
   if (url.includes('/api/wave/queue')) {
     waveQueueFetchUrls.push(url);
-    if (queueReplyOverride) return await queueReplyOverride();
+    if (queueReplyOverride) return await queueReplyOverride(init?.signal);
     return jsonResponse(waveQueueReplies.shift() ?? []);
   }
   if (url.includes('/api/media-ticket')) {
@@ -265,6 +265,28 @@ describe('Wave double-feedback guard', () => {
 });
 
 describe('Wave batch consumption', () => {
+  it('cancelling Wave interrupts a queue response still waiting for its body', async () => {
+    let aborted = false;
+    queueReplyOverride = (signal) => new Response(new ReadableStream({
+      start(controller) {
+        assert.ok(signal);
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          controller.error(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+      },
+    }));
+    const launch = usePlayerStore.getState().toggleWave();
+    await settleAsyncChains();
+    assert.equal(usePlayerStore.getState().isWaveLoading, true);
+
+    await usePlayerStore.getState().toggleWave();
+    assert.equal(aborted, true);
+    assert.equal(await launch, false);
+    assert.equal(usePlayerStore.getState().isWaveLoading, false);
+    assert.equal(usePlayerStore.getState().isWaveActive, false);
+  });
+
   it('4. toggleWave activates with exactly one fetch and plays the batch head', async () => {
     waveQueueReplies = [['00000000-0000-4000-a000-000000000041', '00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043'].map(track)];
 

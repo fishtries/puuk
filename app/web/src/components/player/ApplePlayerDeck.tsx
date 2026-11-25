@@ -38,20 +38,49 @@ function formatRemainingTime(current: number, total: number): string {
   return `-${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+function DeckTimeline({ disabled }: { disabled: boolean }) {
+  const currentTime = usePlayerStore((state) => state.currentTime);
+  const duration = usePlayerStore((state) => state.duration);
+  const seek = usePlayerStore((state) => state.seek);
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  return (
+    <div className={styles.scrubberSection}>
+      <div className={styles.sliderTrackWrapper}>
+        <div
+          className={styles.sliderFilled}
+          style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={duration || 100}
+          step={0.1}
+          value={currentTime}
+          onChange={(e) => seek(parseFloat(e.target.value))}
+          disabled={disabled}
+          className={styles.scrubberInput}
+          aria-label="Перемотка"
+        />
+      </div>
+      <div className={styles.timeLabelsRow}>
+        <span className="tabular-nums">{formatTime(currentTime)}</span>
+        <span className="tabular-nums">{formatRemainingTime(currentTime, duration)}</span>
+      </div>
+    </div>
+  );
+}
+
 export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => void }> = ({
   onAddToPlaylist,
 }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
-  const currentTime = usePlayerStore((state) => state.currentTime);
-  const duration = usePlayerStore((state) => state.duration);
   const volume = usePlayerStore((state) => state.volume);
   const isMuted = usePlayerStore((state) => state.isMuted);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
   const isShuffled = usePlayerStore((state) => state.isShuffled);
 
   const togglePlay = usePlayerStore((state) => state.togglePlay);
-  const seek = usePlayerStore((state) => state.seek);
   const setVolume = usePlayerStore((state) => state.setVolume);
   const toggleMute = usePlayerStore((state) => state.toggleMute);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
@@ -65,14 +94,13 @@ export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => voi
   const isAuthorized = Boolean(token && user);
 
   const isPlaying = status === 'playing';
+  const canPause = isPlaying || status === 'loading';
   const coverUrl = currentTrack ? getCoverUrl(currentTrack) : '';
   const [coverHasError, setCoverHasError] = useState(false);
 
   useEffect(() => {
     setCoverHasError(false);
   }, [currentTrack?.id]);
-
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   const handleNextRepeat = () => {
     if (repeatMode === 'off') setRepeatMode('all');
@@ -148,30 +176,7 @@ export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => voi
         </p>
       </div>
 
-      {/* Scrubber Progress Bar with -M:SS matching video */}
-      <div className={styles.scrubberSection}>
-        <div className={styles.sliderTrackWrapper}>
-          <div
-            className={styles.sliderFilled}
-            style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-          />
-          <input
-            type="range"
-            min={0}
-            max={duration || 100}
-            step={0.1}
-            value={currentTime}
-            onChange={(e) => seek(parseFloat(e.target.value))}
-            disabled={!currentTrack}
-            className={styles.scrubberInput}
-            aria-label="Перемотка"
-          />
-        </div>
-        <div className={styles.timeLabelsRow}>
-          <span className="tabular-nums">{formatTime(currentTime)}</span>
-          <span className="tabular-nums">{formatRemainingTime(currentTime, duration)}</span>
-        </div>
-      </div>
+      <DeckTimeline disabled={!currentTrack} />
 
       {/* Main Transport Controls matching video */}
       <div className={styles.transportSection}>
@@ -201,9 +206,10 @@ export const ApplePlayerDeck: React.FC<{ onAddToPlaylist?: (track: Track) => voi
             className={styles.masterPlayBtn}
             onClick={togglePlay}
             disabled={!currentTrack}
-            title={isPlaying ? 'Пауза (Space)' : 'Воспроизведение (Space)'}
+            title={canPause ? 'Пауза (Space)' : 'Воспроизведение (Space)'}
+            aria-busy={status === 'loading'}
           >
-            {isPlaying ? (
+            {canPause ? (
               <Pause size={30} />
             ) : (
               <Play size={30} className={styles.playIcon} />

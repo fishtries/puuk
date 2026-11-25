@@ -81,6 +81,63 @@ const MarqueeLabel: React.FC<MarqueeLabelProps> = ({ text, className }) => {
   );
 };
 
+function DockTimeline() {
+  const currentTime = usePlayerStore((state) => state.currentTime);
+  const duration = usePlayerStore((state) => state.duration);
+  const seek = usePlayerStore((state) => state.seek);
+  const [isHoveringScrubber, setIsHoveringScrubber] = useState(false);
+  const [hoverPositionPercent, setHoverPositionPercent] = useState(0);
+  const scrubberRef = useRef<HTMLDivElement | null>(null);
+
+  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!scrubberRef.current || duration <= 0) return;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const clickX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const targetSeconds = (clickX / rect.width) * duration;
+    seek(targetSeconds);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!scrubberRef.current) return;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const hoverX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    setHoverPositionPercent((hoverX / rect.width) * 100);
+  };
+
+  return (
+    <div className={styles.timelineArea}>
+      <span className={styles.timeLabel}>{formatTime(currentTime)}</span>
+
+      <div
+        className={styles.scrubberTrack}
+        ref={scrubberRef}
+        onClick={handleScrubberClick}
+        onMouseEnter={() => setIsHoveringScrubber(true)}
+        onMouseLeave={() => setIsHoveringScrubber(false)}
+        onMouseMove={handleMouseMove}
+      >
+        <div
+          className={styles.progressBar}
+          style={{ width: `${progressPercent}%` }}
+        >
+          <div className={styles.scrubberThumb} />
+        </div>
+
+        {isHoveringScrubber && (
+          <div
+            className={styles.hoverGuide}
+            style={{ left: `${hoverPositionPercent}%` }}
+          />
+        )}
+      </div>
+
+      <span className={styles.timeLabel}>{formatTime(duration)}</span>
+    </div>
+  );
+}
+
 interface FloatingPlayerDockProps {
   onOpenLyrics?: () => void;
   isLyricsActive?: boolean;
@@ -94,8 +151,6 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
 }) => {
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
-  const currentTime = usePlayerStore((state) => state.currentTime);
-  const duration = usePlayerStore((state) => state.duration);
   const isShuffled = usePlayerStore((state) => state.isShuffled);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
   const lyrics = usePlayerStore((state) => state.lyrics);
@@ -104,7 +159,6 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
   const previousTrack = usePlayerStore((state) => state.previousTrack);
-  const seek = usePlayerStore((state) => state.seek);
   const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
   const setRepeatMode = usePlayerStore((state) => state.setRepeatMode);
   const isTrackInfoOpen = usePlayerStore((state) => state.isTrackInfoOpen);
@@ -140,28 +194,8 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
     else setRepeatMode('off');
   };
 
-  const [isHoveringScrubber, setIsHoveringScrubber] = useState(false);
-  const [hoverPositionPercent, setHoverPositionPercent] = useState(0);
-  const scrubberRef = useRef<HTMLDivElement | null>(null);
-
-  const isPlaying = status === 'playing';
-  const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const canPause = status === 'playing' || status === 'loading';
   const coverUrl = getCoverUrl(currentTrack);
-
-  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!scrubberRef.current || duration <= 0) return;
-    const rect = scrubberRef.current.getBoundingClientRect();
-    const clickX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const targetSeconds = (clickX / rect.width) * duration;
-    seek(targetSeconds);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!scrubberRef.current) return;
-    const rect = scrubberRef.current.getBoundingClientRect();
-    const hoverX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    setHoverPositionPercent((hoverX / rect.width) * 100);
-  };
 
   return (
     <div
@@ -217,10 +251,11 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
           type="button"
           onClick={togglePlay}
           className={`${styles.transportBtn} ${styles.playPauseBtn}`}
-          title={isPlaying ? 'Пауза' : 'Воспроизведение'}
-          aria-label={isPlaying ? 'Pause' : 'Play'}
+          title={canPause ? 'Пауза' : 'Воспроизведение'}
+          aria-label={canPause ? 'Pause' : 'Play'}
+          aria-busy={status === 'loading'}
         >
-          {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
+          {canPause ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
         </button>
 
         <button
@@ -281,34 +316,7 @@ export const FloatingPlayerDock: React.FC<FloatingPlayerDockProps> = ({
         )}
 
         {/* Scrubber Timeline */}
-        <div className={styles.timelineArea}>
-          <span className={styles.timeLabel}>{formatTime(currentTime)}</span>
-
-          <div
-            className={styles.scrubberTrack}
-            ref={scrubberRef}
-            onClick={handleScrubberClick}
-            onMouseEnter={() => setIsHoveringScrubber(true)}
-            onMouseLeave={() => setIsHoveringScrubber(false)}
-            onMouseMove={handleMouseMove}
-          >
-            <div
-              className={styles.progressBar}
-              style={{ width: `${progressPercent}%` }}
-            >
-              <div className={styles.scrubberThumb} />
-            </div>
-
-            {isHoveringScrubber && (
-              <div
-                className={styles.hoverGuide}
-                style={{ left: `${hoverPositionPercent}%` }}
-              />
-            )}
-          </div>
-
-          <span className={styles.timeLabel}>{formatTime(duration)}</span>
-        </div>
+        <DockTimeline />
 
         {/* Lyrics & Queue toggles */}
         <div className={styles.centerActions}>

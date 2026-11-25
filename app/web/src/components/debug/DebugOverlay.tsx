@@ -27,7 +27,7 @@ export const DebugOverlay: React.FC = () => {
   const setIsDebugOpen = usePlayerStore((state) => state.setIsDebugOpen);
   const currentTrack = usePlayerStore((state) => state.currentTrack);
   const status = usePlayerStore((state) => state.status);
-  const currentTime = usePlayerStore((state) => state.currentTime);
+  const currentTime = usePlayerStore((state) => state.isDebugOpen ? state.currentTime : 0);
   const duration = usePlayerStore((state) => state.duration);
   const volume = usePlayerStore((state) => state.volume);
   const queue = usePlayerStore((state) => state.queue);
@@ -40,10 +40,11 @@ export const DebugOverlay: React.FC = () => {
   const [audioContextState, setAudioContextState] = useState('unknown');
   const [loudness, setLoudness] = useState<LoudnessSnapshot>(() => readLoudnessSnapshot());
 
-  const playedSet = new Set(wavePlayedIds);
-  const upcomingBufferCount = queue
-    .slice(currentTrackIndex + 1)
-    .filter((track) => track?.id && !playedSet.has(track.id)).length;
+  const upcomingBufferCount = React.useMemo(() => {
+    if (!isDebugOpen) return 0;
+    const played = new Set(wavePlayedIds);
+    return queue.slice(currentTrackIndex + 1).filter(track => track?.id && !played.has(track.id)).length;
+  }, [queue, currentTrackIndex, wavePlayedIds, isDebugOpen]);
 
   useEffect(() => {
     if (isDebugOpen) {

@@ -5,6 +5,7 @@ type Listener<T> = (data: T) => void;
 
 export interface AudioLoadOptions {
   autoplay?: boolean;
+  contextReady?: Promise<void>;
   normalizationGainDb?: number;
   position?: number;
   signal?: AbortSignal;
@@ -43,7 +44,7 @@ export class AudioEngine {
 
   private constructor() {
     this.audio = new Audio();
-    this.audio.preload = 'metadata';
+    this.audio.preload = 'auto';
     this.audio.crossOrigin = 'anonymous';
     this.setupAudioListeners();
   }
@@ -96,7 +97,8 @@ export class AudioEngine {
     }
   }
 
-  private async resumeAudioContext(): Promise<void> {
+  public async activateAudioContext(): Promise<void> {
+    this.initAudioContext();
     if (!this.audioContext || this.audioContext.state !== 'suspended') return;
     try {
       await this.audioContext.resume();
@@ -131,7 +133,7 @@ export class AudioEngine {
     });
 
     this.audio.addEventListener('canplay', () => {
-      if (this.status === 'loading') {
+      if (this.sourceReady && this.status === 'loading') {
         this.setStatus(this.audio.paused ? 'paused' : 'playing');
       }
     });
@@ -152,14 +154,19 @@ export class AudioEngine {
 
   private startTimeLoop(): void {
     this.stopTimeLoop();
-    const tick = () => {
+    // Keep lyric-line transitions responsive without publishing the entire store at display refresh rate.
+    let lastTimeUpdate = -Infinity;
+    const tick = (now: number) => {
       if (this.audio && !this.audio.paused) {
-        this.emit('timeupdate', {
-          currentTime: this.audio.currentTime,
-          duration: this.audio.duration || 0,
-        });
+        if (now - lastTimeUpdate >= 50) {
+          lastTimeUpdate = now;
+          this.emit('timeupdate', {
+            currentTime: this.audio.currentTime,
+            duration: this.audio.duration || 0,
+          });
+        }
 
-        if (this.analyserNode) {
+        if (this.analyserNode && this.listeners.get('analyserdata')?.size) {
           const bufferLength = this.analyserNode.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
           this.analyserNode.getByteFrequencyData(dataArray);
@@ -257,13 +264,12 @@ export class AudioEngine {
     const generation = ++this.sourceGeneration;
     const config = typeof options === 'boolean' ? { autoplay: options } : options;
     if (config.normalizationGainDb !== undefined) this.normalizationGainDb = AudioEngine.clampGainDb(config.normalizationGainDb);
-    this.initAudioContext();
-    await this.resumeAudioContext();
     if (generation !== this.sourceGeneration || config.signal?.aborted) throw new Error('source_cancelled');
+    const contextReady = config.contextReady ?? this.activateAudioContext();
     this.applyEffectiveGain(true);
     this.sourceReady = false;
     this.setStatus('loading');
-    await new Promise<void>((resolve, reject) => {
+    const mediaReady = new Promise<void>((resolve, reject) => {
       let settled = false;
       const cleanup = () => {
         clearTimeout(timer);
@@ -298,14 +304,14 @@ export class AudioEngine {
       this.audio.src = url;
       this.audio.load();
     });
+    await Promise.all([contextReady, mediaReady]);
     if (generation !== this.sourceGeneration || config.signal?.aborted) throw new Error('source_cancelled');
     if (config.autoplay ?? true) await this.play();
   }
 
   public async play(): Promise<void> {
     const generation = this.sourceGeneration;
-    this.initAudioContext();
-    await this.resumeAudioContext();
+    await this.activateAudioContext();
     if (generation !== this.sourceGeneration) return;
     // Между stop() прежнего трека и load() нового источника нет: play() без
     // src бросил бы NotSupportedError и вешал на плеер статус 'error'.

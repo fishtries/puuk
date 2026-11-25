@@ -47,15 +47,26 @@ export const WideTrackInfoIsland: React.FC = () => {
   );
 };
 
-export const CompactTrackInfoIsland: React.FC = () => {
-  const isOpen = usePlayerStore((state) => state.isTrackInfoOpen);
+function CompactProgress() {
   const currentTime = usePlayerStore((state) => state.currentTime);
   const duration = usePlayerStore((state) => state.duration);
+  const seek = usePlayerStore((state) => state.seek);
+  return (
+    <div className={styles.progressRow}>
+      <span>{formatTime(currentTime)}</span>
+      <input type="range" min={0} max={duration || 100} step={0.1} value={currentTime}
+        onChange={(event) => seek(Number(event.target.value))} aria-label="Перемотка трека" />
+      <span>{formatTime(duration)}</span>
+    </div>
+  );
+}
+
+export const CompactTrackInfoIsland: React.FC = () => {
+  const isOpen = usePlayerStore((state) => state.isTrackInfoOpen);
   const status = usePlayerStore((state) => state.status);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const previousTrack = usePlayerStore((state) => state.previousTrack);
   const nextTrack = usePlayerStore((state) => state.nextTrack);
-  const seek = usePlayerStore((state) => state.seek);
   const setIsTrackInfoOpen = usePlayerStore((state) => state.setIsTrackInfoOpen);
   const reducedMotion = useReducedMotion();
   const isPlaying = status === 'playing';
@@ -76,19 +87,7 @@ export const CompactTrackInfoIsland: React.FC = () => {
         >
           <div className={styles.compactMain}>
             <TrackInfoSummary compact />
-            <div className={styles.progressRow}>
-              <span>{formatTime(currentTime)}</span>
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={currentTime}
-                onChange={(event) => seek(Number(event.target.value))}
-                aria-label="Перемотка трека"
-              />
-              <span>{formatTime(duration)}</span>
-            </div>
+            <CompactProgress />
             <div className={styles.transport}>
               <button type="button" onClick={previousTrack} aria-label="Предыдущий трек" title="Предыдущий трек">
                 <SkipBack size={18} />

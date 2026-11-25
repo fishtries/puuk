@@ -494,6 +494,7 @@
   transition: box-shadow 240ms ease;
 }
 
+.freshMixCard[aria-pressed="true"],
 .freshMixCard:hover {
   border-color: rgba(255, 120, 40, 0.75);
   border-top-color: rgba(255, 180, 100, 0.95);

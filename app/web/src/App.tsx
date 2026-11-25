@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
@@ -69,7 +69,8 @@ function AppContent() {
     }
   }, [viewMode, currentTrack, lyrics, rawLyricsText, isLyricsLoading]);
 
-  useHotkeys(undefined, () => setIsLibraryOpen(true));
+  const openLibrary = useCallback(() => setIsLibraryOpen(true), []);
+  useHotkeys(undefined, openLibrary);
   useMediaSession();
 
   useEffect(() => {

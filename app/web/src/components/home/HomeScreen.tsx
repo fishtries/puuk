@@ -53,6 +53,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const toggleWave = usePlayerStore((state) => state.toggleWave);
   const isWaveActive = usePlayerStore((state) => state.isWaveActive);
+  const [waveLaunch, setWaveLaunch] = useState<Promise<boolean> | null>(null);
   const loadHistory = usePlayerStore((state) => state.loadHistory);
   const user = useAuthStore((state) => state.user);
   const token = useAuthStore((state) => state.token);
@@ -215,7 +216,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   };
 
   const handleLaunchWave = async () => {
-    await toggleWave();
+    const launch = toggleWave();
+    setWaveLaunch(launch);
+    try {
+      await launch;
+    } finally {
+      setWaveLaunch(current => current === launch ? null : current);
+    }
   };
 
   const handleOpenPersonalizedPlaylist = (section: PersonalizedPlaylistSection) => {
@@ -667,7 +674,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
             <div className={styles.islandsGrid}>
               <FreshMixCard
                 isWaveActive={isWaveActive}
-                isPlaying={status === 'playing'}
+                isStarting={isWaveActive && waveLaunch !== null}
                 onLaunchWave={handleLaunchWave}
               />
 

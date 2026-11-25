@@ -232,11 +232,15 @@ describe('store owns one bounded delivery recovery episode', () => {
     assert.ok(now - start <= 30_000);
     t.mock.timers.reset();
   });
-  it('bounds a suspended AudioContext before src assignment and cannot later unload a newer selection', async t => {
+  it('loads audio in parallel with a suspended AudioContext and cannot later unload a newer selection', async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     contextSuspended = true;
+    const activate = t.mock.method(audioEngine, 'activateAudioContext');
     const first = store.getState().playTrack(track());
+    assert.equal(activate.mock.callCount(), 1, 'activation starts in the tap handler');
     await settle();
+    assert.equal(audio.loads.length, 1);
+    assert.equal(audio.plays, 0);
     now += 7000; t.mock.timers.tick(7000); await settle();
     assert.equal(tickets.length, 2, 'source-context wait consumes the same refresh slot');
     contextSuspended = false;

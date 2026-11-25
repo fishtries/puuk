@@ -68,7 +68,7 @@ function withBaseUrl(url: string): string {
   if (/^https?:\/\//.test(url)) return url;
   return `${BASE_URL}${url.startsWith('/') ? url : `/${url}`}`;
 }
-export async function authorizedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+async function withAuthorizedResponse<T>(url: string, options: RequestInit, consume: (response: Response) => T | Promise<T>): Promise<T> {
   const endpoint = withBaseUrl(url); // Validate before reading/attaching credentials.
   const session = captureApiSession();
   const headers = new Headers(options.headers);
@@ -86,22 +86,27 @@ export async function authorizedFetch(url: string, options: RequestInit = {}): P
     if (controller.signal.aborted) throw new SessionChangedError();
     if (response.redirected) throw new Error('Unexpected API redirect');
     if (response.status === 401) handleUnauthorized(url, session);
-    return response;
+    return await consume(response);
   } finally {
     requests.delete(controller);
     options.signal?.removeEventListener('abort', abort);
   }
 }
+export function authorizedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  return withAuthorizedResponse(url, options, response => response);
+}
+
 export async function apiClient<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const session = captureApiSession();
   const headers = new Headers(options.headers);
   if (!headers.has('Content-Type') && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-  const response = await authorizedFetch(endpoint, { ...options, headers });
-  assertApiSessionCurrent(session);
-  // Never surface arbitrary server bodies (they can contain permissions/paths).
-  if (!response.ok) throw new ApiRequestError(response.status);
-  if (response.status === 204) return {} as T;
-  const value = await response.json();
-  assertApiSessionCurrent(session);
-  return value as T;
+  return withAuthorizedResponse(endpoint, { ...options, headers }, async response => {
+    assertApiSessionCurrent(session);
+    // Never surface arbitrary server bodies (they can contain permissions/paths).
+    if (!response.ok) throw new ApiRequestError(response.status);
+    if (response.status === 204) return {} as T;
+    const value = await response.json();
+    assertApiSessionCurrent(session);
+    return value as T;
+  });
 }

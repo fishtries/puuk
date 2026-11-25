@@ -17,16 +17,15 @@ export interface TrackRowHandlers {
 /** Card 1: "your mix" — Моя Волна launcher. */
 export const FreshMixCard: React.FC<{
   isWaveActive: boolean;
-  isPlaying: boolean;
+  isStarting: boolean;
   onLaunchWave: () => void;
-}> = ({ onLaunchWave }) => (
-  <div
+}> = ({ onLaunchWave, isWaveActive, isStarting }) => (
+  <button type="button"
     className={`${styles.glassCard} ${styles.freshMixCard}`}
     onClick={onLaunchWave}
-    role="button"
-    tabIndex={0}
-    onKeyDown={(e) => e.key === 'Enter' && onLaunchWave()}
-    title="Запустить Мою Волну"
+    aria-pressed={isWaveActive}
+    aria-busy={isStarting}
+    title={isWaveActive ? "Выключить Мою Волну" : "Запустить Мою Волну"}
     aria-label="your mix"
   >
     <img
@@ -35,8 +34,8 @@ export const FreshMixCard: React.FC<{
       className={styles.freshMixBg}
       draggable={false}
     />
-    <span className={styles.yourMixTitle}>your mix</span>
-  </div>
+    <span className={styles.yourMixTitle}>{isStarting ? 'Загрузка…' : 'your mix'}</span>
+  </button>
 );
 
 /** Card 2: "you'll like this" — 3D Cover Flow Carousel персональных жанровых подборок. */

@@ -5,25 +5,13 @@ export function useHotkeys(
   searchInputRef?: React.RefObject<HTMLInputElement | null>,
   onOpenSearch?: () => void,
 ) {
-  const togglePlay = usePlayerStore((state) => state.togglePlay);
-  const currentTime = usePlayerStore((state) => state.currentTime);
-  const duration = usePlayerStore((state) => state.duration);
-  const seek = usePlayerStore((state) => state.seek);
-  const nextTrack = usePlayerStore((state) => state.nextTrack);
-  const previousTrack = usePlayerStore((state) => state.previousTrack);
-  const volume = usePlayerStore((state) => state.volume);
-  const setVolume = usePlayerStore((state) => state.setVolume);
-  const toggleMute = usePlayerStore((state) => state.toggleMute);
-  const toggleRightPanel = usePlayerStore((state) => state.toggleRightPanel);
-  const isFullscreen = usePlayerStore((state) => state.isFullscreen);
-  const setIsFullscreen = usePlayerStore((state) => state.setIsFullscreen);
-  const isDebugOpen = usePlayerStore((state) => state.isDebugOpen);
-  const setIsDebugOpen = usePlayerStore((state) => state.setIsDebugOpen);
-  const isLoginOpen = usePlayerStore((state) => state.isLoginOpen);
-  const setIsLoginOpen = usePlayerStore((state) => state.setIsLoginOpen);
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const {
+        togglePlay, currentTime, duration, seek, nextTrack, previousTrack,
+        volume, setVolume, toggleMute, toggleRightPanel, isFullscreen,
+        setIsFullscreen, isDebugOpen, setIsDebugOpen, isLoginOpen, setIsLoginOpen,
+      } = usePlayerStore.getState();
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
@@ -39,6 +27,7 @@ export function useHotkeys(
 
       switch (e.key) {
         case ' ':
+          if (target.closest?.('button, [role="button"]')) return;
           e.preventDefault();
           togglePlay();
           break;
@@ -109,23 +98,5 @@ export function useHotkeys(
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    togglePlay,
-    currentTime,
-    duration,
-    seek,
-    nextTrack,
-    previousTrack,
-    volume,
-    setVolume,
-    toggleMute,
-    toggleRightPanel,
-    isFullscreen,
-    setIsFullscreen,
-    isDebugOpen,
-    setIsDebugOpen,
-    isLoginOpen,
-    setIsLoginOpen,
-    searchInputRef,
-  ]);
+  }, [onOpenSearch, searchInputRef]);
 }

@@ -15,6 +15,7 @@ export async function fetchWaveQueue(params?: {
   limit?: number;
   excludeTrackIds?: string[];
   queuedTrackIds?: string[];
+  signal?: AbortSignal;
 }): Promise<Track[]> {
   const query = new URLSearchParams();
   if (params?.currentTrackId) query.append('current_track_id', params.currentTrackId);
@@ -26,7 +27,7 @@ export async function fetchWaveQueue(params?: {
     if (trackId) query.append('queued_track_ids', trackId);
   }
   const queryString = query.toString();
-  return apiClient<Track[]>(`/api/wave/queue${queryString ? `?${queryString}` : ''}`);
+  return apiClient<Track[]>(`/api/wave/queue${queryString ? `?${queryString}` : ''}`, { signal: params?.signal });
 }
 
 export async function sendWaveFeedback(

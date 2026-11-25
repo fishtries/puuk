@@ -140,6 +140,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 }) as typeof fetch;
 
 const { usePlayerStore } = await import('../usePlayerStore.ts');
+const { captureApiSession } = await import('../../api/client.ts');
 const { resetAudioTicketCache, resolveAuthorizedAudioUrl } = await import('../../api/media.ts');
 
 const track = (id: string): Track => ({ id, title: `Title ${id}`, artist: `Artist ${id}`, duration: 180 });
@@ -156,6 +157,7 @@ function streamSrcLog(): string[] {
 
 beforeEach(() => {
   currentAuthToken = 'test-token';
+  captureApiSession();
   usePlayerStore.getState().resetUserData();
   usePlayerStore.setState({
     currentTrack: null,
@@ -214,6 +216,8 @@ describe('Переключение трека: немедленное глуше
     assert.equal(usePlayerStore.getState().status, 'loading');
     assert.equal(audioInstance.paused, true);
     assert.equal(audioInstance.src, '');
+    assert.equal(audioInstance.srcLog.filter(src => src === '').length, 1);
+    assert.ok(networkCalls[0].url.includes('/api/media-ticket'));
 
     releaseB(ticketFor('00000000-0000-4000-a000-000000000042'));
     await switching;
