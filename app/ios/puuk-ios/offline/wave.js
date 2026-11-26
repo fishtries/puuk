@@ -1,3 +1,4 @@
+import { readWavePlan, startWavePlanSync } from './wavePlan';
 import { getSettings, addSettingsListener } from '../shared/storage/settings';
 import { getTrackId } from '../shared/domain/trackAdapter';
 import {
@@ -159,19 +160,50 @@ function artistKey(track) {
   return typeof artist === 'string' ? artist.trim().toLowerCase() : '';
 }
 
+function pickRecommendation(plan, seed, playable, played, history, oldest, artist, favorites) {
+  if (!plan) return null;
+  const last = id(history.at(-1));
+  const eligible = (key) => {
+    if (!playable.has(key)) return false;
+    if (oldest === -1) return !played.has(key);
+    return key !== last || playable.size === 1;
+  };
+  const neighbors = seed && plan.next[id(seed)];
+  const choices = Array.isArray(neighbors) ? neighbors.filter(eligible) : [];
+  if (!choices.length) {
+    for (const key of plan.starts) {
+      if (eligible(key)) choices.push(key);
+      if (choices.length === LOCAL_WAVE_BATCH_SIZE) break;
+    }
+  }
+  if (!choices.length) return null;
+  const weights = choices.map((key, rank) => {
+    const sameArtist = artist && artistKey(playable.get(key)) === artist;
+    const age = played.has(key) ? history.length - played.get(key) : history.length + 1;
+    return Math.min(age, 8) * (favorites.has(key) ? 1.5 : 1) * (sameArtist ? 0.4 : 1) / (1 + rank);
+  });
+  let roll = Math.random() * weights.reduce((sum, weight) => sum + weight, 0);
+  for (let i = 0; i < weights.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return choices[i];
+  }
+  return choices.at(-1);
+}
+
 export async function selectLocalWaveTracks(
   session,
   { current, future = [], history = [], exclude = [] },
 ) {
-  const [library, ratings, retained, snapshot] = await Promise.all([
+  const [library, ratings, retained, snapshot, plan] = await Promise.all([
     listPlayableTracks(session),
     getLocalRatingIds(session),
     listReasonTracks(session, WAVE_REASON),
     readWaveQueue(session),
+    readWavePlan(session),
   ]);
   if (!isOfflineSessionCurrent(session)) return { tracks: [], reserveIds: new Set() };
   const reserveIds = new Set([...retained, ...(snapshot?.reserve || []).map(id)]);
-  const excluded = new Set([...exclude.map(id), id(current), ...ratings.dislikes]);
+  const excluded = new Set([...exclude.map(id), id(current), ...ratings.dislikes, ...(plan?.blocked || [])]);
   const playable = new Map(
     library.filter((track) => !excluded.has(id(track))).map((track) => [id(track), track]),
   );
@@ -188,12 +220,18 @@ export async function selectLocalWaveTracks(
     b.priority - a.priority || a.tieBreaker - b.tieBreaker);
   let artist = artistKey(tracks.at(-1) ?? current ?? history.at(-1));
   while (tracks.length < LOCAL_WAVE_BATCH_SIZE && remaining.length) {
-    // Vary adjacent artists among candidates with the same listening recency.
-    const next = artist && artist === remaining[0].artist
-      ? remaining.findIndex((candidate) => candidate.lastPlayed === remaining[0].lastPlayed &&
-          candidate.artist && candidate.artist !== artist)
-      : 0;
+    const seed = tracks.at(-1) ?? current;
+    const key = pickRecommendation(plan, seed, playable, lastPlayed, history,
+      remaining[0].lastPlayed, artist, ratings.favorites);
+    let next = 0;
+    if (key !== null) {
+      next = remaining.findIndex(candidate => id(candidate.track) === key);
+    } else if (artist && artist === remaining[0].artist) {
+      next = remaining.findIndex(candidate => candidate.lastPlayed === remaining[0].lastPlayed &&
+        candidate.artist && candidate.artist !== artist);
+    }
     const [pick] = remaining.splice(Math.max(0, next), 1);
+    playable.delete(id(pick.track));
     tracks.push(pick.track);
     artist = pick.artist;
   }
@@ -287,6 +325,7 @@ async function syncRetention(session) {
 }
 
 export function startOfflineWave() {
+  const stopPlanSync = startWavePlanSync();
   let stopped = false;
   let queued = false;
   let running = false;
@@ -374,6 +413,7 @@ export function startOfflineWave() {
   void wake();
   return () => {
     stopped = true;
+    stopPlanSync();
     bridge();
     settings();
     contents();

@@ -1104,3 +1104,41 @@ test('storage breakdown charges unique audio, persisted UTF-8 lyrics and local c
   expect(after.lyricsBytes - before.lyricsBytes).toBe(Buffer.byteLength(JSON.stringify(lyric), 'utf-8'));
   expect(after.usedBytes - before.usedBytes).toBe(237 + after.lyricsBytes - before.lyricsBytes);
 });
+
+test('offline Wave follows saved recommendation links and rebuilds from a new start', async () => {
+  const api = require('../../shared/api/api');
+  const { refreshWavePlan } = require('../wavePlan');
+  const session = await login('wave-links', { origin: 'https://wave-links.test', userId: '17' });
+  const ids = ['a', 'b', 'c', 'd', 'e'];
+  for (const id of ids) await publishTrack(session, { id });
+  const fetch = jest.spyOn(api, 'authFetch').mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      starts: [['a', 1], ['b', 0.9]], next: { a: ['d'], d: ['c'], b: ['c'] }, blocked: ['e'],
+    }),
+  });
+  const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+  try {
+    const signal = new AbortController().signal;
+    await refreshWavePlan(session, signal);
+    expect(fetch.mock.lastCall[1].body.track_ids).toEqual(ids);
+    await refreshWavePlan(session, signal);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    mockReopenDatabase();
+    const first = await selectLocalWaveTracks(session, {});
+    expect(first.tracks.map(track => track.id)).toEqual(['a', 'd', 'c', 'b']);
+    const second = await selectLocalWaveTracks(session, { history: [first.tracks[0]] });
+    expect(second.tracks.map(track => track.id)).toEqual(['b', 'c', 'd', 'a']);
+    const replay = await selectLocalWaveTracks(session, { history: ['c', 'a', 'b', 'd'].map(id => ({ id })) });
+    expect(replay.tracks[0].id).toBe('a');
+    fetch.mockRejectedValueOnce(new Error('unavailable'));
+    await expect(refreshWavePlan(session, signal, true)).rejects.toThrow('unavailable');
+    const continued = await selectLocalWaveTracks(session, {
+      current: first.tracks[0], future: first.tracks.slice(1), exclude: [{ id: 'c' }],
+    });
+    expect(continued.tracks.map(track => track.id)).toEqual(['d', 'b']);
+  } finally {
+    fetch.mockRestore();
+    random.mockRestore();
+  }
+});
