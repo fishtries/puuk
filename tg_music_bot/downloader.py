@@ -298,7 +298,11 @@ def _existing_spotify_tracks(output_dir: str, songs: list, exclude: set) -> list
             if receipt.get('policy') != POLICY_VERSION or receipt.get('spotify_url') != url:
                 continue
             candidate = Candidate(**receipt['candidate'])
-            if assess(wanted[url], candidate)[1]:
+            audio_matched = receipt.get('audio_match') == 'spotify-preview-original-speed'
+            if candidate.provider == 'vk' and not audio_matched:
+                continue
+            verified_song = {**wanted[url], 'require_audio_match': audio_matched}
+            if assess(verified_song, candidate)[1]:
                 continue
             meta = read_audio_tags(path).as_metadata()
             if not meta.get('title') or not meta.get('artist') or meta.get('duration', 0) <= 0:

@@ -13,7 +13,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.methods import TelegramMethod
 from aiogram.methods.base import TelegramType
 
@@ -36,6 +36,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ALLOWED_USERS_STR = os.getenv('ALLOWED_USERS', '')
+OTP_LIFETIME = timedelta(minutes=5)
 POLLING_TIMEOUT = int(os.getenv('TG_POLLING_TIMEOUT', '3'))
 IMPORTS_ENABLED = os.getenv('PUUK_TELEGRAM_IMPORTS') == '1'
 LOCAL_BOT_API = os.getenv('PUUK_TELEGRAM_API_URL')
@@ -93,6 +94,7 @@ user_modes = {} # user_id -> 'server' or 'chat'
 MUSIC_DIR = os.getenv('MUSIC_DIR', '/mnt/data/projects/puuk/music')
 download_jobs = None
 imports = None
+otp_cleanup_tasks: set[asyncio.Task] = set()
 
 def get_puuk_user(tg_id: int) -> dict | None:
     """Ищет пользователя Puuk по Telegram ID или fallback в ALLOWED_USERS."""
@@ -111,7 +113,7 @@ def is_user_allowed(user_id: int) -> bool:
 def generate_otp_code(user_id: int) -> str:
     """Генерирует 6-значный одноразовый код со сроком жизни 5 минут."""
     code = str(100000 + secrets.randbelow(900000))
-    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + OTP_LIFETIME).isoformat()
     db.create_auth_code(user_id, code, expires_at)
     return code
 
@@ -135,7 +137,7 @@ async def cmd_start(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=server_label, callback_data="mode_server")],
         [InlineKeyboardButton(text=chat_label, callback_data="mode_chat")],
-        [InlineKeyboardButton(text="🔑 3. Получить код для входа (OTP)", callback_data="get_otp")]
+        [InlineKeyboardButton(text="Получить код входа", callback_data="get_otp")]
     ])
     await message.answer(
         f"Привет, <b>{username}</b>! Выбери действие или режим работы бота:", 
@@ -143,13 +145,28 @@ async def cmd_start(message: Message):
         parse_mode='HTML'
     )
 
-AUTH_KEYWORDS = {
-    "код", "code", "логин", "login", "otp", "войти", "получить код",
-    "авторизация", "пароль", "вход", "getcode", "токен", "token"
-}
+async def delete_otp_message(message: Message, deadline: float):
+    await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
+    try:
+        await message.delete()
+    except TelegramAPIError as exc:
+        logging.warning("Could not delete expired login code message: %s", exc)
 
-@dp.message(Command("login", "code", "otp", "auth", "getcode", "token", "код", "логин", ignore_case=True))
-@dp.message(F.text.func(lambda text: text and text.strip().lower() in AUTH_KEYWORDS))
+
+async def send_otp_message(message: Message, user_id: int):
+    deadline = asyncio.get_running_loop().time() + OTP_LIFETIME.total_seconds()
+    code = generate_otp_code(user_id)
+    sent = await message.answer(
+        f"<b>Код входа в Puuk</b>\n<code>{code}</code>",
+        parse_mode='HTML',
+        disable_notification=True,
+    )
+    task = asyncio.create_task(delete_otp_message(sent, deadline))
+    otp_cleanup_tasks.add(task)
+    task.add_done_callback(otp_cleanup_tasks.discard)
+
+
+@dp.message(Command("code", ignore_case=True))
 async def cmd_login(message: Message):
     puuk_user = get_puuk_user(message.from_user.id)
     if not puuk_user:
@@ -162,16 +179,7 @@ async def cmd_login(message: Message):
         )
         return
         
-    code = generate_otp_code(puuk_user["id"])
-    import html
-    username = puuk_user.get("username", "пользователь")
-    await message.answer(
-        f"🔑 <b>Ваш одноразовый код для входа в Puuk ({html.escape(username)}):</b>\n\n"
-        f"<code>{code}</code>\n\n"
-        f"⏳ Срок действия: <b>5 минут</b>.\n"
-        f"<i>Нажмите на код, чтобы скопировать его, и введите в приложении на телефоне или в веб-интерфейсе.</i>",
-        parse_mode='HTML'
-    )
+    await send_otp_message(message, puuk_user["id"])
 
 @dp.message(Command("help", "помощь", ignore_case=True))
 async def cmd_help(message: Message):
@@ -182,14 +190,14 @@ async def cmd_help(message: Message):
             '/puuk ссылка — разово импортировать в Puuk\n'
             '/downloads — незавершённые загрузки\n'
             '/album — собрать альбом из отдельных файлов\n'
-            '/code или /login — код входа\n\n'
+            '/code — код входа\n\n'
             'MP3, FLAC, M4A и ZIP с альбомом можно прислать для импорта в Puuk.'
         )
         return
     await message.answer(
         "👋 <b>Puuk Music Bot — Справка</b>\n\n"
         "🔑 <b>Вход в приложение (iOS / Web):</b>\n"
-        "• Отправьте команду <code>/code</code> или напишите слово <b>код</b>, чтобы получить 6-значный одноразовый код (OTP) для авторизации.\n\n"
+        "• Отправьте <code>/code</code>, чтобы получить одноразовый код входа.\n\n"
         "🎵 <b>Поиск и скачивание музыки:</b>\n"
         "• Отправьте ссылку на трек или плейлист (YouTube, Spotify, VK, SoundCloud)\n"
         "• Или отправьте название песни текстом для поиска по SoundCloud\n\n"
@@ -208,16 +216,7 @@ async def process_get_otp(callback: types.CallbackQuery):
         await callback.answer("У вас нет доступа.", show_alert=True)
         return
         
-    code = generate_otp_code(puuk_user["id"])
-    import html
-    username = puuk_user.get("username", "пользователь")
-    await callback.message.answer(
-        f"🔑 <b>Ваш одноразовый код для входа в Puuk ({html.escape(username)}):</b>\n\n"
-        f"<code>{code}</code>\n\n"
-        f"⏳ Срок действия: <b>5 минут</b>.\n"
-        f"<i>Нажмите на код, чтобы скопировать его, и введите в приложении на телефоне или в веб-интерфейсе.</i>",
-        parse_mode='HTML'
-    )
+    await send_otp_message(callback.message, puuk_user["id"])
     await callback.answer()
 
 @dp.callback_query(F.data.startswith('mode_'))
@@ -596,7 +595,7 @@ async def handle_message(message: Message):
         await message.answer(
             f"❓ Неизвестная команда: <code>{html.escape(query_or_url)}</code>\n\n"
             f"<b>Доступные команды:</b>\n"
-            f"🔑 <code>/code</code> или <code>/login</code> — получить 6-значный код для входа (OTP)\n"
+            f"🔑 <code>/code</code> — получить код входа\n"
             f"🏠 <code>/start</code> — главное меню и выбор режима\n"
             f"ℹ️ <code>/help</code> — справка по боту\n\n"
             f"<i>Для поиска музыки отправьте название трека или ссылку без знака «/».</i>",
@@ -608,30 +607,28 @@ async def handle_message(message: Message):
         status_msg = await message.answer("⏳ Начинаю обработку...")
         await process_download(message.from_user.id, message.chat.id, query_or_url, status_msg)
     else:
-        status_msg = await message.answer("🔍 Ищу трек...")
+        status_msg = await message.answer("Ищу трек", disable_notification=True)
         
         loop = asyncio.get_running_loop()
         try:
             results = await loop.run_in_executor(None, search_soundcloud, query_or_url, 5)
         except Exception as e:
-            import html
-            await status_msg.edit_text(f"❌ Ошибка поиска:\n<code>{html.escape(str(e))}</code>", parse_mode='HTML')
+            logging.warning('Track search failed: %s', type(e).__name__)
+            await status_msg.edit_text('Поиск временно недоступен. Попробуйте ещё раз.')
             return
             
         if not results:
-            await status_msg.edit_text("❌ Ничего не найдено по вашему запросу.")
+            await status_msg.edit_text("Трек не найден. Попробуйте указать исполнителя и название.")
             return
             
         builder = []
         for res in results:
-            title = res.get('title', 'Unknown')
-            artist = res.get('uploader', 'Unknown')
-            dur = res.get('duration') or 0
-            mins = int(dur // 60)
-            secs = int(dur % 60)
-            label = f"{title} - {artist} ({mins}:{secs:02d})"
-            if len(label) > 64:
-                label = label[:61] + "..."
+            title = res.get('title') or 'Без названия'
+            artist = res.get('uploader')
+            label = f'{artist} — {title}' if artist else title
+            if dur := res.get('duration'):
+                label = f'{label[:55]} · {int(dur // 60)}:{int(dur % 60):02d}'
+            label = label if len(label) <= 64 else label[:63] + '…'
             token = uuid.uuid4().hex
             if len(_soundcloud_selections) >= 1000:
                 del _soundcloud_selections[next(iter(_soundcloud_selections))]
@@ -639,7 +636,7 @@ async def handle_message(message: Message):
             builder.append([InlineKeyboardButton(text=label, callback_data=f"dl_sc_{token}")])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=builder)
-        await status_msg.edit_text("Выберите трек для скачивания:", reply_markup=keyboard)
+        await status_msg.edit_text("Выберите трек", reply_markup=keyboard)
 
 async def main():
     global download_jobs, imports
@@ -650,8 +647,7 @@ async def main():
     logging.info("Starting bot...")
     try:
         commands = [
-            types.BotCommand(command="code", description="🔑 Получить код для входа (OTP)"),
-            types.BotCommand(command="login", description="🔑 Войти в приложение Puuk"),
+            types.BotCommand(command="code", description="Получить код входа"),
             types.BotCommand(command="start", description="🏠 Главное меню и режимы"),
             types.BotCommand(command="help", description="ℹ️ Справка и команды"),
             types.BotCommand(command="downloads", description="Статус загрузок"),

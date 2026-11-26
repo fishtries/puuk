@@ -227,3 +227,52 @@ def test_report_explains_unavailable_original_and_omits_rejected_covers(tmp_path
     result = download_song(song(), tmp_path, primary=lambda s: ([original], ['Не совпадает длительность']),
                            client=Client(), download=protected)
     assert result['error'] == 'SoundCloud: запись защищена DRM; YouTube Music: нужная версия не найдена'
+
+
+def test_vk_reserve_preserves_all_artist_credits_and_skips_remixes(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    import vk_music
+
+    requested = {**song('Let Me Love You', ['DJ Snake', 'Justin Bieber'], 206),
+                 'preview_url': 'https://p.scdn.co/mp3-preview/example'}
+    row = {'href': '/audio-2001667369_6667369', 'title': 'Let Me Love You', 'duration': '3:26',
+           'artists': ['DJ Snake', 'Justin Bieber'], 'artist': 'DJ Snake, Justin Bieber'}
+    class Browser:
+        def get(self, url):
+            assert url == 'https://vk.com/artist/djsnake/top_audios'
+            self.current_url = url
+
+    monkeypatch.setattr(vk_music, 'music_browser', lambda _: nullcontext(Browser()))
+    monkeypatch.setattr(vk_music, '_rows', lambda *_: [
+        {**row, 'href': '/audio-1_1', 'title': 'Let Me Love You Remix'},
+        {**row, 'href': '/audio-1_2', 'artists': ['DJ Snake']}, row])
+    class Empty:
+        def search(self, *args, **kwargs):
+            return []
+
+    result = download_song(requested, tmp_path, primary=lambda s: ([], []), client=Empty(),
+                           download=lambda s, c, d: c)
+    chosen = result['track']
+    assert chosen.provider == 'vk'
+    assert chosen.url == 'https://vk.ru/audio-2001667369_6667369'
+    assert assess(requested, replace(chosen, source_url='https://other.example/audio-2001667369_6667369'))[1]
+
+
+def test_vk_audio_mismatch_is_never_accepted(monkeypatch, tmp_path):
+    import audio_match
+    import downloader
+    import vk_music
+    from source_worker import download_candidate
+
+    requested = {**song(), 'reference_audio': str(tmp_path / 'preview.mp3')}
+    recording = replace(candidate(), provider='vk', video_id='-1_2', source_url='https://vk.ru/audio-1_2')
+    def download(source, directory, **kwargs):
+        path = directory / 'audio.mp3'
+        path.write_bytes(b'fake')
+        return {'path': str(path)}
+
+    monkeypatch.setattr(vk_music, 'download', download)
+    monkeypatch.setattr(downloader, '_finalize_track', lambda *a, **kw: {'verification': True, 'duration': 91})
+    monkeypatch.setattr(audio_match, 'matches_excerpt', lambda *a: False)
+    with pytest.raises(ValueError, match='отличается от фрагмента Spotify'):
+        download_candidate(requested, recording, tmp_path)

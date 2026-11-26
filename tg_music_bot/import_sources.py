@@ -11,6 +11,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from zipfile import ZipFile
 
+from import_progress import progress_reporter, ytdlp_progress
 from spotify_metadata import album_songs, cover_url, fetch_entity, preview_url
 from spotify_playlist import INCOMPLETE as SPOTIFY_PLAYLIST_INCOMPLETE, read_public_playlist
 
@@ -514,7 +515,7 @@ def download_import_cover(source, directory):
     return str(path)
 
 
-def _download_with_cover(source, directory):
+def _download_with_cover(source, directory, progress=None):
     if source.get('spotify_preview_from_track'):
         song = source['song']
         track = fetch_entity('track', song['song_id'])
@@ -522,7 +523,9 @@ def _download_with_cover(source, directory):
             raise ValueError('Spotify вернул другую запись')
         song = {**song, 'preview_url': preview_url(track)}
         source = {**source, 'song': song}
-    artifact = download_source(source, directory)
+    artifact = download_source(source, directory, progress=progress)
+    if progress:
+        progress('prepare')
     if source.get('spotify_preview_from_track') and artifact.get('evidence', {}).get('audio_match'):
         artifact['evidence']['reference'] = {'preview_url': song['preview_url'], 'duration': song['duration']}
     if cover := download_import_cover(source, directory):
@@ -530,14 +533,16 @@ def _download_with_cover(source, directory):
     return artifact
 
 
-def download_source(source, directory):
+def download_source(source, directory, *, progress=None):
     import yt_dlp
 
     kind = source['type']
     directory.mkdir(parents=True, exist_ok=True)
     if replacement := source.get('replacement'):
-        return repair_source(source, replacement, directory)
+        return repair_source(source, replacement, directory, progress=progress)
     if kind == 'file':
+        if progress:
+            progress('check')
         from metadata import read_audio_metadata
         from services.external_catalogs import fetch_lrclib_by_track
         from source_selection import normalized
@@ -569,7 +574,7 @@ def download_source(source, directory):
         raise ValueError('Площадка пометила запись недоступной')
     if kind == 'vk':
         from vk_music import download
-        return download(source, directory)
+        return download(source, directory, progress=progress)
     if kind == 'spotify':
         from source_worker import download_song
 
@@ -583,7 +588,7 @@ def download_source(source, directory):
             if matches_excerpt(preview, local, song['duration']) and local.stat().st_mtime_ns == candidate['mtime']:
                 return {'path': str(local), 'sha256': digest_file(local), 'reuse': candidate,
                         'evidence': {'audio_match': 'spotify-preview-original-speed', 'provider': 'local'}}
-        result = download_song({**source['song'], 'require_audio_match': True}, directory)
+        result = download_song({**source['song'], 'require_audio_match': True}, directory, progress=progress)
         if not result.get('track'):
             raise RecordingUnavailable(result['error'], result.get('alternative'), result.get('temporary', False))
         track = result['track']
@@ -597,6 +602,8 @@ def download_source(source, directory):
     options = _ydl_options(format='bestaudio[ext=flac]/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
                            noplaylist=True, match_filter=check, max_filesize=MAX_FILE_BYTES,
                            outtmpl=str(directory / 'audio.%(ext)s'))
+    if progress:
+        options['progress_hooks'] = [ytdlp_progress(progress)]
     with yt_dlp.YoutubeDL(options) as client:
         info = client.extract_info(source['url'], download=True)
     if not info or check(info):
@@ -632,14 +639,14 @@ def review_source(request, directory):
     return 'confirmed' if confirmed else 'mismatch'
 
 
-def repair_source(source, replacement, directory):
+def repair_source(source, replacement, directory, *, progress=None):
     if 'url' in replacement:
         _, kind, items = resolve_link(replacement['url'])
         if kind != 'track':
             raise ValueError('Для добора нужна ссылка на одну песню')
         if source['type'] == 'vk' and items[0].get('key') != source.get('key'):
             raise ValueError('Выберите ту же запись VK')
-        artifact = download_source(items[0], directory / 'replacement')
+        artifact = download_source(items[0], directory / 'replacement', progress=progress)
     else:
         if source['type'] == 'vk':
             raise ValueError('Для позиции VK нужна ссылка на её исходную запись')
@@ -672,11 +679,13 @@ def main():
     parser.add_argument('directory', type=Path)
     parser.add_argument('request', type=Path)
     parser.add_argument('result', type=Path)
+    parser.add_argument('--progress', type=Path)
     args = parser.parse_args()
     request = json.loads(args.request.read_text())
     actions = {'link': lambda: resolve_link(request['url']),
                'attachment': lambda: resolve_attachment(Path(request['path']), args.directory),
-               'audio': lambda: _download_with_cover(request, args.directory),
+               'audio': lambda: _download_with_cover(request, args.directory,
+                                                   progress_reporter(args.progress) if args.progress else None),
                'review': lambda: review_source(request, args.directory),
                'album-version': lambda: find_album_version(request)}
     try:

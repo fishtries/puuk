@@ -108,7 +108,7 @@ export const LoginModal: React.FC<{ mandatory?: boolean; onCancelDestination?: (
                     maxLength={10}
                   />
                   <span className={styles.hint}>
-                    Отправьте команду <code>/login</code> боту в Telegram для получения кода
+                    Отправьте команду <code>/code</code> боту в Telegram для получения кода
                   </span>
                 </div>
               ) : (

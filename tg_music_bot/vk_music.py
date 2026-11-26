@@ -6,12 +6,13 @@ import re
 import subprocess
 import time
 from typing import NamedTuple
-from urllib.parse import unquote_plus, urljoin, urlsplit
+from urllib.parse import quote, unquote_plus, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import requests
 
 from music_browser import music_browser
+from source_selection import Candidate, normalized, rank_candidates
 
 
 PLAYLIST_TITLE = '[data-testid="MusicPlaylistPage_Title"]'
@@ -57,10 +58,11 @@ def _rows(browser, selector):
         const rows = document.querySelectorAll(arguments[0]);
         return Array.from(rows, row => {
             const title = row.querySelector(arguments[1]);
+            const artists = Array.from(row.querySelectorAll('[data-testid="MusicTrackRow_Authors"]'),
+                a => a.textContent.trim()).filter(Boolean);
             return {href: title?.getAttribute('href') ?? '',
                     title: title?.textContent.trim() ?? '',
-                    artist: Array.from(row.querySelectorAll('[data-testid="MusicTrackRow_Authors"]'),
-                        a => a.textContent.trim()).join(', '),
+                    artist: artists.join(', '), artists,
                     cover_url: row.querySelector('[data-testid="MusicTrackRow_PlaybackControls"] img')?.src,
                     duration: row.querySelector('[data-testid="MusicTrackRow_Duration"]')?.textContent.trim() ?? ''};
         });
@@ -75,6 +77,35 @@ def _wait_for(browser, action, message, timeout=15):
         return WebDriverWait(browser, timeout).until(action)
     except TimeoutException:
         raise ValueError(message) from None
+
+
+def find_spotify_candidates(song):
+    """Search the public artist track lists, which are available to guest listeners."""
+    selector = '[data-testid="MusicTrackRow"]'
+    opened_catalog = False
+    with music_browser('VK Музыки') as browser:
+        for artist in song['artists'][:2]:
+            slug = normalized(artist).replace(' ', '')
+            if not slug:
+                continue
+            browser.get('https://vk.com/artist/' + quote(slug, safe='') + '/top_audios')
+            try:
+                rows = _wait_for(browser, lambda d: _rows(d, selector), 'Нет списка треков', timeout=15)
+            except ValueError:
+                continue
+            opened_catalog = True
+            candidates = []
+            for row in rows:
+                if not TRACK_ID.fullmatch(row['href']):
+                    continue
+                track = _source(browser.current_url, row)
+                ident = track['provider_id']
+                candidates.append(Candidate(ident, track['title'], tuple(row['artists']),
+                                            track['duration'], provider='vk', source_url=f'https://vk.ru/audio{ident}'))
+            ranked, reasons = rank_candidates(song, candidates)
+            if ranked:
+                return ranked, reasons
+    return [], [] if opened_catalog else ['Каталог VK Музыка недоступен']
 
 
 def _load_playlist(browser, expected):
@@ -154,6 +185,12 @@ def _cdn_url(url, domain):
             and parsed.netloc == parsed.hostname and (parsed.hostname or '').endswith('.' + domain))
 
 
+def _dash_cdn_url(url):
+    return (_cdn_url(url, 'okcdn.ru') or
+            (_cdn_url(url, 'vkuser.net') and
+             re.fullmatch(r'ok[0-9]+-[0-9]+\.vkuser\.net', urlsplit(url).hostname) is not None))
+
+
 def _without_range(url):
     parsed = urlsplit(url)
     query = '&'.join(field for field in parsed.query.split('&')
@@ -195,7 +232,7 @@ def _manifest_playback(browser, request_id, url):
                     or representation.find('{*}ContentProtection') is not None):
                 continue
             resource = representation.findtext('{*}BaseURL')
-            if resource and _cdn_url(target := urljoin(url, resource.strip()), 'okcdn.ru'):
+            if resource and _dash_cdn_url(target := urljoin(url, resource.strip())):
                 streams[target] = (url, duration)
     return streams
 
@@ -219,7 +256,7 @@ def _selected_playback(browser, expected_duration):
                 continue
             if _cdn_url(url, 'vkuseraudio.ru') and mime.startswith('audio/'):
                 return Playback(url)
-            if not _cdn_url(url, 'okcdn.ru'):
+            if not _dash_cdn_url(url):
                 continue
             if mime == 'application/dash+xml':
                 manifests[params['requestId']] = url
@@ -291,7 +328,7 @@ def _strong_etag(etag):
     return bool(etag and re.fullmatch(r'"[^"]*"', etag))
 
 
-def _download_bytes(url, directory, expected_sha256=None):
+def _download_bytes(url, directory, expected_sha256=None, *, progress=None):
     from import_sources import digest_file
 
     part = directory / 'vk-audio.part'
@@ -343,6 +380,8 @@ def _download_bytes(url, directory, expected_sha256=None):
                 if size > total:
                     raise ValueError('VK выдал больше байтов, чем объявил')
                 fd.write(chunk)
+                if progress:
+                    progress('download', size * 100 // total)
         if size != total or part.stat().st_size != total:
             raise OSError('Неполный ответ VK')
         if mode == 'ab' and expected_sha256 and digest_file(part) != expected_sha256:
@@ -351,7 +390,7 @@ def _download_bytes(url, directory, expected_sha256=None):
     return part
 
 
-def _download_mp4(playback, directory):
+def _download_mp4(playback, directory, *, progress=None):
     total = playback.size
     headers = {'Accept-Encoding': 'identity', 'Range': f'bytes=0-{total - 1}'}
     path = directory / 'vk-fragmented.mp4'
@@ -378,12 +417,14 @@ def _download_mp4(playback, directory):
                 if size > total:
                     raise ValueError('VK выдал больше байтов, чем объявил')
                 audio.write(chunk)
+                if progress:
+                    progress('download', size * 100 // total)
         if size != total:
             raise OSError('Неполный ответ VK')
     return path
 
 
-def download(source, directory):
+def download(source, directory, *, progress=None):
     from import_sources import audio_format, digest_file
     from mutagen import File
 
@@ -392,11 +433,11 @@ def download(source, directory):
         for attempt in range(2):
             playback = _media(browser, source)
             if playback.size is None:
-                path = (_download_bytes(playback.url, directory, source.get('expected_sha256'))
-                        or _download_bytes(playback.url, directory))
+                path = (_download_bytes(playback.url, directory, source.get('expected_sha256'), progress=progress)
+                        or _download_bytes(playback.url, directory, progress=progress))
                 break
             try:
-                path = _download_mp4(playback, directory)
+                path = _download_mp4(playback, directory, progress=progress)
                 break
             except (ExpiredMedia, requests.ConnectionError, requests.Timeout,
                     requests.exceptions.ChunkedEncodingError):
@@ -404,6 +445,8 @@ def download(source, directory):
                     raise
     if path is None:
         raise ValueError('VK не подтвердил версию файла')
+    if progress:
+        progress('check')
     try:
         suffix = audio_format(path)
     except ValueError:

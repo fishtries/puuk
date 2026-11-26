@@ -1,6 +1,7 @@
 """Telegram controls and execution for the durable import queue."""
 import asyncio
 from collections import defaultdict
+from html import escape
 import json
 import logging
 from pathlib import Path
@@ -11,12 +12,13 @@ from weakref import WeakValueDictionary
 from zipfile import ZIP_STORED, ZipFile
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import ForceReply, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from downloader import _run_download_process
 from import_jobs import ImportJobs
+from import_progress import progress_bar, read_progress
 from import_sources import MAX_FILE_BYTES, canonical_link
 from repositories import imported_playlists, recording_reviews
 from services.embedding_queue_service import publish_import_analysis
@@ -27,7 +29,8 @@ logger = logging.getLogger(__name__)
 PAGE_SIZE = 8
 WORK_SCRIPT = Path(__file__).with_name('import_sources.py')
 PUBLIC_WEB = 'https://web.puuk.fun'
-STATUS = {'new': 'В очереди', 'resolving': 'Читаю список', 'active': 'Загружаю',
+QUEUE_CARD = '<b>Новая загрузка</b>\nВ очереди'
+STATUS = {'new': 'В очереди', 'resolving': 'Читаю ссылку', 'active': 'Жду загрузки',
           'paused': 'На паузе', 'cancelled': 'Импорт отменён', 'finished': 'Готово',
           'failed': 'Остановлено', 'review': 'Проверьте изменения'}
 
@@ -160,7 +163,7 @@ class TelegramImports:
             return
         async with self._lock(job_id):
             if self.jobs.job(job_id)['status_message'] is None:
-                await message.edit_text('⏳ В очереди', reply_markup=None)
+                await message.edit_text(QUEUE_CARD, parse_mode='HTML', reply_markup=None)
                 self.jobs.set_message(job_id, message.message_id)
         await callback.answer()
 
@@ -194,7 +197,7 @@ class TelegramImports:
         async with self._lock(job_id):
             job = self.jobs.job(job_id)
             if job['status_message'] is None:
-                reply = await message.answer('⏳ В очереди', disable_notification=True)
+                reply = await message.answer(QUEUE_CARD, parse_mode='HTML', disable_notification=True)
                 self.jobs.set_message(job_id, reply.message_id)
             elif outcome == 'resumed':
                 try:
@@ -203,31 +206,87 @@ class TelegramImports:
                     if 'message to edit not found' not in str(exc).lower():
                         raise
                     text, keyboard = self._card(job)
-                    reply = await message.answer(text.replace('Загружаю', 'Продолжаю', 1),
-                                                 reply_markup=keyboard, disable_notification=True)
+                    reply = await message.answer(text, parse_mode='HTML', reply_markup=keyboard,
+                                                 disable_notification=True)
                     self.jobs.set_message(job_id, reply.message_id)
         return True
+
+    def _position_progress(self, job_id, position):
+        return read_progress(self.root / str(job_id) / f'position-{position}' / 'progress.txt')
+
+    @staticmethod
+    def _title(job, rows):
+        title = job['title'] or 'Новая загрузка'
+        if rows and job['kind'] in {'track', 'album'}:
+            source = json.loads(rows[0]['source'])
+            metadata = source.get('metadata') or {}
+            song = source.get('song') or {}
+            if job['kind'] == 'album':
+                artist = (metadata.get('album_artist') or source.get('album_artist')
+                          or song.get('album_artist') or song.get('artist'))
+            else:
+                artist = metadata.get('artist') or source.get('artist') or song.get('artist')
+                title = metadata.get('title') or source.get('music_title') or title
+            if artist and not title.casefold().startswith(artist.casefold() + ' '):
+                title = f'{artist} — {title}'
+        return ' '.join(title.split())
+
+    def _status(self, job, rows, count, missing):
+        mode = 'в Puuk' if job['mode'] == 'server' else 'в Telegram'
+        state = job['state']
+        if state == 'finished' and any(row['state'] in {'pending', 'downloading', 'ready', 'sending'} for row in rows):
+            state = 'active'
+        if state == 'finished':
+            if job['kind'] == 'track':
+                if missing:
+                    return 'Не удалось загрузить трек', None
+                return ('Добавлено в Puuk' if job['mode'] == 'server' else 'Отправлено в Telegram'), None
+            return f'Загружено {count} из {len(rows)} треков {mode}', None
+        if state not in {'active', 'paused'}:
+            return STATUS[state], None
+
+        if job['kind'] == 'track':
+            if any(row['state'] in {'ready', 'sending'} for row in rows):
+                return ('Добавляю в Puuk' if job['mode'] == 'server' else 'Отправляю аудио'), None
+            downloading = next((row for row in rows if row['state'] == 'downloading'), None)
+            if downloading:
+                return self._position_progress(job['id'], downloading['position'])
+            return STATUS[state], None
+
+        progress = round(count * 100 / len(rows)) if rows else None
+        summary = f'Загружено {count} из {len(rows)} треков'
+        if state == 'paused':
+            return f'На паузе · {count} из {len(rows)} треков', progress
+        current = next((row for row in rows if row['state'] in {'downloading', 'ready', 'sending'}), None)
+        if current:
+            label = json.loads(current['source'])['title'][:110]
+            summary += f"\nСейчас · {current['position']:02d}. {label}"
+        return summary, progress
 
     def _card(self, job, page=0):
         job_id = job['id']
         if job['state'] == 'review':
             review = json.loads(job['review'])
             if review.get('options'):
-                text = [job['title'][:200], 'Выберите издание']
+                text = [f"<b>{escape(job['title'][:200])}</b>", 'Какое издание добавить?']
                 buttons = []
                 for index, option in enumerate(review['options'], 1):
                     label = option.get('label') or ' · '.join(value for value in (
                         option.get('artist') or option.get('album_artist'), option.get('album'), option.get('year')
                     ) if value)
-                    text.append(f'{index}. {label[:250]}')
                     buttons.append([_button(label[:60], f'imp:metadata:{job_id}:{index}')])
                 if review['options'][0].get('label'):
                     text[1] = 'Выберите данные для медиатеки'
                 return '\n'.join(text), _keyboard(buttons + [[_button('Отмена', f'imp:cancel:{job_id}')]])
             lines = review['lines']
             page = max(0, min(page, (len(lines) - 1) // PAGE_SIZE))
-            text = [job['title'][:200], 'Изменения в плейлисте']
-            text.extend(line[:220] for line in lines[page * PAGE_SIZE:(page + 1) * PAGE_SIZE])
+            text = [f"<b>{escape(job['title'][:200])}</b>", 'Изменения в плейлисте']
+            added = sum(line.rpartition(' · ')[2].startswith('появится на ') for line in lines)
+            removed = sum(line.rpartition(' · ')[2].startswith('уйдёт с ') for line in lines)
+            if added or removed:
+                text.append(f'Добавятся · {added}   Удалятся · {removed}')
+            text.append('')
+            text.extend(escape(line[:220]) for line in lines[page * PAGE_SIZE:(page + 1) * PAGE_SIZE])
             nav = []
             if page:
                 nav.append(_button('Назад', f'imp:show:{job_id}:{page-1}'))
@@ -238,29 +297,35 @@ class TelegramImports:
         rows = self.jobs.positions(job_id)
         count = sum(row['state'] == 'done' for row in rows)
         missing = [row for row in rows if row['state'] == 'skipped']
-        status = STATUS[job['state']]
-        if job['state'] == 'finished' and missing:
-            status = 'Есть пропуски'
-        mode = 'В Puuk' if job['mode'] == 'server' else 'В Telegram'
-        counter = f' · {count} из {len(rows)}' if rows else ''
-        title = job['title'] or 'Загрузка'
-        lines = [f'{title[:250]} · {mode}', status + counter]
+        status, percent = self._status(job, rows, count, missing)
+        lines = [f'<b>{escape(self._title(job, rows)[:250])}</b>']
+        if percent is not None:
+            lines.append(f'<code>{progress_bar(percent)}</code>')
+        lines.append(escape(status))
         if job['error']:
-            lines.append(job['error'][:400])
+            lines.append(escape(job['error'][:400]))
+        if missing and job['kind'] != 'track':
+            lines.extend(('', '<b>Пропущенные треки</b>'))
         buttons = []
         if job['kind'] == 'playlist' and job['state'] in {'paused', 'active'}:
             action, label = ('resume', 'Продолжить') if job['state'] == 'paused' else ('pause', 'Пауза')
             buttons.append([_button(label, f'imp:{action}:{job_id}'),
-                            _button('Отменить импорт', f'imp:cancel:{job_id}')])
+                            _button('Отменить', f'imp:cancel:{job_id}')])
         page = max(0, min(page, (len(missing) - 1) // PAGE_SIZE))
         shown = missing[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
         for row in shown:
             source = json.loads(row['source'])
-            lines.append(f"№ {row['position']} {source['title'][:110]} · {row['error'][:220]}")
+            if job['kind'] == 'track':
+                lines.append(escape(row['error'][:220]))
+            else:
+                lines.append(f"{row['position']:02d}. {escape(source['title'][:110])}")
+            if row['run_after']:
+                lines.append('Повторю автоматически')
             if row['run_after'] == 0 and job['state'] in {'active', 'finished'}:
                 position = row['position']
-                buttons.append([_button(f"Повторить № {position}", f"imp:retry:{job_id}:{position}"),
-                                _button(f"Файл или ссылка № {position}", f"imp:repair:{job_id}:{position}")])
+                suffix = f' № {position}' if len(missing) > 1 else ''
+                buttons.append([_button(f'Повторить{suffix}', f'imp:retry:{job_id}:{position}'),
+                                _button(f'Добавить файл или ссылку{suffix}', f'imp:repair:{job_id}:{position}')])
                 if row['alternative']:
                     year = json.loads(row['alternative']).get('year')
                     label = f'Добавить ремастер ({year})' if year else 'Добавить ремастер'
@@ -281,8 +346,10 @@ class TelegramImports:
                            url=f"{PUBLIC_WEB}/{kind}/{job['result_id']}")])
             if job['state'] == 'finished':
                 saved = catalog.is_saved(job['owner_id'], kind, job['result_id'])
-                label = ('♥' if saved else '♡') + (' В медиатеку' if kind == 'album' else ' В избранное')
-                buttons.append([_button(label, f'imp:save:{job_id}')])
+                label = 'В медиатеке' if saved else 'В медиатеку'
+                if kind == 'track':
+                    label = 'В избранном' if saved else 'В избранное'
+                buttons[-1].append(_button(label, f'imp:save:{job_id}'))
         if job['state'] == 'finished' and job['playlist_id'] and count:
             saved = catalog.is_saved(job['owner_id'], 'playlist', job['playlist_id'])
             buttons.append([_button(('♥' if saved else '♡') + ' В медиатеку', f'imp:save:{job_id}')])
@@ -298,7 +365,7 @@ class TelegramImports:
         text, keyboard = self._card(job)
         try:
             await self.bot.edit_message_text(text=text, chat_id=job['chat_id'],
-                                             message_id=job['status_message'], reply_markup=keyboard)
+                                             message_id=job['status_message'], parse_mode='HTML', reply_markup=keyboard)
         except TelegramBadRequest as exc:
             if 'message is not modified' not in str(exc).lower():
                 raise
@@ -306,18 +373,21 @@ class TelegramImports:
     def _downloads_card(self, telegram_id, owner_id, page):
         rows = self.jobs.outstanding(telegram_id, owner_id)
         if not rows:
-            return 'Незавершённых загрузок нет.', None
+            return 'Активных загрузок нет.', None
         page = max(0, min(page, (len(rows) - 1) // PAGE_SIZE))
         buttons = []
-        lines = ['Мои загрузки']
+        lines = ['<b>Мои загрузки</b>']
         for job in rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
             job_id = job['id']
             positions = self.jobs.positions(job_id)
             completed = sum(row['state'] == 'done' for row in positions)
-            status = 'Есть пропуски' if job['state'] == 'finished' else STATUS[job['state']]
-            mode = 'В Puuk' if job['mode'] == 'server' else 'В Telegram'
-            name = (job['title'] or f'Загрузка № {job_id}')[:110]
-            lines.append(f'{name} · {mode} · {status} · {completed} из {len(positions)}')
+            missing = any(row['state'] == 'skipped' for row in positions)
+            status, percent = self._status(job, positions, completed, missing)
+            name = self._title(job, positions)[:110]
+            detail = status.split('\n', 1)[0]
+            if percent is not None:
+                detail += f' · {percent}%'
+            lines.extend(('', f'<b>{escape(name)}</b>', escape(detail)))
             controls = [_button(name[:45], f'imp:listshow:{job_id}:0')]
             if job['state'] == 'paused':
                 controls.append(_button('Продолжить', f'imp:resume:{job_id}'))
@@ -335,7 +405,7 @@ class TelegramImports:
             await message.answer('Привяжите Telegram к аккаунту Puuk. Подробности в /start.')
             return
         text, keyboard = self._downloads_card(message.from_user.id, user['id'], 0)
-        await message.answer(text, reply_markup=keyboard, disable_notification=True)
+        await message.answer(text, parse_mode='HTML', reply_markup=keyboard, disable_notification=True)
 
     async def callback(self, callback):
         telegram_id = callback.from_user.id
@@ -393,7 +463,7 @@ class TelegramImports:
                     return
                 async with self._lock(new_job):
                     if self.jobs.job(new_job)['status_message'] is None:
-                        reply = await callback.message.answer('⏳ В очереди', disable_notification=True)
+                        reply = await callback.message.answer(QUEUE_CARD, parse_mode='HTML', disable_notification=True)
                         self.jobs.set_message(new_job, reply.message_id)
                 await callback.answer()
                 return
@@ -427,29 +497,40 @@ class TelegramImports:
                 if changed and action == 'cancel':
                     self._clean_cancelled(job)
                 self.dirty.add(job_id)
-            text, keyboard = self._card(self.jobs.job(job_id), argument if action in {'listshow', 'show'} else 0)
-            if callback.message.message_id != job['status_message'] and callback.message.chat.id == job['chat_id']:
-                rows = keyboard.inline_keyboard if keyboard else []
-                keyboard = _keyboard(rows + [[_button('Мои загрузки', 'imp:list:0:0')]])
-                if action == 'listshow' and argument == 0 and keyboard:
-                    for row in keyboard.inline_keyboard:
-                        for button in row:
-                            if button.callback_data and button.callback_data.startswith('imp:show:'):
-                                button.callback_data = button.callback_data.replace('imp:show:', 'imp:listshow:')
+            async with self._lock(job_id):
+                text, keyboard = self._card(self.jobs.job(job_id), argument if action in {'listshow', 'show'} else 0)
+                if callback.message.message_id != job['status_message'] and callback.message.chat.id == job['chat_id']:
+                    rows = keyboard.inline_keyboard if keyboard else []
+                    keyboard = _keyboard(rows + [[_button('Мои загрузки', 'imp:list:0:0')]])
+                    if action == 'listshow' and argument == 0 and keyboard:
+                        for row in keyboard.inline_keyboard:
+                            for button in row:
+                                if button.callback_data and button.callback_data.startswith('imp:show:'):
+                                    button.callback_data = button.callback_data.replace('imp:show:', 'imp:listshow:')
+                await self._edit_callback(callback, text, keyboard)
+            return
+        await self._edit_callback(callback, text, keyboard)
+
+    @staticmethod
+    async def _edit_callback(callback, text, keyboard):
         await callback.answer()
         try:
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await callback.message.edit_text(text, parse_mode='HTML', reply_markup=keyboard)
         except TelegramBadRequest as exc:
             if 'message is not modified' not in str(exc).lower():
                 raise
 
-    async def _child(self, action, directory, request, timeout):
+    async def _child(self, action, directory, request, timeout, *, progress=False):
         directory.mkdir(parents=True, exist_ok=True)
         request_path, result_path = directory / 'request.json', directory / 'result.json'
         request_path.write_text(json.dumps(request))
         try:
-            await _run_download_process([sys.executable, str(WORK_SCRIPT), action, str(directory),
-                                         str(request_path), str(result_path)], str(directory / 'worker.log'), timeout)
+            command = [sys.executable, str(WORK_SCRIPT), action, str(directory), str(request_path), str(result_path)]
+            if progress:
+                progress_path = directory / 'progress.txt'
+                progress_path.unlink(missing_ok=True)
+                command.extend(('--progress', str(progress_path)))
+            await _run_download_process(command, str(directory / 'worker.log'), timeout)
             result = json.loads(result_path.read_text())
             if 'error' in result:
                 raise SourceError(result['error'], result.get('temporary', False), result.get('alternative'))
@@ -595,7 +676,7 @@ class TelegramImports:
                 source['replacement'] = {'path': str(path)}
             if job['kind'] == 'album' and source['type'] == 'spotify':
                 source['local_flac'] = catalog.find_release_flac(source, self.music_dir)
-            artifact = await self._child('audio', directory, source, 240)
+            artifact = await self._child('audio', directory, source, 240, progress=job['kind'] == 'track')
             self.jobs.downloaded(job_id, position, artifact)
         except asyncio.CancelledError:
             self.jobs.interrupt(job_id, position)
@@ -668,6 +749,7 @@ class TelegramImports:
         while True:
             job = self.jobs.claim_snapshot()
             if job:
+                self.dirty.add(job['id'])
                 await self._resolve(job)
             else:
                 await asyncio.sleep(0.5)
@@ -679,6 +761,7 @@ class TelegramImports:
                 job_id = row['job_id']
                 task = asyncio.create_task(self._download(row, self.jobs.job(job_id)))
                 self.pending[job_id].add(task)
+                self.dirty.add(job_id)
                 try:
                     await asyncio.gather(task, return_exceptions=True)
                 finally:
@@ -690,18 +773,49 @@ class TelegramImports:
 
     async def _publisher(self):
         self.dirty.update(self.jobs.recoverable())
+        last_progress = {}
+        next_progress_check = 0.0
         while True:
             await asyncio.sleep(0.7)
             pending, self.dirty = self.dirty, set()
+            now = time.monotonic()
+            if now >= next_progress_check:
+                active_progress = {}
+                for job_id in self.pending:
+                    job = self.jobs.job(job_id)
+                    if job['kind'] == 'track' and job['state'] in {'active', 'finished'}:
+                        active_progress[job_id] = self._position_progress(job_id, 1)
+                pending.update(job_id for job_id, value in active_progress.items()
+                               if last_progress.get(job_id) != value)
+                last_progress = active_progress
+                next_progress_check = now + 2.5
             pending.update(self.jobs.expire_retries())
             jobs = sorted((self.jobs.job(job_id) for job_id in pending),
                           key=lambda job: (job['kind'] != 'track', job['id']))
             for job in jobs:
                 job_id = job['id']
+                if job['kind'] == 'track' and job['state'] in {'active', 'finished'}:
+                    if self.jobs.deliverable(job_id, job['mode']):
+                        try:
+                            async with self._lock(job_id):
+                                await self._edit(self.jobs.job(job_id))
+                        except TelegramAPIError as exc:
+                            self._log_error(job_id, exc)
                 await self._deliver(job)
                 try:
                     async with self._lock(job_id):
-                        await self._edit(self.jobs.job(job_id))
+                        job = self.jobs.job(job_id)
+                        if (job['mode'] == 'chat' and job['kind'] == 'track' and job['state'] == 'finished'
+                                and job['status_message'] is not None
+                                and all(row['state'] == 'done' for row in self.jobs.positions(job_id))):
+                            try:
+                                await self.bot.delete_message(job['chat_id'], job['status_message'])
+                            except TelegramBadRequest as exc:
+                                if 'message to delete not found' not in str(exc).lower():
+                                    raise
+                            self.jobs.set_message(job_id, None)
+                        else:
+                            await self._edit(job)
                 except Exception as exc:
                     self._log_error(job_id, exc)
 

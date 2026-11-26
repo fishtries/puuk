@@ -88,10 +88,11 @@ class Candidate:
     explicit: bool | None = None
     provider: str = 'youtube'
     source_url: str = ''
+    verified_publisher: bool = False
 
     @property
     def url(self):
-        return self.source_url if self.provider == 'soundcloud' else f'https://www.youtube.com/watch?v={self.video_id}'
+        return self.source_url if self.provider in ('soundcloud', 'vk') else f'https://www.youtube.com/watch?v={self.video_id}'
 
 
 def credited_title(title: str, artists) -> str:
@@ -111,6 +112,9 @@ def assess(song: dict, candidate: Candidate) -> tuple[float, str | None]:
         valid_id = (candidate.video_id.isascii() and candidate.video_id.isdigit()
                     and parsed.scheme == 'https' and parsed.hostname == 'soundcloud.com'
                     and not parsed.username and len(parsed.path.strip('/').split('/')) == 2)
+    elif candidate.provider == 'vk':
+        valid_id = (bool(re.fullmatch(r'-?[0-9]+_[0-9]+', candidate.video_id))
+                    and candidate.source_url == f'https://vk.ru/audio{candidate.video_id}')
     elif candidate.provider != 'youtube':
         valid_id = False
     if not valid_id:
@@ -120,9 +124,14 @@ def assess(song: dict, candidate: Candidate) -> tuple[float, str | None]:
         return 0, 'Нет исходных метаданных для проверки'
     expected_artists = {normalized(a) for a in song['artists'] if a}
     actual_artists = {normalized(a) for a in candidate.artists if a}
-    # All credited artists matter, including features; never accept another
-    # performer just because they uploaded a video with the right title.
-    if not expected_artists or not expected_artists <= actual_artists:
+    if not expected_artists:
+        return 0, 'Не совпадают исполнители'
+    partial_credits = not expected_artists <= actual_artists
+    if partial_credits and not (
+        candidate.provider == 'soundcloud' and candidate.verified_publisher
+        and song.get('require_audio_match') and actual_artists == {normalized(song['artists'][0])}
+        and normalized(candidate.title) == normalized(credited_title(expected_title, song['artists']))
+    ):
         return 0, 'Не совпадают исполнители'
     reason = version_rejection(expected_title, candidate.title)
     if reason:
@@ -149,7 +158,7 @@ def assess(song: dict, candidate: Candidate) -> tuple[float, str | None]:
         return .8 + .05 * (candidate.explicit is True), None
     if title_score < .94:
         return 0, 'Не совпадает название записи'
-    return title_score + .1 * album_match + .05 * (candidate.explicit is True), None
+    return title_score + .1 * album_match + .05 * (candidate.explicit is True) - .2 * partial_credits, None
 
 
 def rank_candidates(song: dict, candidates: list[Candidate]) -> tuple[list[Candidate], list[str]]:

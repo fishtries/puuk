@@ -80,7 +80,7 @@ def test_deferred_spotify_preview_is_saved_with_checked_audio(monkeypatch, tmp_p
     monkeypatch.setattr('import_sources.fetch_entity', lambda *_: {'uri': uri, 'audioPreview': {'url': url}})
     monkeypatch.setattr('import_sources.download_import_cover', lambda *_: None)
 
-    def download(resolved, _):
+    def download(resolved, _, *, progress=None):
         assert resolved['song']['preview_url'] == url
         return {'evidence': {'audio_match': 'spotify-preview-original-speed'}}
 
@@ -168,12 +168,12 @@ def test_vk_range_requires_matching_version_and_exact_end(tmp_path, monkeypatch)
     assert not state.exists()
 
 
-def test_vk_mp4_selects_started_stream_instead_of_prefetch():
+@pytest.mark.parametrize('cdn', ['https://vd685.okcdn.ru/audio', 'https://ok2-16.vkuser.net/audio'])
+def test_vk_mp4_selects_started_stream_instead_of_prefetch(cdn):
     import json
 
     from vk_music import Playback, _selected_playback
 
-    cdn = 'https://vd685.okcdn.ru/audio'
     manifest = f"""<MPD mediaPresentationDuration="PT157.283S">
       <Period><AdaptationSet mimeType="audio/mp4">
         <Representation><BaseURL>/audio?id=1&amp;sig=a%2bb</BaseURL></Representation>

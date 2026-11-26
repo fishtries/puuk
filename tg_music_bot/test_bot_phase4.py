@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import test_db_path  # noqa: F401 — изолирует тестовую БД и отключает доставку в рабочий Qdrant
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 import db
 from api import app
 from bot import get_puuk_user, is_user_allowed, generate_otp_code, index_downloaded_tracks
+from import_progress import progress_reporter, ytdlp_progress
 from telegram_imports import TelegramImports
 
 class TestPhase4TelegramBot(unittest.TestCase):
@@ -271,12 +273,14 @@ class TestPhase4TelegramBot(unittest.TestCase):
             self.assertIsNone(imports._linked_owner(self.tg_id, self.user_id + 1))
             await imports.downloads(message)
             message.answer.assert_awaited_once_with(
-                'Незавершённых загрузок нет.', reply_markup=None, disable_notification=True,
+                'Активных загрузок нет.', parse_mode='HTML', reply_markup=None, disable_notification=True,
             )
             message.answer.reset_mock()
             command = SimpleNamespace(command='puuk', args='https://open.spotify.com/track/' + 'a' * 22)
             await imports.override(message, command)
-            message.answer.assert_awaited_once_with('⏳ В очереди', disable_notification=True)
+            message.answer.assert_awaited_once_with(
+                '<b>Новая загрузка</b>\nВ очереди', parse_mode='HTML', disable_notification=True,
+            )
             job, = imports.jobs.outstanding(self.tg_id, self.user_id)
             self.assertEqual(job['owner_id'], self.user_id)
             self.assertEqual(job['mode'], 'server')
@@ -286,6 +290,93 @@ class TestPhase4TelegramBot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as state:
             imports = TelegramImports(None, get_puuk_user, os.path.join(state, 'queue.db'), state)
             asyncio.run(verify(imports))
+
+    def test_09_import_cards_show_progress_and_partial_results(self):
+        with tempfile.TemporaryDirectory() as state:
+            root = Path(state)
+            imports = TelegramImports(None, get_puuk_user, root / 'queue.db', state)
+            job_id, _ = imports.jobs.submit(self.tg_id, self.user_id, self.tg_id, 1, {'url': 'track'}, 'server')
+            imports.jobs.set_message(job_id, 2)
+            imports.jobs.claim_snapshot()
+            track = {'title': 'Teardrop & <Live>', 'artist': 'Massive Attack'}
+            imports.jobs.snapshot(job_id, track['title'], 'track', [track])
+            imports.jobs.claim_position()
+            directory = imports.root / str(job_id) / 'position-1'
+            directory.mkdir(parents=True)
+            hook = ytdlp_progress(progress_reporter(directory / 'progress.txt'))
+            hook({'status': 'downloading', 'downloaded_bytes': 42, 'total_bytes': 100})
+            text, _ = imports._card(imports.jobs.job(job_id))
+            self.assertEqual(
+                text, '<b>Massive Attack — Teardrop &amp; &lt;Live&gt;</b>\n'
+                      '<code>████░░░░░░ 42%</code>\nСкачиваю аудио',
+            )
+            self.assertIn('42%', imports._downloads_card(self.tg_id, self.user_id, 0)[0])
+            hook({'status': 'finished'})
+            self.assertIn('Проверяю аудио', imports._card(imports.jobs.job(job_id))[0])
+            imports.jobs.downloaded(job_id, 1, {'path': '/tmp/audio.mp3', 'sha256': 'track'})
+            self.assertIn('Добавляю в Puuk', imports._card(imports.jobs.job(job_id))[0])
+            imports.jobs.delivered(job_id, 1, 'track-id', 'track-id')
+            imports.jobs.settle(job_id)
+            with patch('telegram_imports.catalog.is_saved', return_value=False):
+                text, keys = imports._card(imports.jobs.job(job_id))
+            self.assertTrue(text.endswith('\nДобавлено в Puuk'))
+            self.assertEqual([button.text for button in keys.inline_keyboard[0]], ['Открыть трек', 'В избранное'])
+
+            album, _ = imports.jobs.submit(self.tg_id, self.user_id, self.tg_id, 3, {'url': 'album'}, 'server')
+            imports.jobs.set_message(album, 4)
+            imports.jobs.claim_snapshot()
+            songs = [{'title': str(n), 'album_artist': 'Massive Attack'} for n in range(1, 12)]
+            songs[7]['title'] = 'Black Milk'
+            imports.jobs.snapshot(album, 'Mezzanine', 'album', songs)
+            for n in range(1, 12):
+                imports.jobs.claim_position()
+                if n == 8:
+                    self.assertIn(
+                        '64%</code>\nЗагружено 7 из 11 треков\nСейчас · 08. Black Milk',
+                        imports._card(imports.jobs.job(album))[0],
+                    )
+                    imports.jobs.skip(album, n, 'Запись не найдена')
+                else:
+                    imports.jobs.downloaded(album, n, {'sha256': str(n)})
+                    imports.jobs.delivered(album, n)
+            imports.jobs.settle(album)
+            text, keys = imports._card(imports.jobs.job(album))
+            self.assertIn('Загружено 10 из 11 треков в Puuk', text)
+            self.assertIn('08. Black Milk', text)
+            self.assertEqual(
+                [button.text for button in keys.inline_keyboard[0]], ['Повторить', 'Добавить файл или ссылку'],
+            )
+
+    def test_10_successful_chat_delivery_clears_the_progress_card(self):
+        async def verify(root):
+            bot = AsyncMock()
+            imports = TelegramImports(bot, get_puuk_user, root / 'queue.db', root)
+            job_id, _ = imports.jobs.submit(self.tg_id, self.user_id, self.tg_id, 1, {'url': 'track'}, 'chat')
+            imports.jobs.set_message(job_id, 2)
+            imports.jobs.claim_snapshot()
+            imports.jobs.snapshot(job_id, 'Teardrop', 'track', [{'title': 'Teardrop'}])
+            imports.jobs.claim_position()
+            path = root / 'audio.mp3'
+            path.touch()
+            imports.jobs.downloaded(job_id, 1, {'path': str(path), 'sha256': 'track'})
+
+            async def deleted(chat_id, message_id):
+                self.assertEqual((chat_id, message_id), (self.tg_id, 2))
+                bot.send_audio.assert_awaited_once()
+
+            bot.delete_message.side_effect = deleted
+            publisher = asyncio.create_task(imports._publisher())
+            try:
+                async with asyncio.timeout(5):
+                    while imports.jobs.job(job_id)['status_message'] is not None:
+                        await asyncio.sleep(.05)
+            finally:
+                publisher.cancel()
+                await asyncio.gather(publisher, return_exceptions=True)
+            bot.delete_message.assert_awaited_once()
+
+        with tempfile.TemporaryDirectory() as state:
+            asyncio.run(verify(Path(state)))
 
     @classmethod
     def tearDownClass(cls):

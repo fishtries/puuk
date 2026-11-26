@@ -1,7 +1,7 @@
 """One isolated Spotify recording download. Parent owns deadline and process group.
 
-Spotify metadata is input only. Audio comes from checked SoundCloud recordings, with YouTube Music song
-results as a fallback. JSON result is written
+Spotify metadata identifies the requested recording. Search SoundCloud, YouTube Music and finally the
+public VK artist catalog. VK recordings must match the Spotify excerpt. JSON result is written
 atomically after the downloaded bytes pass the duration check.
 """
 import argparse
@@ -94,6 +94,8 @@ def soundcloud_candidate(row, song):
         row.get('publisher_album') or row.get('album') or '',
         row.get('explicit') if isinstance(row.get('explicit'), bool) else None,
         'soundcloud', row.get('webpage_url') or '',
+        bool(publisher_artist and normalized(row.get('verified_uploader')).replace(' ', '')
+             == normalized(publisher_artist).replace(' ', '')),
     )
 
 
@@ -105,12 +107,20 @@ def find_soundcloud_candidates(song):
                'extract_flat': True, 'ignoreerrors': True,
                'socket_timeout': 10, 'retries': 1, 'extractor_retries': 1,
                'playlistend': 10}
-    query = ' '.join([*song['artists'], credited_title(song['name'], song['artists'])])
+    title = credited_title(song['name'], song['artists'])
+    queries = [' '.join([*song['artists'], title])]
+    if len(song['artists']) > 1 and song.get('require_audio_match'):
+        queries.append(f"{song['artists'][0]} {title}")
     with yt_dlp.YoutubeDL(options) as ydl:
         register(ydl)
-        result = ydl.extract_info('scsearch10:' + query, download=False)
-    candidates = [soundcloud_candidate(row, song) for row in (result or {}).get('entries', []) if row]
-    return rank_candidates(song, candidates)
+        candidates = []
+        for query in queries:
+            result = ydl.extract_info('scsearch10:' + query, download=False)
+            candidates.extend(soundcloud_candidate(row, song) for row in (result or {}).get('entries', []) if row)
+            ranked, reasons = rank_candidates(song, candidates)
+            if ranked:
+                return ranked, reasons
+    return [], reasons
 
 
 def source_rejection(song, info):
@@ -126,18 +136,8 @@ def source_rejection(song, info):
     return None
 
 
-def download_candidate(song, candidate, directory):
+def _download_ytdlp(song, candidate, directory, basename, progress):
     import yt_dlp
-    from mutagen.id3 import ID3, TXXX, WOAS
-    from downloader import _finalize_track
-
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    # Use provider IDs for paths, not user-controlled titles or album names.
-    spotify_id = str(song.get('song_id') or song.get('url', '').split('?')[0].rstrip('/').rsplit('/', 1)[-1])
-    if not re.fullmatch(r'[A-Za-z0-9]+', spotify_id):
-        raise ValueError('Некорректный Spotify ID')
-    basename = f'{spotify_id}-{candidate.provider}-{candidate.video_id}'
     options = {
         'format': 'bestaudio/best', 'outtmpl': str(directory / (basename + '.%(ext)s')),
         'noplaylist': True, 'quiet': True, 'no_warnings': True, 'noprogress': True,
@@ -158,6 +158,10 @@ def download_candidate(song, candidate, directory):
         return source_rejection(song, info)
 
     options['match_filter'] = check
+    if progress:
+        from import_progress import ytdlp_progress
+
+        options['progress_hooks'] = [ytdlp_progress(progress)]
     with yt_dlp.YoutubeDL(options) as ydl:
         if candidate.provider == 'soundcloud':
             from soundcloud_source import register
@@ -169,7 +173,42 @@ def download_candidate(song, candidate, directory):
         # process_ie_result uses the metadata just checked; the match_filter is
         # also retained for redirects/extractor processing during the download.
         ydl.process_ie_result(info, download=True)
+
+
+def download_candidate(song, candidate, directory, *, progress=None):
+    from mutagen.id3 import ID3, TXXX, WOAS
+    from downloader import _finalize_track
+
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    spotify_id = str(song.get('song_id') or song.get('url', '').split('?')[0].rstrip('/').rsplit('/', 1)[-1])
+    if not re.fullmatch(r'[A-Za-z0-9]+', spotify_id):
+        raise ValueError('Некорректный Spotify ID')
+    basename = f'{spotify_id}-{candidate.provider}-{candidate.video_id}'
     path = directory / (basename + '.mp3')
+    reference = song.get('reference_audio')
+    if candidate.provider == 'vk':
+        import subprocess
+        from tempfile import TemporaryDirectory
+        from audio_match import fetch_spotify_preview
+        from vk_music import download
+
+        if not reference:
+            reference = directory / 'spotify-reference.mp3'
+            fetch_spotify_preview(song.get('preview_url') or '', reference)
+        source = {'provider_id': candidate.video_id, 'url': candidate.url, 'title': candidate.title,
+                  'artist': ', '.join(candidate.artists), 'duration': candidate.duration}
+        with TemporaryDirectory(dir=directory) as tmp:
+            artifact = download(source, Path(tmp), progress=progress)
+            audio = Path(artifact['path'])
+            if audio.suffix == '.mp3':
+                audio.replace(path)
+            else:
+                subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(audio),
+                                '-map', '0:a:0', '-c:a', 'libmp3lame', '-q:a', '0', str(path)],
+                               check=True, capture_output=True, timeout=60)
+    else:
+        _download_ytdlp(song, candidate, directory, basename, progress)
     if not path.is_file():
         raise ValueError('Аудиофайл не получен')
     metadata = _finalize_track(str(path), song=song)
@@ -183,10 +222,10 @@ def download_candidate(song, candidate, directory):
         'policy': POLICY_VERSION, 'spotify_url': song['url'].split('?')[0],
         'candidate': asdict(candidate),
     }
-    if song.get('require_audio_match'):
+    if song.get('require_audio_match') or candidate.provider == 'vk':
         from audio_match import matches_excerpt
 
-        if not matches_excerpt(Path(song['reference_audio']), path, song['duration']):
+        if not matches_excerpt(Path(reference), path, song['duration']):
             raise ValueError('Звук отличается от фрагмента Spotify')
         receipt['audio_match'] = 'spotify-preview-original-speed'
     tags = ID3(path)
@@ -208,7 +247,7 @@ def _download_failure(exc):
     return message[:90] if isinstance(exc, ValueError) and message else DOWNLOAD_UNAVAILABLE
 
 
-def download_song(song, directory, *, client=None, download=None, primary=None):
+def download_song(song, directory, *, client=None, download=None, primary=None, progress=None):
     if song.get('require_audio_match'):
         from audio_match import fetch_spotify_preview
 
@@ -222,15 +261,22 @@ def download_song(song, directory, *, client=None, download=None, primary=None):
             return {'error': 'Не удалось получить фрагмент Spotify для проверки звука',
                     'temporary': isinstance(exc, OSError)}
         song = {**song, 'reference_audio': str(reference)}
-    download = download or download_candidate
+    if download is None:
+        from functools import partial
+
+        download = partial(download_candidate, progress=progress) if progress else download_candidate
     reports, alternatives = [], []
-    # Query the reserve catalog only after SoundCloud candidates fail.
-    for provider_round, provider in enumerate(('SoundCloud', 'YouTube Music')):
+    providers = ['SoundCloud', 'YouTube Music']
+    if song.get('preview_url'):
+        providers.append('VK Музыка')
+    for provider in providers:
+        if progress:
+            progress('search')
         failures = []
         try:
-            if provider_round == 0:
+            if provider == 'SoundCloud':
                 candidates, provider_reasons = (primary or find_soundcloud_candidates)(song)
-            else:
+            elif provider == 'YouTube Music':
                 if client is None:
                     from ytmusicapi import YTMusic
                     client = YTMusic()
@@ -238,6 +284,10 @@ def download_song(song, directory, *, client=None, download=None, primary=None):
                 if hint := song.get('release_candidate'):
                     release = Candidate(**hint)
                     candidates = [release, *(candidate for candidate in candidates if candidate.video_id != release.video_id)]
+            else:
+                from vk_music import find_spotify_candidates
+
+                candidates, provider_reasons = find_spotify_candidates(song)
         except Exception as exc:
             logging.warning('%s unavailable: %s', provider, type(exc).__name__)
             reports.append(f'{provider}: каталог недоступен')
@@ -255,6 +305,8 @@ def download_song(song, directory, *, client=None, download=None, primary=None):
                     if partial.is_file():
                         partial.unlink()
                 failures.append(_download_failure(exc))
+                if progress:
+                    progress('search')
         if failures:
             reason = next((failure for failure in failures if failure != DOWNLOAD_UNAVAILABLE),
                           DOWNLOAD_UNAVAILABLE)

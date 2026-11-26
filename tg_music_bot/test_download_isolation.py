@@ -37,6 +37,37 @@ def test_legacy_spotify_tag_does_not_prove_audio_identity(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_vk_reuse_requires_acoustic_evidence(tmp_path):
+    song, path = checked_file(tmp_path)
+    tags = ID3(path)
+    receipt = json.loads(str(tags['TXXX:PUUK_SOURCE_V1']))
+    receipt['candidate'].update(provider='vk', video_id='-1_2', source_url='https://vk.ru/audio-1_2')
+    tags.add(TXXX(encoding=3, desc='PUUK_SOURCE_V1', text=json.dumps(receipt)))
+    tags.save(path)
+    assert downloader._existing_spotify_tracks(str(tmp_path), [song], set()) == []
+    receipt['audio_match'] = 'spotify-preview-original-speed'
+    tags.add(TXXX(encoding=3, desc='PUUK_SOURCE_V1', text=json.dumps(receipt)))
+    tags.save(path)
+    assert len(downloader._existing_spotify_tracks(str(tmp_path), [song], set())) == 1
+
+
+def test_soundcloud_reuse_with_missing_guest_requires_acoustic_receipt(tmp_path):
+    song, path = checked_file(tmp_path)
+    song['artists'].append('Guest')
+    song['require_audio_match'] = True
+    tags = ID3(path)
+    receipt = json.loads(str(tags['TXXX:PUUK_SOURCE_V1']))
+    receipt['candidate'].update(provider='soundcloud', video_id='123', verified_publisher=True,
+                                source_url='https://soundcloud.com/artist/first')
+    tags.add(TXXX(encoding=3, desc='PUUK_SOURCE_V1', text=json.dumps(receipt)))
+    tags.save(path)
+    assert downloader._existing_spotify_tracks(str(tmp_path), [song], set()) == []
+    receipt['audio_match'] = 'spotify-preview-original-speed'
+    tags.add(TXXX(encoding=3, desc='PUUK_SOURCE_V1', text=json.dumps(receipt)))
+    tags.save(path)
+    assert len(downloader._existing_spotify_tracks(str(tmp_path), [song], set())) == 1
+
+
 def test_publication_never_substitutes_filename_collision(tmp_path):
     library, stage = tmp_path / 'library', tmp_path / 'stage'
     library.mkdir(); stage.mkdir()
