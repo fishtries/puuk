@@ -40,12 +40,14 @@ import {
   subscribeOfflineIndex,
 } from '../../offline';
 import { saveFavoriteOffline } from '../../offline/foreground';
+import PlaylistTrackMenu from './PlaylistTrackMenu';
 
 export default function PlaylistScreen({
   route,
   navigation,
   onPlayTrackList,
-  onPressEllipsis,
+  onAddToPlaylist,
+  onEditTrack,
 }) {
   const {
     playlistId,
@@ -376,24 +378,26 @@ export default function PlaylistScreen({
     const trackId = String(getTrackId(item));
     const isSaved = savedIds.includes(trackId);
     return (
-      <TouchableOpacity
-        style={styles.trackRow}
-        activeOpacity={0.6}
-        onPress={() => onPlayTrackList(tracks, index)}
-        onLongPress={() => onPressEllipsis?.(item)}
-      >
-        <Text style={styles.trackNumber}>{index + 1}</Text>
-        {item.coverArt && (
-          <CoverImage source={item.coverArt} style={styles.trackThumb} />
-        )}
-        <View style={styles.trackInfo}>
-          <Text style={styles.trackTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.trackArtist} numberOfLines={1}>
-            {item.artist}
-          </Text>
-        </View>
+      <View style={styles.trackRow}>
+        <TouchableOpacity
+          style={styles.trackBody}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityLabel={`Воспроизвести ${item.title}`}
+          onPress={() => onPlayTrackList(tracks, index)}
+        >
+          {item.coverArt && (
+            <CoverImage source={item.coverArt} style={styles.trackThumb} />
+          )}
+          <View style={styles.trackInfo}>
+            <Text style={styles.trackTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.trackArtist} numberOfLines={1}>
+              {item.artist}
+            </Text>
+          </View>
+        </TouchableOpacity>
         {offlineSession && isFavorites && (
           <TouchableOpacity
             accessibilityRole="button"
@@ -415,30 +419,14 @@ export default function PlaylistScreen({
             )}
           </TouchableOpacity>
         )}
-        {onPressEllipsis && (
-          <TouchableOpacity
-            onPress={() => onPressEllipsis(item)}
-            accessibilityRole="button"
-            accessibilityLabel={`Действия с ${item.title}`}
-            style={{
-              width: 44,
-              height: 44,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="ellipsis-horizontal" size={20} color="#aaa" />
-          </TouchableOpacity>
-        )}
-        {!isCustomOrReadOnly && (
-          <TouchableOpacity
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            onPress={() => handleRemoveTrack(item)}
-          >
-            <Ionicons name="trash-outline" size={18} color="#ff453a" />
-          </TouchableOpacity>
-        )}
-      </TouchableOpacity>
+        <PlaylistTrackMenu
+          track={item}
+          isFavorites={isFavorites}
+          onAddToPlaylist={onAddToPlaylist}
+          onEditTrack={onEditTrack}
+          onRemove={isCustomOrReadOnly ? undefined : handleRemoveTrack}
+        />
+      </View>
     );
   };
 
@@ -601,10 +589,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 20,
   },
-  trackNumber: {
-    fontSize: 15,
-    color: '#8e8e93',
-    width: 26,
+  trackBody: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 44,
   },
   trackThumb: {
     width: 40,

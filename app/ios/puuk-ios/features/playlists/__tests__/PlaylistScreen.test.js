@@ -1,6 +1,8 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { FlatList, Alert } from 'react-native';
+import { FlatList, Alert, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { MenuView } from '@react-native-menu/menu';
 import PlaylistScreen from '../PlaylistScreen';
 import { authFetch } from '../../../shared/api/api';
 
@@ -15,6 +17,9 @@ jest.mock('../../../shared/storage/settings', () => ({
 }));
 
 jest.mock('../../../shared/media/CoverImage', () => 'CoverImage');
+jest.mock('@react-native-menu/menu', () => ({ MenuView: 'MenuView' }));
+jest.mock('../../../utils/shareLinks', () => ({ SHARE_LINKS_ENABLED: false }));
+jest.mock('expo-constants', () => ({ executionEnvironment: 'bare' }));
 
 describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () => {
   const mockNavigation = {
@@ -40,9 +45,10 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
     await act(async () => {
       renderer = TestRenderer.create(<PlaylistScreen route={{ params: { playlistId: 'pl-1', playlistName: 'Playlist' } }} navigation={mockNavigation} onPlayTrackList={onPlayTrackList} />);
     });
-    const list = renderer.root.findByType(FlatList);
-    const row = list.props.renderItem({ item: list.props.data[1], index: 1 });
-    await act(async () => { row.props.onPress(); });
+    const playButton = renderer.root.findAllByType(TouchableOpacity).find(
+      (button) => button.props.accessibilityLabel === 'Воспроизвести A',
+    );
+    await act(async () => { playButton.props.onPress(); });
     expect(onPlayTrackList.mock.calls[0][0].map((track) => track.id)).toEqual(['third', 'first', 'second']);
     expect(onPlayTrackList.mock.calls[0][1]).toBe(1);
     await act(async () => { renderer.unmount(); });
@@ -155,15 +161,9 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
     const flatListBefore = renderer.root.findByType(FlatList);
     expect(flatListBefore.props.data).toHaveLength(2);
 
-    // Find delete button on first track (trash-outline)
-    const trashButtons = renderer.root.findAll(
-      (n) => n.props.hitSlop && n.props.hitSlop.top === 12,
-    );
-    expect(trashButtons.length).toBeGreaterThan(0);
-
-    // Click trash button on first track
+    const [menu] = renderer.root.findAllByType(MenuView);
     await act(async () => {
-      trashButtons[0].props.onPress();
+      menu.props.onPressAction({ nativeEvent: { event: 'remove' } });
     });
 
     expect(Alert.alert).toHaveBeenCalledWith(
@@ -194,6 +194,9 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
   });
 
   test('удаляет трек с числовым ID 0 из избранного (/api/favorites)', async () => {
+    const onAddToPlaylist = jest.fn();
+    const onEditTrack = jest.fn();
+    const onPlayTrackList = jest.fn();
     authFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -214,18 +217,35 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
             params: { playlistId: 'favorites', playlistName: 'Favorites' },
           }}
           navigation={mockNavigation}
+          onAddToPlaylist={onAddToPlaylist}
+          onEditTrack={onEditTrack}
+          onPlayTrackList={onPlayTrackList}
         />,
       );
     });
 
     expect(authFetch).toHaveBeenCalledWith('/api/favorites');
 
-    const trashButtons = renderer.root.findAll(
-      (n) => n.props.hitSlop && n.props.hitSlop.top === 12,
+    const menu = renderer.root.findByType(MenuView);
+    expect(menu.props.shouldOpenOnLongPress).toBe(false);
+    expect(menu.props.actions.map((action) => action.id)).toEqual(
+      ['add_to_playlist', 'edit_track', 'remove'],
     );
+    expect(menu.props.actions[2].attributes).toEqual({ destructive: true });
+    expect(renderer.root.findAllByType(Ionicons).map((icon) => icon.props.name))
+      .not.toContain('trash-outline');
+    expect(renderer.root.findAllByType('Text').some((text) => text.props.children === 1))
+      .toBe(false);
+
+    const track = renderer.root.findByType(FlatList).props.data[0];
     await act(async () => {
-      trashButtons[0].props.onPress();
+      menu.props.onPressAction({ nativeEvent: { event: 'add_to_playlist' } });
+      menu.props.onPressAction({ nativeEvent: { event: 'edit_track' } });
+      menu.props.onPressAction({ nativeEvent: { event: 'remove' } });
     });
+    expect(onAddToPlaylist).toHaveBeenCalledWith(track);
+    expect(onEditTrack).toHaveBeenCalledWith(track);
+    expect(onPlayTrackList).not.toHaveBeenCalled();
 
     const alertButtons = Alert.alert.mock.calls[0][2];
     const removeBtn = alertButtons.find((b) => b.text === 'Remove');
@@ -242,7 +262,7 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
     expect(flatListAfter.props.data).toHaveLength(0);
   });
 
-  test('поддерживает переданные готовые треки без запроса к API и без кнопок удаления', async () => {
+  test('поддерживает переданные готовые треки без запроса к API и без пункта удаления', async () => {
     const onPlayTrackList = jest.fn();
     const readyTracks = [
       { id: 'mix-1', title: 'Rock Song 1', artist: 'Rocker', coverArt: 'https://puuk.app/cov1.jpg' },
@@ -264,6 +284,7 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
           }}
           navigation={mockNavigation}
           onPlayTrackList={onPlayTrackList}
+          onEditTrack={jest.fn()}
         />,
       );
     });
@@ -283,10 +304,10 @@ describe('PlaylistScreen - Stage 8 Slice 5 track normalization & removal', () =>
     );
     expect(hasSubtitle).toBe(true);
 
-    // Verify trash button is NOT rendered
-    const trashButtons = renderer.root.findAll(
-      (n) => n.props.hitSlop && n.props.hitSlop.top === 12,
-    );
-    expect(trashButtons).toHaveLength(0);
+    const menus = renderer.root.findAllByType(MenuView);
+    expect(menus).toHaveLength(2);
+    for (const menu of menus) {
+      expect(menu.props.actions.map((action) => action.id)).toEqual(['edit_track']);
+    }
   });
 });
