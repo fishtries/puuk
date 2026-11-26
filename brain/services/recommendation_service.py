@@ -7,12 +7,12 @@ from typing import Optional
 
 import numpy as np
 from qdrant_client import QdrantClient
-from qdrant_client.models import RecommendQuery, RecommendInput, Filter, FieldCondition, MatchValue
+from qdrant_client.models import Prefetch, RecommendQuery, RecommendInput, Filter, FieldCondition, MatchValue
 
 import db
 from repositories.artist_credits import get_credit_states, artist_id_for_name
-from repositories.wave import get_recent_artist_counts
-from config import QDRANT_CONNECTION, COLLECTION_NAME, WAVE_PERSONALIZATION_WEIGHT, WAVE_EXPLORE_RATIO
+from repositories.wave import get_recent_artist_counts, recent_wave_exposure
+from config import QDRANT_CONNECTION, COLLECTION_NAME, WAVE_PERSONALIZATION_WEIGHT
 from user_profile import get_or_compute_user_embedding
 
 qdrant_client = QdrantClient(**QDRANT_CONNECTION)
@@ -20,11 +20,10 @@ qdrant_client = QdrantClient(**QDRANT_CONNECTION)
 client = qdrant_client  # historical alias used by tests and internal callers
 
 # Ограничение размера пула кандидатов из Qdrant (защита от чрезмерной нагрузки).
-# Пул должен покрывать каталог заметно шире, чем финальная пачка, иначе
-# diversity-фильтр видит только самый близкий музыкальный кластер.
-CANDIDATE_POOL_FLOOR = 150
+# Запас соседей даёт выбор для персонализации и разнообразия внутри контекста.
+CANDIDATE_POOL_FLOOR = 40
 CANDIDATE_POOL_CEILING = 500
-CANDIDATE_POOL_MULTIPLIER = 20
+CANDIDATE_POOL_MULTIPLIER = 5
 
 # Мягкий лимит треков одного исполнителя в одной пачке рекомендаций.
 MAX_TRACKS_PER_ARTIST = 2
@@ -168,18 +167,6 @@ def select_diverse_recommendations(
     return selected
 
 
-def _merge_candidate_points(primary: list, secondary: list) -> list:
-    """Объединяет пулы кандидатов без дублей по id: сначала основной, потом exploration."""
-    seen = {str(p.id) for p in primary}
-    merged = list(primary)
-    for point in secondary:
-        if str(point.id) in seen:
-            continue
-        seen.add(str(point.id))
-        merged.append(point)
-    return merged
-
-
 def _shuffle_score_bands(ordered: list, band_score_eps: float) -> list:
     """
     Перемешивает кандидатов внутри групп с почти равным score (разница <= eps),
@@ -272,72 +259,33 @@ def get_smart_recommendations(
     except Exception as e:
         print(f"[SmartRec] Warning retrieving current track vector {current_track_id}: {e}")
 
-    # 2. Вектор пользователя нужен и для blend, и для exploration-пула
-    user_vec = None
-    if user_id is not None:
+    # Search a neighbourhood of the playing track first. Personalization can
+    # reorder that neighbourhood, including when the user has no BPM metadata.
+    ready_filter = Filter(must=[FieldCondition(key="needs_embedding", match=MatchValue(value=False))])
+    withheld = (exclude_ids or set()) | (queued_ids or set()) | (dislike_ids or set())
+    candidate_limit = min(CANDIDATE_POOL_CEILING,
+                          max(CANDIDATE_POOL_FLOOR, limit * CANDIDATE_POOL_MULTIPLIER) + len(withheld))
+    seed_query = (current_vector.tolist() if current_vector is not None else
+                  RecommendQuery(recommend=RecommendInput(positive=[current_track_id])))
+    query = seed_query
+    prefetch = None
+    if current_vector is not None and user_id is not None and personalization_weight > 0:
         try:
             user_vec = get_or_compute_user_embedding(user_id, client)
-        except Exception as e:
-            print(f"[SmartRec] Warning computing user embedding: {e}")
+        except Exception:
+            logging.getLogger(__name__).warning("Taste profile unavailable for Wave", exc_info=True)
+            user_vec = None
+        if user_vec is not None:
+            blended = (1 - personalization_weight) * current_vector + personalization_weight * user_vec
+            if np.linalg.norm(blended) > 0:
+                query = blended.tolist()
+                prefetch = Prefetch(query=seed_query, filter=ready_filter, limit=candidate_limit)
 
-    # Если есть вектор трека — строим запрос (смешанный либо чистый)
-    query_target = None
-    if current_vector is not None:
-        query_vector = current_vector
-        if user_vec is not None and personalization_weight > 0.0:
-            # Blend: (1 - w) * current + w * user_vector
-            blended = (1.0 - personalization_weight) * current_vector + personalization_weight * user_vec
-            norm = np.linalg.norm(blended)
-            if norm > 0:
-                blended = blended / norm
-            query_vector = blended
-        query_target = query_vector.tolist()
-
-    # 3. Выполняем векторный запрос в Qdrant (пул заметно шире запрошенного limit)
-    candidate_limit = min(CANDIDATE_POOL_CEILING, max(CANDIDATE_POOL_FLOOR, limit * CANDIDATE_POOL_MULTIPLIER))
-    ready_filter = Filter(
-        must=[FieldCondition(key="needs_embedding", match=MatchValue(value=False))]
+    results = client.query_points(
+        collection_name=COLLECTION_NAME, prefetch=prefetch, query=query,
+        query_filter=ready_filter, limit=candidate_limit, with_payload=True,
     )
-
-    if query_target is not None:
-        results = client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_target,
-            query_filter=ready_filter,
-            limit=candidate_limit,
-            with_payload=True,
-        )
-    else:
-        # Fallback на RecommendQuery по ID трека
-        results = client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=RecommendQuery(
-                recommend=RecommendInput(positive=[current_track_id], negative=[])
-            ),
-            query_filter=ready_filter,
-            limit=candidate_limit,
-            with_payload=True,
-        )
-
     candidate_points = list(results.points)
-
-    # 3b. Controlled exploration: дополнительный пул от чистого вектора вкуса,
-    # чтобы выдача выходила за пределы кластера текущего трека.
-    explore_added = 0
-    if user_vec is not None and WAVE_EXPLORE_RATIO > 0:
-        explore_limit = max(1, int(candidate_limit * WAVE_EXPLORE_RATIO))
-        try:
-            explore_results = client.query_points(
-                collection_name=COLLECTION_NAME,
-                query=user_vec.tolist(),
-                query_filter=ready_filter,
-                limit=explore_limit,
-                with_payload=True,
-            )
-            candidate_points = _merge_candidate_points(candidate_points, explore_results.points)
-            explore_added = max(0, len(candidate_points) - len(results.points))
-        except Exception as e:
-            print(f"[SmartRec] Warning explore pool: {e}")
 
     exclude_ids = exclude_ids or set()
     queued_ids = queued_ids or set()
@@ -345,6 +293,12 @@ def get_smart_recommendations(
     recent_excluded = []
     queued_excluded = []
     seen_ids = set()
+
+    exposure = recent_wave_exposure(user_id) if user_id is not None else {}
+    skipped_tracks = [tid for tid, (_, skipped) in exposure.items() if skipped]
+    resolver.prefetch([str(p.id) for p in candidate_points] + skipped_tracks)
+    # Each distinct skipped song counts once for each credited participant.
+    skipped_by_artist = Counter(key for tid in skipped_tracks for key in resolver.keys({}, tid))
 
     # 4. BPM re-ranking, жёсткие исключения (текущий трек, дизлайки, дубли)
     scored_points = []
@@ -369,7 +323,12 @@ def get_smart_recommendations(
             bpm_diff = min(diff1, diff2, diff3)
 
         penalty = bpm_diff * 0.005
-        p.score = p.score - penalty
+        play_weight, _ = exposure.get(track_id, (0.0, False))
+        artists = resolver.keys(cand_payload, track_id)
+        skips = max((skipped_by_artist[key] for key in artists), default=0)
+        repeat_penalty = 0.09 * min(play_weight, 3.0)
+        skip_penalty = 0.06 * min(4, max(0, skips - 1))
+        p.score -= penalty + repeat_penalty + skip_penalty
 
         if track_id in queued_ids:
             queued_excluded.append(p)
@@ -378,7 +337,6 @@ def get_smart_recommendations(
         else:
             scored_points.append(p)
 
-    resolver.prefetch([str(p.id) for p in candidate_points])
     recent_artists = resolver.recent_counts(user_id)
 
     # 5. Diversity penalty (избегание повторения недавних артистов)
@@ -419,7 +377,7 @@ def get_smart_recommendations(
         known_keys = set().union(*(resolver.keys(p.payload or {}, str(p.id)) for p in selected))
         print(
             f"[SmartRec] user={user_id} track={current_track_id} "
-            f"pool={len(candidate_points)} explore+{explore_added} "
+            f"pool={len(candidate_points)} "
             f"skipped_recent={len(recent_excluded)} skipped_queued={len(queued_excluded)} "
             f"returned={len(selected)} unique_artists={len(known_keys)}"
         )

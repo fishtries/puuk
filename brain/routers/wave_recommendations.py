@@ -1,13 +1,16 @@
 """«Моя Волна» endpoints: next track, personalized queue."""
 import random
-from repositories.recording_reviews import blocked_track_ids
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 import db
 from auth import get_current_user
 from config import WAVE_PERSONALIZATION_WEIGHT, get_base_url
+from repositories.recording_reviews import blocked_track_ids
+from services.offline_wave import rank_downloads
 from services.media_locations import qdrant_point_id
 from services import recommendation_service
 from services.recommendation_service import (
@@ -166,3 +169,12 @@ def get_wave_queue_endpoint(
         build_wave_track_payload(pick, base_url, fav_ids, db_track=tracks_by_id.get(str(pick.id)))
         for pick in recommendations
     ]
+
+
+class OfflineWaveLibrary(BaseModel):
+    track_ids: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(max_length=512)
+
+
+@router.post("/offline-plan")
+def offline_wave_plan(library: OfflineWaveLibrary, current_user: dict = Depends(get_current_user)):
+    return rank_downloads(current_user["id"], library.track_ids, client)

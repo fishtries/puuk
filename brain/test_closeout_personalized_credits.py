@@ -24,16 +24,10 @@ CREDIT_FIELDS = (
 
 
 @pytest.fixture
-def library(tmp_path):
+def library(tmp_path, monkeypatch):
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
+    monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
     schema.init_db()
-    with get_connection() as conn:
-        for table in ('tracks', 'albums', 'artist_credit_state', 'track_artists',
-                      'album_artists', 'artists', 'user_history', 'user_favorites',
-                      'user_dislikes'):
-            try:
-                conn.execute(f'DELETE FROM {table}')
-            except Exception:
-                pass
     with get_connection() as conn:
         conn.execute("INSERT INTO albums(id,title,album_artist) VALUES (1,'Shared','Album Owner')")
         conn.execute("INSERT INTO albums(id,title,album_artist) VALUES (2,'Other','Other Owner')")
@@ -73,7 +67,7 @@ def _offline_qdrant(monkeypatch):
 
 def _no_user_signal(monkeypatch):
     monkeypatch.setattr(personal.db, 'get_user_dislike_ids', lambda u: set())
-    monkeypatch.setattr(personal.db, 'get_favorite_track_ids', lambda u: set())
+    monkeypatch.setattr(personal.db, 'get_favorite_track_ids', lambda u, **kwargs: set())
     monkeypatch.setattr(personal.db, 'get_user_listening_history', lambda u: [])
 
 

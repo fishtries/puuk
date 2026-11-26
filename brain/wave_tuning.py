@@ -3,8 +3,7 @@
 Standalone-скрипт (запуск из корня репозитория: ``python3 brain/wave_tuning.py``).
 Сравнивает несколько значений веса персонализации на живом Qdrant
 (config.QDRANT_URL, коллекция tracks) и реальной puuk.db, повторяя боевую
-последовательность шагов сервиса: blended-запрос, exploration-пул
-(WAVE_EXPLORE_RATIO), BPM re-rank, diversity-штраф, уровни exclude/queued.
+последовательность шагов сервиса: поиск соседей текущего трека, персональный порядок, BPM re-rank, diversity-штраф, уровни exclude/queued.
 
 Только чтение: лайки, история и wave-feedback не пишутся. Единственная
 подстановка — предвычисленный вектор пользователя вместо
@@ -32,7 +31,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 import db
 import services.recommendation_service as reco_service
-from config import COLLECTION_NAME, QDRANT_CONNECTION, QDRANT_URL, WAVE_EXPLORE_RATIO
+from config import COLLECTION_NAME, QDRANT_CONNECTION, QDRANT_URL
 from services.recommendation_service import _ArtistResolver, get_smart_recommendations
 
 # Минимум разрешённых (существующих в Qdrant) лайков для «настоящего» профиля.
@@ -258,7 +257,7 @@ def render_header(args, info, profile_note: str) -> None:
           f"({vectors_cfg.size}-dim, {vectors_cfg.distance.value})")
     print(f"Профиль: {profile_note}")
     print(f"Прогон: {args.sessions} сессий × {args.batches} пачек × {args.batch_size} треков | "
-          f"exploration ratio: {WAVE_EXPLORE_RATIO} | exclude = выданное сессии, "
+          f"exclude = выданное сессии, "
           f"queued = [] | якорь каждой пачки = сид сессии | сид-треки общие для всех весов")
     print("Колонки: unique — уникальные треки за сессию (сумма), repeats — повторные выдачи (цель 0),")
     print("         art/batch — среднее уникальных исполнителей в пачке, align — косинусная близость")

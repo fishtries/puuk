@@ -14,6 +14,7 @@ def aid(name):
 
 @pytest.fixture
 def library(tmp_path, monkeypatch):
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
     monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'test.db'))
     schema.init_db()
     for tid, names in [('a',['A']), ('b',['B']), ('ab',['A','B']), ('ac',['A','C']), ('d',['D']), ('empty',[])]:
@@ -87,7 +88,7 @@ def test_personalized_breadth_caps_and_qdrant_outage(library, monkeypatch):
     selected = personal._apply_diversity([next(t for t in catalog if t['id']==x) for x in ['a','b','ab','ac','d']], 4)
     assert [t['id'] for t in selected] == ['a','b','ab','d']
     monkeypatch.setattr(personal.db, 'get_user_dislike_ids', lambda u:set())
-    monkeypatch.setattr(personal.db, 'get_favorite_track_ids', lambda u:set())
+    monkeypatch.setattr(personal.db, 'get_favorite_track_ids', lambda u, **kwargs:set())
     monkeypatch.setattr(personal.db, 'get_user_listening_history', lambda u:[])
     monkeypatch.setattr(personal, 'get_or_compute_user_embedding_fresh', lambda *args: (_ for _ in ()).throw(RuntimeError('Qdrant unavailable')))
     result = personal.generate_genre_playlist(1, 'Rock', limit=5, catalog=catalog)

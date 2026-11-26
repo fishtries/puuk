@@ -88,6 +88,68 @@ _UNPAIRED_START = """NOT EXISTS (SELECT 1 FROM user_wave_feedback f
     WHERE f.user_id=h.user_id AND f.playback_id=h.playback_id)"""
 
 
+# Sequence numbers cover legacy events with second-resolution server timestamps.
+# Client timestamps also keep late offline deliveries on their side of the reset.
+_NEW_HISTORY = """h.id > :history_id AND (h.playback_id IS NULL OR :reset_at IS NULL
+    OR julianday(h.played_at) > julianday(:reset_at))"""
+_NEW_FEEDBACK = """id > :feedback_id AND (occurred_at IS NULL OR :reset_at IS NULL
+    OR julianday(occurred_at) > julianday(:reset_at))"""
+
+
+def _taste_window(conn, user_id):
+    row = conn.execute("SELECT * FROM user_taste_resets WHERE user_id=?", (user_id,)).fetchone()
+    return dict(row) if row else dict(user_id=user_id, reset_at=None, history_id=0, feedback_id=0)
+
+
+def reset_taste(user_id):
+    """Start learning again while preserving the library and listening history."""
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute("""INSERT OR REPLACE INTO user_taste_resets
+                SELECT ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                    COALESCE((SELECT MAX(id) FROM user_history WHERE user_id=?), 0),
+                    COALESCE((SELECT MAX(id) FROM user_wave_feedback WHERE user_id=?), 0)
+                """, (user_id, user_id, user_id))
+            conn.execute("""UPDATE user_favorites SET before_taste_reset=1
+                WHERE user_id=? AND before_taste_reset=0""", (user_id,))
+            conn.execute("""INSERT INTO user_taste_revisions(user_id,revision) VALUES (?,1)
+                ON CONFLICT(user_id) DO UPDATE SET revision=revision+1""", (user_id,))
+            conn.execute("DELETE FROM user_embeddings WHERE user_id=?", (user_id,))
+    finally:
+        conn.close()
+
+
+def recent_wave_exposure(user_id):
+    """Per-track recent playback volume and early skips on suggested music."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(f"""
+            WITH plays AS (
+                SELECT h.track_id, julianday(h.played_at) AS ts, 0 AS skipped
+                FROM user_history h WHERE h.user_id=? AND {_UNPAIRED_START}
+                AND (h.playback_id IS NOT NULL OR NOT EXISTS (
+                    SELECT 1 FROM user_wave_feedback f WHERE f.user_id=h.user_id
+                    AND f.track_id=h.track_id AND f.playback_id IS NULL
+                    AND f.event_type IN ('skip','finish')
+                    AND abs(julianday(COALESCE(f.occurred_at,f.created_at))-julianday(h.played_at))<10.0/1440))
+                UNION ALL
+                SELECT track_id, julianday(COALESCE(occurred_at,created_at)),
+                    event_type='skip' AND COALESCE(context,'unknown')!='manual'
+                    AND listen_duration_ms < 30000 AND listen_duration_ms*2 < track_duration_ms
+                FROM user_wave_feedback WHERE user_id=? AND event_type IN ('finish','skip')
+                    AND provenance NOT IN ('qa','import')
+            )
+            SELECT track_id, SUM(1.0 - (julianday('now')-ts)/30.0) AS exposure,
+                MAX(skipped AND ts >= julianday('now','-14 days')) AS skipped
+            FROM plays WHERE ts BETWEEN julianday('now','-30 days') AND julianday('now')
+            GROUP BY track_id""", (user_id, user_id))
+        return {r['track_id']: (r['exposure'], bool(r['skipped'])) for r in rows}
+    finally:
+        conn.close()
+
+
 def get_user_listening_history(user_id: int, limit: int = 100) -> list[str]:
     """
     Получить ID треков, отражающих позитивный интерес пользователя:
@@ -95,23 +157,24 @@ def get_user_listening_history(user_id: int, limit: int = 100) -> list[str]:
     """
     conn = get_connection()
     cursor = conn.cursor()
+    window = _taste_window(conn, user_id)
     cursor.execute(f"""
         SELECT track_id
         FROM (
             SELECT track_id, played_at as ts
             FROM user_history h
-            WHERE user_id = ? AND {_UNPAIRED_START}
+            WHERE user_id = :user_id AND {_NEW_HISTORY} AND {_UNPAIRED_START}
             UNION ALL
             SELECT track_id, CASE WHEN playback_id IS NULL THEN created_at ELSE occurred_at END as ts
             FROM user_wave_feedback
-            WHERE user_id = ? AND (
+            WHERE user_id = :user_id AND {_NEW_FEEDBACK} AND (
                 event_type != 'skip'
                 OR (track_duration_ms > 0 AND (listen_duration_ms * 1.0 / track_duration_ms) >= 0.3)
             )
         )
         ORDER BY julianday(ts) DESC
-        LIMIT ?
-    """, (user_id, user_id, limit))
+        LIMIT :limit
+    """, dict(window, limit=limit))
     track_ids = [row["track_id"] for row in cursor.fetchall()]
     conn.close()
     return track_ids
@@ -221,7 +284,7 @@ def get_user_profile_stats(user_id: int) -> dict:
     cursor.execute("SELECT track_count, updated_at, source_revision FROM user_embeddings WHERE user_id = ?", (user_id,))
     meta = cursor.fetchone()
 
-    cursor.execute("SELECT COUNT(*) as total_feedback FROM user_wave_feedback WHERE user_id = ?", (user_id,))
+    cursor.execute(f"SELECT COUNT(*) as total_feedback FROM user_wave_feedback WHERE user_id=:user_id AND {_NEW_FEEDBACK}", _taste_window(conn,user_id))
     feedback_count = cursor.fetchone()["total_feedback"]
 
     cursor.execute("SELECT COUNT(*) as fav_count FROM user_favorites WHERE user_id = ?", (user_id,))
@@ -309,7 +372,9 @@ def record_listening_event(user_id, track_id, event_type, listen_duration_ms=0,
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (user_id, track_id, event_type, listen_duration_ms,
                          track_duration_ms, event_id, occurred_at, context, client, provenance, playback_id))
             if event_type == 'like':
-                conn.execute("INSERT OR IGNORE INTO user_favorites(user_id,track_id,provenance) VALUES (?,?,'manual')", (user_id,track_id))
+                conn.execute("""INSERT OR IGNORE INTO user_favorites(user_id,track_id,provenance,before_taste_reset)
+                    VALUES (?,?,'manual',EXISTS(SELECT 1 FROM user_taste_resets WHERE user_id=?
+                        AND julianday(?) <= julianday(reset_at)))""", (user_id,track_id,user_id,occurred_at))
                 conn.execute("UPDATE user_favorites SET provenance='manual' WHERE user_id=? AND track_id=? AND provenance='import'", (user_id,track_id))
             update_track_stats(track_id, event_type,
                 min(1., max(0., listen_duration_ms / max(track_duration_ms, 1))), conn=conn)
@@ -324,19 +389,21 @@ def taste_snapshot(user_id, limit=2000):
     try:
         conn.execute('BEGIN')
         revision = conn.execute('SELECT revision FROM user_taste_revisions WHERE user_id=?', (user_id,)).fetchone()
-        events = conn.execute("""SELECT track_id,event_type,listen_duration_ms,track_duration_ms,
+        window = dict(_taste_window(conn, user_id), limit=limit)
+        events = conn.execute(f"""SELECT track_id,event_type,listen_duration_ms,track_duration_ms,
             COALESCE(occurred_at,created_at) AS ts,created_at AS received_at,context,provenance
-            FROM user_wave_feedback WHERE user_id=? ORDER BY id DESC LIMIT ?""", (user_id,limit)).fetchall()
+            FROM user_wave_feedback WHERE user_id=:user_id AND {_NEW_FEEDBACK}
+            ORDER BY id DESC LIMIT :limit""", window).fetchall()
         history = conn.execute(f"""SELECT h.track_id,'start' AS event_type, h.played_at AS ts,
             COALESCE(h.received_at,h.played_at) AS received_at, h.context,
             CASE WHEN h.playback_id IS NULL THEN 'legacy' ELSE 'listening' END AS provenance,
             0 AS listen_duration_ms, 0 AS track_duration_ms FROM user_history h
-            WHERE h.user_id=? AND {_UNPAIRED_START} AND (h.playback_id IS NOT NULL OR NOT EXISTS (
+            WHERE h.user_id=:user_id AND {_NEW_HISTORY} AND {_UNPAIRED_START} AND (h.playback_id IS NOT NULL OR NOT EXISTS (
                 SELECT 1 FROM user_wave_feedback f WHERE f.user_id=h.user_id AND f.track_id=h.track_id
-                AND f.playback_id IS NULL
+                AND f.playback_id IS NULL AND f.id > :feedback_id
                 AND ABS(julianday(COALESCE(f.occurred_at,f.created_at))-julianday(h.played_at))<10.0/1440))
-            ORDER BY julianday(h.played_at) DESC, h.id DESC LIMIT ?""", (user_id,limit)).fetchall()
-        likes = conn.execute("SELECT track_id FROM user_favorites WHERE user_id=? AND provenance!='import'", (user_id,)).fetchall()
+            ORDER BY julianday(h.played_at) DESC, h.id DESC LIMIT :limit""", window).fetchall()
+        likes = conn.execute("SELECT track_id FROM user_favorites WHERE user_id=? AND before_taste_reset=0 AND provenance!='import'", (user_id,)).fetchall()
         dislikes = conn.execute('SELECT track_id FROM user_dislikes WHERE user_id=?', (user_id,)).fetchall()
         return {'revision':revision['revision'] if revision else 0,
                 'events':[dict(r) for r in [*events,*history]],

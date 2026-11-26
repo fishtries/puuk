@@ -77,7 +77,7 @@ def _positive_track_weights(user_id: int) -> dict[str, float]:
     for track_id, count in history_counts.items():
         weights[track_id] = float(min(count, MAX_HISTORY_EVENTS_PER_TRACK))
 
-    favorite_ids = db.get_favorite_track_ids(user_id) - dislike_ids
+    favorite_ids = db.get_favorite_track_ids(user_id, for_taste=True) - dislike_ids
     for track_id in favorite_ids:
         weights[track_id] = FAVORITE_TOTAL_WEIGHT
     return weights
@@ -413,7 +413,7 @@ def generate_genre_playlist(
 
     dislike_ids = db.get_user_dislike_ids(user_id)
     exclude = set(exclude_ids or set())
-    favorite_ids = db.get_favorite_track_ids(user_id)
+    favorite_ids = db.get_favorite_track_ids(user_id, for_taste=True)
     positive_history = [str(t) for t in db.get_user_listening_history(user_id)]
     positive_ids = set(positive_history)
     fresh_ids = set(positive_history[:RECENT_HISTORY_WINDOW])
@@ -482,6 +482,7 @@ def generate_genre_playlist(
                 for t in selected
             ]
 
+    library_favorites = db.get_favorite_track_ids(user_id)
     payloads: list[dict] = []
     for track in selected:
         track_id = str(track["id"])
@@ -489,7 +490,7 @@ def generate_genre_playlist(
             point = points_by_id[track_id]
             point.score = ranked_scores[track_id]
             # Строка каталога уже загружена — без повторного db.get_track.
-            payloads.append(build_wave_track_payload(point, base_url, favorite_ids, db_track=track))
+            payloads.append(build_wave_track_payload(point, base_url, library_favorites, db_track=track))
             continue
         payloads.append(
             {
@@ -507,7 +508,7 @@ def generate_genre_playlist(
                 "stream_url": f"{base_url}/api/stream/{track_id}",
                 "coverArt": f"{base_url}/api/cover/{track_id}",
                 "cover_color": track.get("cover_color"),
-                "is_liked": track_id in favorite_ids,
+                "is_liked": track_id in library_favorites,
                 "score": _local_score(track_id, favorite_ids, positive_ids),
             }
         )

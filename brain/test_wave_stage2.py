@@ -232,40 +232,22 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         self.assertNotIn("current", ids)
         self.assertIn("cand-2", ids)
 
-    def test_12_explore_pool_adds_new_candidates_and_dedups(self):
-        """Exploration-пул от вектора вкуса расширяет выдачу и дедуплицируется."""
-        import time as _time
+    def test_12_profile_can_only_rerank_seed_neighbours(self):
+        from types import SimpleNamespace
         from unittest.mock import patch
         import numpy as np
-        from services import recommendation_service
+        from services import recommendation_service as service
 
-        current = MockPoint("current", 1.0, "Seed Artist")
-        main_pool = [MockPoint("current", 0.99, "Seed Artist")] + [
-            MockPoint(f"near-{i}", 0.95 - i * 0.01, f"Near Artist {i}") for i in range(5)
-        ]
-        explore_pool = [MockPoint("far-1", 0.99, "Far Artist 1"), MockPoint("near-1", 0.9, "Near Artist 1")]
-
-        class FakeResults:
-            def __init__(self, points):
-                self.points = points
-
-        # Первый вызов — основной пул, второй — exploration.
-        with patch.object(recommendation_service.client, "retrieve", return_value=[current]), \
-             patch.object(recommendation_service.client, "query_points", side_effect=[FakeResults(main_pool), FakeResults(explore_pool)]), \
-             patch.object(recommendation_service, "get_or_compute_user_embedding", return_value=np.ones(400, dtype=np.float32) / 20):
-            recommendations = recommendation_service.get_smart_recommendations(
-                current_track_id="current",
-                limit=6,
-                existing_track=current,
-                dislike_ids=set(),
-                user_id=1,
-                personalization_weight=0.3,
-            )
-
-        ids = [p.id for p in recommendations]
-        self.assertEqual(len(ids), len(set(ids)), "В выдаче нет дублей между пулами")
-        self.assertIn("far-1", ids, "Кандидат exploration-пула попал в выдачу")
-        self.assertNotIn("current", ids)
+        seed = SimpleNamespace(vector=[1., 0.], payload={})
+        with patch.object(service.client, "query_points", return_value=SimpleNamespace(points=[])) as query, \
+             patch.object(service, "get_or_compute_user_embedding", return_value=np.array([0., 1.])):
+            service.get_smart_recommendations("seed", 8, seed, user_id=self.user_id)
+        query.assert_called_once()
+        args = query.call_args.kwargs
+        self.assertEqual(args["prefetch"].query, seed.vector)
+        self.assertEqual(args["prefetch"].filter, args["query_filter"])
+        self.assertGreater(args["query"][1], 0)
+        self.assertGreater(args["query"][0], args["query"][1])
 
     def test_13_no_second_query_when_user_vector_is_absent(self):
         """Без вектора пользователя exploration-запрос не выполняется (один вызов Qdrant)."""
@@ -389,3 +371,28 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         self.assertIn("b1", ids)
         self.assertIn("c1", ids)
         self.assertEqual(len([i for i in ids if i.startswith("u")]), 1)
+
+
+def test_repeated_skips_cool_down_other_tracks_by_the_artist(monkeypatch):
+    from types import SimpleNamespace
+    from services import recommendation_service as service
+    from repositories.artist_credits import artist_id_for_name
+
+    seed = SimpleNamespace(vector=[1., 0.], payload={})
+    def candidates(**kwargs):
+        return SimpleNamespace(points=[MockPoint('new-a', .94, 'A'), MockPoint('new-b', .90, 'B')])
+    monkeypatch.setattr(service.client, 'query_points', candidates)
+    monkeypatch.setattr(service, 'get_recent_artist_counts', lambda *a, **kw: {})
+    monkeypatch.setattr(service, 'get_credit_states', lambda kind, ids: {
+        key: {'artists': [{'id': artist_id_for_name('A')}]} for key in ids if key.startswith('skip')
+    })
+    history = {'skip1': (1., True)}
+    monkeypatch.setattr(service, 'recent_wave_exposure', lambda user: history)
+    def first():
+        return service.get_smart_recommendations('seed', 1, seed, user_id=1, personalization_weight=0)[0].id
+    assert first() == 'new-a'
+    history['skip2'] = (1., True)
+    assert first() == 'new-b'
+    history.clear()
+    history['new-a'] = (2., False)
+    assert first() == 'new-b'

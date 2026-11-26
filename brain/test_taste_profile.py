@@ -165,3 +165,27 @@ def test_compare_freezes_inputs_and_reports_missing_vectors():
     assert report['missing_vector_ids']==['missing']
     assert report['cosine_to_baseline']==pytest.approx(1.)
     assert report['limitations']
+
+
+def test_reset_preserves_library_and_replay_memory_and_relearns(subject):
+    from repositories.wave import reset_taste, recent_wave_exposure
+
+    user, track = subject
+    db.add_history(user, track)
+    db.add_favorite(user, track)
+    revision = get_taste_revision(user)
+    db.set_user_embedding(user, np.ones(400), 1, source_revision=revision)
+    reset_taste(user)
+    assert db.get_favorite_track_ids(user) == {track}
+    assert not db.get_favorite_track_ids(user, for_taste=True)
+    assert db.get_user_listening_history(user) == []
+    assert track in recent_wave_exposure(user)
+    db.set_user_embedding(user, np.ones(400), 1, source_revision=revision)
+    assert db.get_user_embedding(user) is None
+    record_listening_event(user, track, 'finish', occurred_at='2020-01-01T00:00:00Z')
+    assert not track_weights(taste_snapshot(user))
+    record_listening_event(user, track, 'finish')
+    assert track in track_weights(taste_snapshot(user))
+    db.remove_favorite(user, track)
+    db.add_favorite(user, track)
+    assert taste_snapshot(user)['likes'] == {track}

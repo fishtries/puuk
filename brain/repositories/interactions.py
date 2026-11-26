@@ -54,10 +54,11 @@ def get_user_favorites(user_id: int) -> list[dict]:
     conn.close()
     return tracks
 
-def get_favorite_track_ids(user_id: int) -> set[str]:
+def get_favorite_track_ids(user_id: int, *, for_taste: bool = False) -> set[str]:
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT track_id FROM user_favorites WHERE user_id = ?", (user_id,))
+    condition = " AND before_taste_reset=0" if for_taste else ""
+    cursor.execute("SELECT track_id FROM user_favorites WHERE user_id = ?" + condition, (user_id,))
     ids = {row["track_id"] for row in cursor.fetchall()}
     conn.close()
     return ids
