@@ -1130,7 +1130,7 @@ test('offline Wave follows saved recommendation links and rebuilds from a new st
     const second = await selectLocalWaveTracks(session, { history: [first.tracks[0]] });
     expect(second.tracks.map(track => track.id)).toEqual(['b', 'c', 'd', 'a']);
     const replay = await selectLocalWaveTracks(session, { history: ['c', 'a', 'b', 'd'].map(id => ({ id })) });
-    expect(replay.tracks[0].id).toBe('a');
+    expect(replay.tracks[0].id).toBe('c');
     fetch.mockRejectedValueOnce(new Error('unavailable'));
     await expect(refreshWavePlan(session, signal, true)).rejects.toThrow('unavailable');
     const continued = await selectLocalWaveTracks(session, {
@@ -1141,4 +1141,18 @@ test('offline Wave follows saved recommendation links and rebuilds from a new st
     fetch.mockRestore();
     random.mockRestore();
   }
+});
+
+test('local openings rotate after process restart without playback history', async () => {
+  const session = await login('opening-rotation', { origin: 'https://rotation.test', userId: '17' });
+  for (const id of ['a', 'b', 'c']) await publishTrack(session, { id });
+  const heads = [];
+  for (let i = 0; i < 4; i++) {
+    const { tracks } = await selectLocalWaveTracks(session, { history: [] });
+    heads.push(tracks[0].id);
+    await saveWaveQueue(session, { current: tracks[0], future: [], history: [] }, { opening: true });
+    mockReopenDatabase();
+  }
+  expect(new Set(heads.slice(0, 3)).size).toBe(3);
+  expect(heads[3]).toBe(heads[0]);
 });

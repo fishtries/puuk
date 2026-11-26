@@ -143,8 +143,10 @@ function capIds(ids, limit = MAX_EXCLUDE_IDS) {
 }
 
 /** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
-function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [], limit = 50 } = {}) {
+function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [], limit = 50, mode, previousTrackId } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (mode) params.append('mode', mode);
+  if (previousTrackId != null) params.append('previous_track_id', String(previousTrackId));
   const canonicalId = getTrackId(trackId);
   if (canonicalId !== null) {
     params.append('current_track_id', String(canonicalId));
@@ -1108,12 +1110,13 @@ export default function usePlayerController({ setTracks }) {
     [player, refreshTrackLoudness, changePlaybackRate, projectRating],
   );
 
-  const saveCurrentWave = useCallback(() => {
+  const saveCurrentWave = useCallback((opening = false) => {
     const session = getOfflineSession();
     if (!durableWaveRef.current || !session || !currentTrackRef.current || pendingWaveSelectionRef.current) return;
     void saveWaveQueue(session, {
       current: currentTrackRef.current, future: queueRef.current, history: historyRef.current,
     }, {
+      ...(opening ? { opening: true } : {}),
       updateReserve: canRequestWave() && !awaitingRecommendationsRef.current,
     }).catch(() => {});
   }, [canRequestWave]);
@@ -1149,7 +1152,7 @@ export default function usePlayerController({ setTracks }) {
     queueRequestRef.current = request;
     request.promise = (async () => {
       try {
-        const data = await (startingRequest?.response ?? requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), signal));
+        const data = await (startingRequest?.response ?? requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds, mode: durable ? 'mix' : undefined }), signal));
         if (!isCurrent() || signal.aborted) return [];
         if (durable && !canRequestWave()) return [];
         if (!Array.isArray(data)) throw new Error('Invalid Wave queue');
@@ -1406,7 +1409,7 @@ export default function usePlayerController({ setTracks }) {
       ).map(queueKey));
       if (restart) cycleTracksRef.current = [next, ...queue];
       setHistory(!restart && current ? [...previous, current].slice(-MAX_HISTORY) : previous);
-      saveCurrentWave();
+      saveCurrentWave(restart);
       return true;
     }
     if (!readyReserve && valid()) {
@@ -2036,14 +2039,16 @@ export default function usePlayerController({ setTracks }) {
       let failedTrack;
       if (canRequestWave({ ignoreBackoff: true })) {
         const controller = new AbortController();
+        const openings = snapshot?.openingIds ?? [];
         const lastPlayed = new Map(played.map((track, index) => [String(getTrackId(track)), index]));
         const response = requestWave(buildWaveQueueUrl(null, {
-          limit: 8,
-          excludeIds: [...dislikes, ...played.map(getTrackId)],
+          limit: 8, mode: 'start', previousTrackId: getTrackId(formerTrack),
+          excludeIds: [...dislikes, ...openings, ...played.map(getTrackId)],
         }), controller.signal).then(data => {
           if (!Array.isArray(data)) return [];
           // The server can return recent tracks after exhausting other candidates.
           return data.filter(track => !dislikes.has(String(getTrackId(track)))).sort((a, b) =>
+            openings.indexOf(String(getTrackId(a))) - openings.indexOf(String(getTrackId(b))) ||
             (lastPlayed.get(String(getTrackId(a))) ?? -1) - (lastPlayed.get(String(getTrackId(b))) ?? -1));
         }).catch(() => null);
         const request = { epoch, controller, response };
@@ -2087,7 +2092,7 @@ export default function usePlayerController({ setTracks }) {
               setUpNextQueue(future);
               recommendationsRef.current = new Set(queueRef.current.map(queueKey));
               cycleTracksRef.current = [first, ...future];
-              saveCurrentWave();
+              saveCurrentWave(true);
               return;
             }
             if (!valid()) return;

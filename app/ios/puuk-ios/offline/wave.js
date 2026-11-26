@@ -58,6 +58,9 @@ async function database(session) {
     CREATE TABLE IF NOT EXISTS wave_state (
       owner TEXT PRIMARY KEY, current_track TEXT, future TEXT NOT NULL, history TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS wave_openings (
+      owner TEXT PRIMARY KEY, track_ids TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS wave_reserve (
       owner TEXT PRIMARY KEY, future TEXT NOT NULL
     );
@@ -65,8 +68,8 @@ async function database(session) {
   return db;
 }
 
-const selectWaveState = `SELECT state.*, reserve.future AS reserve_future
-  FROM wave_state state LEFT JOIN wave_reserve reserve USING (owner)
+const selectWaveState = `SELECT state.*, reserve.future AS reserve_future, openings.track_ids AS opening_ids
+  FROM wave_state state LEFT JOIN wave_reserve reserve USING (owner) LEFT JOIN wave_openings openings USING (owner)
   WHERE state.owner=?`;
 
 export async function readWaveQueue(session = getOfflineSession()) {
@@ -76,6 +79,7 @@ export async function readWaveQueue(session = getOfflineSession()) {
   return row
     ? {
         current: JSON.parse(row.current_track),
+        openingIds: JSON.parse(row.opening_ids ?? '[]'),
         future: JSON.parse(row.future),
         history: JSON.parse(row.history),
         reserve: JSON.parse(row.reserve_future ?? row.future),
@@ -87,7 +91,7 @@ export async function readWaveQueue(session = getOfflineSession()) {
 export async function saveWaveQueue(
   session,
   { current, future, history },
-  { updateReserve = true } = {},
+  { updateReserve = true, opening = false } = {},
 ) {
   if (!current) return false;
   const db = await database(session);
@@ -109,7 +113,7 @@ export async function saveWaveQueue(
   const oldReserve = previous?.reserve_future ?? previous?.future;
   const reserve = updateReserve ? saved[1] : oldReserve ?? '[]';
   if (
-    previous &&
+    !opening && previous &&
     oldReserve === reserve &&
     [previous.current_track, previous.future, previous.history].every(
       (entry, i) => entry === saved[i],
@@ -118,6 +122,10 @@ export async function saveWaveQueue(
     return true;
   db.withTransactionSync(() => {
     db.runSync('INSERT OR REPLACE INTO wave_state VALUES (?,?,?,?)', owner, ...saved);
+    if (opening) {
+      const ids = JSON.parse(previous?.opening_ids ?? '[]').filter(key => key !== id(current));
+      db.runSync('INSERT OR REPLACE INTO wave_openings VALUES (?,?)', owner, JSON.stringify([...ids, id(current)].slice(-24)));
+    }
     if (previous?.reserve_future !== reserve)
       db.runSync('INSERT OR REPLACE INTO wave_reserve VALUES (?,?)', owner, reserve);
   });
@@ -160,7 +168,7 @@ function artistKey(track) {
   return typeof artist === 'string' ? artist.trim().toLowerCase() : '';
 }
 
-function pickRecommendation(plan, seed, playable, played, history, oldest, artist, favorites) {
+function pickRecommendation(plan, seed, playable, played, history, oldest, artist, favorites, changeDirection) {
   if (!plan) return null;
   const last = id(history.at(-1));
   const eligible = (key) => {
@@ -169,9 +177,11 @@ function pickRecommendation(plan, seed, playable, played, history, oldest, artis
     return key !== last || playable.size === 1;
   };
   const neighbors = seed && plan.next[id(seed)];
-  const choices = Array.isArray(neighbors) ? neighbors.filter(eligible) : [];
+  const choices = !changeDirection && Array.isArray(neighbors) ? neighbors.filter(eligible) : [];
   if (!choices.length) {
-    for (const key of plan.starts) {
+    const familiar = changeDirection ? new Set(plan.next[seed ? id(seed) : last]?.slice(0, 6)) : new Set();
+    const starts = plan.starts.filter(key => eligible(key) && !familiar.has(key));
+    for (const key of starts.length ? starts : plan.starts) {
       if (eligible(key)) choices.push(key);
       if (choices.length === LOCAL_WAVE_BATCH_SIZE) break;
     }
@@ -221,16 +231,26 @@ export async function selectLocalWaveTracks(
   let artist = artistKey(tracks.at(-1) ?? current ?? history.at(-1));
   while (tracks.length < LOCAL_WAVE_BATCH_SIZE && remaining.length) {
     const seed = tracks.at(-1) ?? current;
-    const key = pickRecommendation(plan, seed, playable, lastPlayed, history,
-      remaining[0].lastPlayed, artist, ratings.favorites);
-    let next = 0;
-    if (key !== null) {
-      next = remaining.findIndex(candidate => id(candidate.track) === key);
-    } else if (artist && artist === remaining[0].artist) {
-      next = remaining.findIndex(candidate => candidate.lastPlayed === remaining[0].lastPlayed &&
-        candidate.artist && candidate.artist !== artist);
+    // On an explicit launch, rotate opening tracks even after they leave listening history.
+    let available = remaining;
+    if (!seed) {
+      const openings = snapshot?.openingIds ?? [];
+      const last = id(history.at(-1));
+      if (remaining.length > 1) available = remaining.filter(item => id(item.track) !== last);
+      const oldestOpening = available.reduce((oldest, item) =>
+        Math.min(oldest, openings.indexOf(id(item.track))), Infinity);
+      available = available.filter(item => openings.indexOf(id(item.track)) === oldestOpening);
+      const oldestPlay = available[0].lastPlayed;
+      available = available.filter(item => item.lastPlayed === oldestPlay);
     }
-    const [pick] = remaining.splice(Math.max(0, next), 1);
+    const choices = available === remaining ? playable : new Map(available.map(item => [id(item.track), item.track]));
+    const key = pickRecommendation(plan, seed, choices, lastPlayed, history,
+      available[0].lastPlayed, artist, ratings.favorites, !seed || (tracks.length > 0 && tracks.length % 4 === 0));
+    let pick = key === null ? available[0] : available.find(item => id(item.track) === key);
+    if (key === null && artist && artist === pick.artist) {
+      pick = available.find(item => item.lastPlayed === pick.lastPlayed && item.artist && item.artist !== artist) ?? pick;
+    }
+    remaining.splice(remaining.indexOf(pick), 1);
     playable.delete(id(pick.track));
     tracks.push(pick.track);
     artist = pick.artist;
