@@ -16,7 +16,72 @@ import {
   setCellularDownloads,
 } from '../../offline/availability';
 import { formatBytes, reasonText } from '../downloads/DownloadedScreen';
-import styles from './loginModalStyles';
+import { useIsFocused } from '@react-navigation/native';
+import { t } from '../../shared/storage/settings';
+import { SettingsPage, usePageSettings } from './SettingsPage';
+import styles from './settingsStyles';
+
+export function OfflineSettingsScreen({ navigation }) {
+  const settings = usePageSettings();
+  const lang = settings.language;
+  const visible = useIsFocused();
+  return (
+    <SettingsPage
+      navigation={navigation}
+      lang={lang}
+      title={t('offlineTitle', lang)}
+    >
+      <OfflineSettings
+        settings={settings}
+        lang={lang}
+        accent={settings.accentColor}
+        visible={visible}
+      />
+    </SettingsPage>
+  );
+}
+
+function StorageUsage({ budget, ru, accent }) {
+  const parts = [
+    [ru ? 'Треки' : 'Tracks', budget.mediaBytes, accent],
+    [ru ? 'Кэш' : 'Cache', budget.cacheBytes, '#86ACDB'],
+    [
+      ru ? 'Прочее' : 'Other',
+      (budget.coverBytes || 0) +
+        (budget.lyricsBytes || 0) +
+        (budget.transferBytes || 0),
+      '#A299BE',
+    ],
+  ];
+  const scale = Math.max(1, budget.limitBytes, budget.usedBytes);
+  return (
+    <View style={[styles.groupCard, styles.storageSummary]}>
+      <Text style={styles.profileUsername}>
+        {formatBytes(budget.usedBytes)} / {formatBytes(budget.limitBytes)}
+      </Text>
+      <View style={styles.storageBar}>
+        {parts.map(([label, bytes, color]) =>
+          bytes > 0 ? (
+            <View
+              key={label}
+              style={{
+                width: `${(100 * bytes) / scale}%`,
+                backgroundColor: color,
+              }}
+            />
+          ) : null,
+        )}
+      </View>
+      {parts.map(([label, bytes, color]) => (
+        <View key={label} style={styles.legendRow}>
+          <View style={[styles.legendDot, { backgroundColor: color }]} />
+          <Text style={styles.rowLabel}>{label}</Text>
+          <Text style={styles.rowValue}>{formatBytes(bytes)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export default function OfflineSettings({ settings, lang, accent, visible }) {
   const [status, setStatus] = useState(null);
@@ -73,7 +138,9 @@ export default function OfflineSettings({ settings, lang, accent, visible }) {
   };
   return (
     <>
-      <Text style={styles.sectionHeader}>{tr('OFFLINE', 'ОФЛАЙН')}</Text>
+      {status && (
+        <StorageUsage budget={status.budget} ru={ru} accent={accent} />
+      )}
       <View style={styles.groupCard}>
         <TouchableOpacity
           accessibilityRole="button"
@@ -143,12 +210,7 @@ export default function OfflineSettings({ settings, lang, accent, visible }) {
         {status && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
             <Text style={styles.rowValue}>
-              {tr('On this device', 'На устройстве')}:{' '}
-              {formatBytes(status.budget.usedBytes)} /{' '}
-              {formatBytes(status.budget.limitBytes)}
-            </Text>
-            <Text style={styles.rowValue}>
-              {tr('Wave ready', 'Волна готово')}:{' '}
+              {tr('Wave ready', 'Запас Волны')}:{' '}
               {Math.floor(status.wave.readyMinutes)} /{' '}
               {status.wave.targetMinutes} {tr('min', 'мин')}
             </Text>

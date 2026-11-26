@@ -42,7 +42,6 @@ export function reasonText(reason, ru) {
 export default function DownloadedScreen({
   navigation,
   onPlayTrackList,
-  onOpenAuthModal,
   isCovered = false,
 }) {
   const focused = useIsFocused();
@@ -144,7 +143,7 @@ export default function DownloadedScreen({
           )}
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={onOpenAuthModal}
+            onPress={() => navigation.navigate('OfflineSettings')}
             style={s.control}
           >
             <Text style={s.action}>

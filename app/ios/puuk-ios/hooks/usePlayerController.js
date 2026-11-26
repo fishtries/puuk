@@ -1,4 +1,5 @@
 import { saveRatingWithFeedback, showRatingError } from '../features/downloads/ratingFeedback';
+import { nativeEQ } from '../features/equalizer/equalizer';
 import { normalizeStreamUrl } from '../utils/streamUrl';
 import { AppState, DeviceEventEmitter } from 'react-native';
 import defaultAudioCache from '../utils/audioCache';
@@ -12,7 +13,7 @@ import {
   setWavePlaybackMode,
   waveTrackDuration,
 } from '../offline/wave';
-import { readMediaKey, readPlayableIds } from '../offline';
+import { readMediaKey } from '../offline';
 import { DEFAULT_WAVE_RESERVE_MINUTES } from '../offline/policy';
 import { getCurrentNetworkPolicy, subscribeNetworkPolicy } from '../utils/networkPolicy';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
@@ -109,21 +110,16 @@ const requestWave = (url, signal) => boundedMediaOperation(async requestSignal =
   return response.json();
 }, { signal, timeout: WAVE_REQUEST.timeout });
 
-async function readyReserveBeforeResponse(request, session, reserve, recent, dislikes) {
-  if (!Array.isArray(reserve) || !reserve.length) return null;
+async function readyReserveBeforeResponse(request, session, history) {
+  if (!session) return null;
   let timer;
   const local = new Promise(resolve => {
     timer = setTimeout(async () => {
-      const candidates = reserve.filter(track => {
-        const id = String(getTrackId(track));
-        return !recent.has(id) && !dislikes.has(id);
-      }).slice(0, LOCAL_WAVE_BATCH_SIZE);
       try {
-        const ready = await readPlayableIds(session, candidates.map(getTrackId));
-        const tracks = candidates.filter(track => ready.has(String(getTrackId(track))));
-        if (tracks.length) resolve({ tracks, reserveIds: ready });
+        const ready = await selectLocalWaveTracks(session, { history });
+        if (ready.tracks.length) resolve(ready);
       } catch {
-        // The online request remains available if the offline index cannot be read.
+        // The original request can still provide an online queue.
       }
     }, WAVE_RESERVE_DELAY_MS);
   });
@@ -589,6 +585,18 @@ export default function usePlayerController({ setTracks }) {
     });
     return () => { unsubscribe(); appState.remove(); network?.(); };
   }, [player, setCurrentTrack, setUpNextQueue, setWaveMode]);
+  useEffect(() => {
+    if (!nativeEQ) return;
+    nativeEQ.bind(player);
+    const reset = player.addListener('playbackStatusUpdate', event => {
+      if (event.mediaServicesDidReset) nativeEQ.bind(player);
+    });
+    return () => {
+      reset.remove();
+      nativeEQ.unbind();
+    };
+  }, [player]);
+
   const status = usePlaybackState(player);
   const [playbackRate, setPlaybackRate] = useState(1);
   const actualPlaybackRateRef = useRef(1);
@@ -2042,7 +2050,7 @@ export default function usePlayerController({ setTracks }) {
         queueRequestRef.current = request;
         let data;
         try {
-          const readyReserve = await readyReserveBeforeResponse(request, session, snapshot?.reserve, recent, dislikes);
+          const readyReserve = await readyReserveBeforeResponse(request, session, played);
           if (!valid()) return;
           if (readyReserve) {
             const started = await advanceLocalWave({

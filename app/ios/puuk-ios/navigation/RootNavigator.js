@@ -11,6 +11,11 @@ import ArtistScreen from '../features/artists/ArtistScreen';
 import ArtistCreditBulkScreen from '../features/artists/ArtistCreditBulkScreen';
 import ArtistArtworkEditScreen from '../features/artists/ArtistArtworkEditScreen';
 
+import EqualizerScreen from '../features/equalizer/EqualizerScreen';
+import SettingsScreen from '../features/auth/SettingsScreen';
+import AccountScreen from '../features/auth/AccountScreen';
+import { OfflineSettingsScreen } from '../features/auth/OfflineSettings';
+
 const Stack = createNativeStackNavigator();
 
 const RootNavigator = React.memo(function RootNavigator({
@@ -22,6 +27,8 @@ const RootNavigator = React.memo(function RootNavigator({
   startWave,
   isModalOpen,
   setTrackToManage,
+  onAddToPlaylist,
+  onEditTrack,
   currentUser,
   onOpenAuthModal,
   expandProgress,
@@ -68,6 +75,14 @@ const RootNavigator = React.memo(function RootNavigator({
           />
         )}
       </Stack.Screen>
+      <Stack.Screen name="Settings">
+        {(props) => <SettingsScreen {...props} currentUser={currentUser} />}
+      </Stack.Screen>
+      <Stack.Screen name="Account">
+        {(props) => <AccountScreen {...props} currentUser={currentUser} />}
+      </Stack.Screen>
+      <Stack.Screen name="Equalizer" component={EqualizerScreen} />
+      <Stack.Screen name="OfflineSettings" component={OfflineSettingsScreen} />
       <Stack.Screen name="Album">
         {(props) => (
           <AlbumScreen
@@ -100,11 +115,16 @@ const RootNavigator = React.memo(function RootNavigator({
       <Stack.Screen name="AlbumEdit" component={AlbumEditScreen} />
       <Stack.Screen name="Playlist">
         {(props) => (
-          <PlaylistScreen {...props} onPlayTrackList={playTrackList} onPressEllipsis={setTrackToManage} />
+          <PlaylistScreen
+            {...props}
+            onPlayTrackList={playTrackList}
+            onAddToPlaylist={onAddToPlaylist}
+            onEditTrack={onEditTrack}
+          />
         )}
       </Stack.Screen>
       <Stack.Screen name="Downloaded">
-        {(props) => <DownloadedScreen {...props} isCovered={isModalOpen || isPlayerVisible} onPlayTrackList={playTrackList} onOpenAuthModal={onOpenAuthModal} />}
+        {(props) => <DownloadedScreen {...props} isCovered={isModalOpen || isPlayerVisible} onPlayTrackList={playTrackList} />}
       </Stack.Screen>
       <Stack.Screen name="TrackEdit" component={TrackEditScreen} />
     </Stack.Navigator>

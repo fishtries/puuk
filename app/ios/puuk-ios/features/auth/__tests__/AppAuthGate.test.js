@@ -3,9 +3,9 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { ActivityIndicator } from 'react-native';
 
 import AppAuthGate from '../AppAuthGate';
-import LoginModal from '../LoginModal';
+import AccountScreen from '../AccountScreen';
 
-jest.mock('../LoginModal', () => jest.fn(() => null));
+jest.mock('../AccountScreen', () => jest.fn(() => null));
 
 describe('AppAuthGate', () => {
   beforeEach(() => {
@@ -28,7 +28,7 @@ describe('AppAuthGate', () => {
       size: 'large',
       color: '#FA243C',
     });
-    expect(LoginModal).not.toHaveBeenCalled();
+    expect(AccountScreen).not.toHaveBeenCalled();
   });
 
   test('shows mandatory login for a signed-out user and forwards login success', () => {
@@ -44,10 +44,8 @@ describe('AppAuthGate', () => {
       );
     });
 
-    expect(LoginModal.mock.calls[0][0]).toEqual(
+    expect(AccountScreen.mock.calls[0][0]).toEqual(
       expect.objectContaining({
-        visible: true,
-        mandatory: true,
         currentUser: null,
         onLoginSuccess,
       }),

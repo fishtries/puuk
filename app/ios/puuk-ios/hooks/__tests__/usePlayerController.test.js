@@ -9,7 +9,7 @@ import { authFetch } from '../../shared/api/api';
 import { updateSetting } from '../../shared/storage/settings';
 import { recordPlayStart } from '../../shared/api/artists';
 import { setLocalRating } from '../../offline/outbox/runtime';
-import { readMediaKey, readPlayableIds } from '../../offline';
+import { readMediaKey } from '../../offline';
 import { notifyOfflineIndex } from '../../offline/session';
 import { readWaveQueue, saveWaveQueue, selectLocalWaveTracks } from '../../offline/wave';
 import { queueKey } from '../../utils/queueIdentity';
@@ -37,7 +37,6 @@ jest.mock('../../offline/wave', () => ({
 jest.mock('../../offline', () => ({
   ...jest.requireActual('../../offline'),
   readMediaKey: jest.fn(async () => null),
-  readPlayableIds: jest.fn(async () => new Set()),
 }));
 const isWaveStart = (url) => url.includes('/api/wave/queue') && !url.includes('current_track_id=');
 jest.mock('../../offline/outbox/runtime', () => ({
@@ -1140,7 +1139,7 @@ describe('usePlayerController', () => {
         current: { id: 'recent' }, history: [],
         reserve: ['recent', 'missing', 'ready', 'also-ready'].map(id => ({ id })),
       });
-      readPlayableIds.mockResolvedValue(new Set(['ready', 'also-ready']));
+      selectLocalWaveTracks.mockResolvedValue({ tracks: [{ id: 'ready' }, { id: 'also-ready' }], reserveIds: new Set(['ready']) });
       authFetch.mockImplementation(url => isWaveStart(url)
         ? new Promise(resolve => {
           reply = () => resolve({ ok: true, json: async () => [{ id: 'ready' }, { id: 'fresh', duration: 3600 }] });
@@ -1156,7 +1155,7 @@ describe('usePlayerController', () => {
       expect(defaultPlaybackCoordinator.play).not.toHaveBeenCalled();
       await act(async () => jest.advanceTimersByTimeAsync(1));
       await start;
-      expect(readPlayableIds).toHaveBeenCalledWith(mockSession, ['missing', 'ready', 'also-ready']);
+      expect(selectLocalWaveTracks).toHaveBeenCalledWith(mockSession, { history: [{ id: 'recent' }] });
       expect(controller.currentTrack.id).toBe('ready');
       expect(defaultPlaybackCoordinator.play.mock.lastCall[2].offlineOnly).toBe(true);
       expect(queueIds()).toEqual(['also-ready']);
@@ -1177,14 +1176,14 @@ describe('usePlayerController', () => {
     });
 
     test.each(['fast network', 'empty reserve', 'local playback failed'])('%s keeps the original recommendations request', async scenario => {
-      readPlayableIds.mockResolvedValue(new Set(scenario === 'empty reserve' ? [] : ['also-ready']));
+      selectLocalWaveTracks.mockResolvedValue({ tracks: scenario === 'empty reserve' ? [] : [{ id: 'also-ready' }], reserveIds: new Set() });
       if (scenario === 'local playback failed')
         defaultPlaybackCoordinator.play.mockResolvedValueOnce({ error: new Error('File gone') });
       let start;
       await act(async () => { start = controller.startWave(); });
       if (scenario !== 'fast network') await act(async () => jest.advanceTimersByTimeAsync(450));
       await act(async () => { reply(); await start; });
-      if (scenario === 'fast network') expect(readPlayableIds).not.toHaveBeenCalled();
+      if (scenario === 'fast network') expect(selectLocalWaveTracks).not.toHaveBeenCalled();
       expect(controller.currentTrack.id).toBe('ready');
       expect(queueIds()).toEqual(['fresh']);
       expect(defaultPlaybackCoordinator.play.mock.lastCall[2].offlineOnly).toBeUndefined();

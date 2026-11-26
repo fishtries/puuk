@@ -23,6 +23,11 @@ let cachedSettings = { ...DEFAULT_SETTINGS };
 
 export const TRANSLATIONS = {
   en: {
+    equalizer: 'Equalizer',
+    settingsTitle: 'Settings',
+    offlineTitle: 'Offline storage',
+    customColor: 'Custom color',
+    invalidColor: 'Enter a six-digit hex color',
     // Header & Profile
     profileTitle: 'Profile & Settings',
     profileSignIn: 'Sign In to Puuk',
@@ -67,6 +72,11 @@ export const TRANSLATIONS = {
     version: 'Puuk for iOS • v1.0.0',
   },
   ru: {
+    equalizer: 'Эквалайзер',
+    settingsTitle: 'Настройки',
+    offlineTitle: 'Офлайн-хранилище',
+    customColor: 'Свой цвет',
+    invalidColor: 'Введите цвет в формате #RRGGBB',
     // Header & Profile
     profileTitle: 'Профиль и настройки',
     profileSignIn: 'Войти в Puuk',

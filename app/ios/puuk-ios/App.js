@@ -48,7 +48,7 @@ import GlowTrackBoundary from './components/fullplayer/GlowTrackBoundary';
 import AppAuthGate from './features/auth/AppAuthGate';
 import AddToPlaylistModal from './features/playlists/AddToPlaylistModal';
 import TrackContextMenuModal from './shared/components/TrackContextMenuModal';
-import LoginModal from './features/auth/LoginModal';
+import { applyEqualizer } from './features/equalizer/equalizer';
 import RootNavigator from './navigation/RootNavigator';
 import usePlayerController from './hooks/usePlayerController';
 import useTracksPagination from './features/catalog/hooks/useTracksPagination';
@@ -97,7 +97,6 @@ function AppContent() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [restoreError, setRestoreError] = useState(null);
-  const [isAuthModalVisible, setIsAuthModalVisible] = useState(false);
   const [accentColor, setAccentColor] = useState(
     () => getSettings().accentColor || '#FFDAB9',
   );
@@ -566,13 +565,9 @@ function AppContent() {
     }
   }, [currentTrack, tracks, playTrack, startWave, togglePlayPause]);
 
-  const handleOpenAuthModal = useCallback(() => {
-    setIsAuthModalVisible(true);
-  }, []);
-
-  const handleCloseAuthModal = useCallback(() => {
-    setIsAuthModalVisible(false);
-  }, []);
+  const openSettings = useCallback(() => {
+    navigationRef.navigate('Settings');
+  }, [navigationRef]);
 
   const handleLoginSuccess = useCallback(() => {
     const user = getCachedUser();
@@ -723,6 +718,7 @@ function AppContent() {
     async function initApp() {
       try {
         const s = await loadSettings();
+        if (isMounted) applyEqualizer(s?.equalizer);
         if (s?.serverUrl) {
           setServerUrl(s.serverUrl, { bootstrap: true });
         }
@@ -910,10 +906,12 @@ function AppContent() {
             playTrack={playTrack}
             playTrackList={playTrackList}
             startWave={startWave}
-            isModalOpen={Boolean(trackToManage || trackToAdd || isAuthModalVisible)}
+            isModalOpen={Boolean(trackToManage || trackToAdd)}
             setTrackToManage={setTrackToManage}
+            onAddToPlaylist={handleAddToPlaylist}
+            onEditTrack={handleEditTrack}
             currentUser={currentUser}
-            onOpenAuthModal={handleOpenAuthModal}
+            onOpenAuthModal={openSettings}
             expandProgress={expandProgress}
             isPlayerVisible={isPlayerVisible}
             onExpand={handleExpand}
@@ -1016,12 +1014,6 @@ function AppContent() {
         onClose={handleCloseAddModal}
       />
 
-      <LoginModal
-        visible={isAuthModalVisible}
-        onClose={handleCloseAuthModal}
-        currentUser={currentUser}
-        onLoginSuccess={handleLoginSuccess}
-      />
     </GestureHandlerRootView>
   );
 }

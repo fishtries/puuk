@@ -1,53 +1,32 @@
-// Styles for LoginModal (extracted from the original 739-line file).
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
-  },
-  card: {
-    backgroundColor: '#000000',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-    paddingTop: 18,
-    paddingHorizontal: 20,
-    maxHeight: '88%',
-    width: '100%',
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: '#242426',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  page: { flex: 1, backgroundColor: '#0B0B0D' },
+  backButton: {
+    width: 48,
+    height: 44,
     alignItems: 'center',
-    marginBottom: 14,
-    paddingHorizontal: 4,
+    justifyContent: 'center',
+    marginLeft: 8,
   },
-  title: {
-    color: '#FFF',
-    fontSize: 20,
+  pageTitle: {
+    color: '#fff',
+    fontSize: 34,
     fontWeight: '700',
-    letterSpacing: -0.4,
+    letterSpacing: -0.8,
+    marginBottom: 24,
   },
-  closeButton: {
-    padding: 6,
-    borderRadius: 16,
-    backgroundColor: '#1C1C1E',
+  scrollContent: { paddingHorizontal: 20, paddingTop: 8 },
+  customColor: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#434348',
+    borderWidth: 1,
+    borderColor: '#bbb',
   },
-  scrollView: {
-    width: '100%',
-  },
-  scrollContent: {
-    paddingBottom: Platform.OS === 'ios' ? 44 : 24,
-  },
-
   // ── Profile Card ──
   profileCard: {
     flexDirection: 'row',
@@ -112,44 +91,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#2C2C2E',
-  },
-  unauthHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  unauthIcon: {
-    marginRight: 12,
-  },
-  unauthTitle: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  unauthHint: {
-    color: '#8E8E93',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  signInTriggerBtn: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  signInTriggerText: {
-    color: '#000',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  // ── Login Form ──
-  formContainer: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#2C2C2E',
   },
   segmentedControl: {
     flexDirection: 'row',
@@ -287,6 +228,18 @@ const styles = StyleSheet.create({
     borderColor: '#FFF',
     transform: [{ scale: 1.15 }],
   },
+
+  storageSummary: { paddingVertical: 16 },
+  storageBar: {
+    flexDirection: 'row',
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    backgroundColor: '#363639',
+    marginVertical: 12,
+  },
+  legendRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  legendDot: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
 
   // ── Version Footer ──
   versionText: {

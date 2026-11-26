@@ -9,7 +9,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 
-import LoginModal from './LoginModal';
+import AccountScreen from './AccountScreen';
 
 export default function AppAuthGate({
   isChecking,
@@ -80,10 +80,7 @@ export default function AppAuthGate({
     return (
       <View style={{ flex: 1, backgroundColor: '#000' }}>
         <StatusBar style="light" />
-        <LoginModal
-          visible
-          mandatory
-          onClose={() => {}}
+        <AccountScreen
           currentUser={currentUser}
           onLoginSuccess={onLoginSuccess}
         />
