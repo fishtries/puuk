@@ -143,8 +143,11 @@ function capIds(ids, limit = MAX_EXCLUDE_IDS) {
 }
 
 /** URL /api/wave/queue с повторяющимися query-параметрами исключений. */
-function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [], limit = 50 } = {}) {
+function buildWaveQueueUrl(trackId, { excludeIds = [], queuedIds = [], limit = 50, mode, previousTrackId } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
+  params.set('explain', 'true');
+  if (mode) params.append('mode', mode);
+  if (previousTrackId != null) params.append('previous_track_id', String(previousTrackId));
   const canonicalId = getTrackId(trackId);
   if (canonicalId !== null) {
     params.append('current_track_id', String(canonicalId));
@@ -458,6 +461,7 @@ export default function usePlayerController({ setTracks }) {
       const entry = normalizeTrackDto(track);
       if (!entry || !currentTrackRef.current) return false;
       entry.queueOrigin = 'manual';
+      delete entry.wave_trace;
       const next =
         placement === 'next'
           ? [entry, ...queueRef.current]
@@ -1108,17 +1112,18 @@ export default function usePlayerController({ setTracks }) {
     [player, refreshTrackLoudness, changePlaybackRate, projectRating],
   );
 
-  const saveCurrentWave = useCallback(() => {
+  const saveCurrentWave = useCallback((opening = false) => {
     const session = getOfflineSession();
     if (!durableWaveRef.current || !session || !currentTrackRef.current || pendingWaveSelectionRef.current) return;
     void saveWaveQueue(session, {
       current: currentTrackRef.current, future: queueRef.current, history: historyRef.current,
     }, {
+      ...(opening ? { opening: true } : {}),
       updateReserve: canRequestWave() && !awaitingRecommendationsRef.current,
     }).catch(() => {});
   }, [canRequestWave]);
 
-  const fetchQueue = useCallback((trackId, exclusions = {}, { replaceRecommendations = false, startingRequest } = {}) => {
+  const fetchQueue = useCallback((trackId, exclusions = {}, { replaceRecommendations = false, startingRequest, action = 'append' } = {}) => {
     const epoch = queueEpochRef.current;
     const selection = currentRequestIdRef.current;
     const session = getOfflineSession();
@@ -1149,13 +1154,15 @@ export default function usePlayerController({ setTracks }) {
     queueRequestRef.current = request;
     request.promise = (async () => {
       try {
-        const data = await (startingRequest?.response ?? requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds }), signal));
+        const data = await (startingRequest?.response ?? requestWave(buildWaveQueueUrl(trackId, { ...exclusions, excludeIds, mode: durable ? 'mix' : undefined }), signal));
         if (!isCurrent() || signal.aborted) return [];
         if (durable && !canRequestWave()) return [];
         if (!Array.isArray(data)) throw new Error('Invalid Wave queue');
         const normalizedQueue = mergeUniqueQueue(
           [],
-          data.map(normalizeTrackDto)
+          data.map(track => normalizeTrackDto({
+            ...track, wave_trace: { ...track?.wave_trace, action },
+          }))
             .filter(
               (track) => track && !excluded.has(String(getTrackId(track))) && !dislikeIdsRef.current.has(String(getTrackId(track))),
             ),
@@ -1202,14 +1209,14 @@ export default function usePlayerController({ setTracks }) {
     return request.promise;
   }, [setUpNextQueue, setWaveMode, canRequestWave, saveCurrentWave]);
 
-  const refreshFutureWave = useCallback(() => {
+  const refreshFutureWave = useCallback((action = 'resume') => {
     const trackId = getTrackId(currentTrackRef.current);
     if (!isWaveSessionRef.current || trackId === null) {
       refreshWaveAfterAdvanceRef.current = false;
       return;
     }
     if (isAdvancingRef.current) {
-      refreshWaveAfterAdvanceRef.current = true;
+      refreshWaveAfterAdvanceRef.current = action;
       return;
     }
     refreshWaveAfterAdvanceRef.current = false;
@@ -1219,7 +1226,7 @@ export default function usePlayerController({ setTracks }) {
       queuedIds: queueRef.current.filter((track) =>
         !recommendationsRef.current.has(queueKey(track)),
       ).map(getTrackId),
-    }, { replaceRecommendations: true });
+    }, { replaceRecommendations: true, action });
   }, [fetchQueue]);
 
   useEffect(saveCurrentWave, [saveCurrentWave, creditContextEpoch]);
@@ -1406,7 +1413,7 @@ export default function usePlayerController({ setTracks }) {
       ).map(queueKey));
       if (restart) cycleTracksRef.current = [next, ...queue];
       setHistory(!restart && current ? [...previous, current].slice(-MAX_HISTORY) : previous);
-      saveCurrentWave();
+      saveCurrentWave(restart);
       return true;
     }
     if (!readyReserve && valid()) {
@@ -1442,7 +1449,7 @@ export default function usePlayerController({ setTracks }) {
       try {
         setIsLoading(true);
         if (durableWaveRef.current && (forceLocal || !canRequestWave() || awaitingRecommendationsRef.current)) {
-          if (canRequestWave()) refreshWaveAfterAdvanceRef.current = true;
+          if (canRequestWave()) refreshWaveAfterAdvanceRef.current ||= 'resume';
           if (await advanceLocal(forceLocal ? [currentTrack] : [])) return;
           if (!valid()) return;
           intentRef.current = 'pause';
@@ -1532,7 +1539,7 @@ export default function usePlayerController({ setTracks }) {
         if (epoch === queueEpochRef.current) {
           setIsLoading(false);
           isAdvancingRef.current = false;
-          if (refreshWaveAfterAdvanceRef.current) refreshFutureWave();
+          if (refreshWaveAfterAdvanceRef.current) refreshFutureWave(refreshWaveAfterAdvanceRef.current);
         }
       }
     },
@@ -1902,7 +1909,7 @@ export default function usePlayerController({ setTracks }) {
     } else if (type === 'interactions-drained') {
       reconnectPendingRef.current = false;
       waveRetryAtRef.current = 0;
-      refreshFutureWave();
+      refreshFutureWave('sync');
       return;
     } else return;
     applyRatingProjection();
@@ -2036,15 +2043,18 @@ export default function usePlayerController({ setTracks }) {
       let failedTrack;
       if (canRequestWave({ ignoreBackoff: true })) {
         const controller = new AbortController();
+        const openings = snapshot?.openingIds ?? [];
         const lastPlayed = new Map(played.map((track, index) => [String(getTrackId(track)), index]));
         const response = requestWave(buildWaveQueueUrl(null, {
-          limit: 8,
-          excludeIds: [...dislikes, ...played.map(getTrackId)],
+          limit: 8, mode: 'start', previousTrackId: getTrackId(formerTrack),
+          excludeIds: [...dislikes, ...openings, ...played.map(getTrackId)],
         }), controller.signal).then(data => {
           if (!Array.isArray(data)) return [];
           // The server can return recent tracks after exhausting other candidates.
-          return data.filter(track => !dislikes.has(String(getTrackId(track)))).sort((a, b) =>
-            (lastPlayed.get(String(getTrackId(a))) ?? -1) - (lastPlayed.get(String(getTrackId(b))) ?? -1));
+          return data.filter(track => getTrackId(track) !== null && !dislikes.has(String(getTrackId(track)))).sort((a, b) =>
+            openings.indexOf(String(getTrackId(a))) - openings.indexOf(String(getTrackId(b))) ||
+            (lastPlayed.get(String(getTrackId(a))) ?? -1) - (lastPlayed.get(String(getTrackId(b))) ?? -1))
+            .map((track, i) => ({ ...track, wave_trace: { ...track.wave_trace, action: 'start', start_position: i + 1 } }));
         }).catch(() => null);
         const request = { epoch, controller, response };
         queueRequestRef.current = request;
@@ -2058,7 +2068,9 @@ export default function usePlayerController({ setTracks }) {
             });
             if (started && valid({ allowIntentChange: true })) {
               waveRetryAtRef.current = 0;
-              void fetchQueue(getTrackId(currentTrackRef.current), {}, { replaceRecommendations: true, startingRequest: request });
+              void fetchQueue(getTrackId(currentTrackRef.current), {}, {
+                replaceRecommendations: true, startingRequest: request, action: 'after_reserve',
+              });
               return;
             }
             if (!valid()) return;
@@ -2087,7 +2099,7 @@ export default function usePlayerController({ setTracks }) {
               setUpNextQueue(future);
               recommendationsRef.current = new Set(queueRef.current.map(queueKey));
               cycleTracksRef.current = [first, ...future];
-              saveCurrentWave();
+              saveCurrentWave(true);
               return;
             }
             if (!valid()) return;
@@ -2101,7 +2113,7 @@ export default function usePlayerController({ setTracks }) {
           session, valid, current: formerTrack, previous: played, restart: true,
           exclude: failedTrack ? [failedTrack] : [],
         });
-        if (started && canRequestWave()) refreshWaveAfterAdvanceRef.current = true;
+        if (started && canRequestWave()) refreshWaveAfterAdvanceRef.current ||= 'resume';
       } else if (failedTrack) {
         setCurrentTrack(formerTrack);
       }
@@ -2111,7 +2123,7 @@ export default function usePlayerController({ setTracks }) {
       if (epoch === queueEpochRef.current) {
         isAdvancingRef.current = false;
         setIsLoading(false);
-        if (refreshWaveAfterAdvanceRef.current) refreshFutureWave();
+        if (refreshWaveAfterAdvanceRef.current) refreshFutureWave(refreshWaveAfterAdvanceRef.current);
       }
     }
   }, [advanceLocalWave, beginWaveSession, canRequestWave, fetchQueue, tryWaveTrack, refreshFutureWave, saveCurrentWave, setCurrentTrack, setHistory, setUpNextQueue, setWaveMode]);

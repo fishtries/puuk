@@ -133,18 +133,32 @@ export default function HomeScreen({
   );
 
   const handleEllipsisTrack = onAddToPlaylist || onPressEllipsis;
+  const hasTracks = tracks.length > 0;
+  const hasCurrentTrack = Boolean(currentTrack);
+
+  const waveCard = useMemo(
+    () => <YourMixCard onPress={onStartWave} isVisible={isVisible} />,
+    [onStartWave, isVisible],
+  );
+
+  const genreMixesSection = useMemo(
+    () => (
+      <GenreMixesSection
+        currentUser={currentUser}
+        navigation={navigation}
+        onPlayTrackList={onPlayTrackList}
+        accentColor={accentColor}
+        sections={genreMixes}
+      />
+    ),
+    [currentUser, navigation, onPlayTrackList, accentColor, genreMixes],
+  );
 
   const ListHeader = useMemo(
     () => (
       <>
-        <YourMixCard onPress={onStartWave} isVisible={isVisible} />
-        <GenreMixesSection
-          currentUser={currentUser}
-          navigation={navigation}
-          onPlayTrackList={onPlayTrackList}
-          accentColor={accentColor}
-          sections={genreMixes}
-        />
+        {waveCard}
+        {genreMixesSection}
         <RecentlyListenedSection
           tracks={recentlyListenedTracks}
           isLoading={isRecentlyListenedLoading}
@@ -153,24 +167,19 @@ export default function HomeScreen({
           onPlayTrack={onPlayTrack}
           onPressEllipsis={handleEllipsisTrack}
         />
-        {tracks.length > 0 && <SectionHeader title="Tracks" />}
+        {hasTracks && <SectionHeader title="Tracks" />}
       </>
     ),
     [
-      onStartWave,
-      isVisible,
-      currentUser,
-      navigation,
-      onPlayTrackList,
-      accentColor,
-      genreMixes,
+      waveCard,
+      genreMixesSection,
       recentlyListenedTracks,
       isRecentlyListenedLoading,
       currentTrack,
       isPlaying,
       onPlayTrack,
       handleEllipsisTrack,
-      tracks.length,
+      hasTracks,
     ],
   );
 
@@ -197,10 +206,9 @@ export default function HomeScreen({
         keyExtractor={keyExtractor}
         ListHeaderComponent={ListHeader}
         ListFooterComponent={ListFooter}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: currentTrack ? 100 : 70 },
-        ]}
+        contentContainerStyle={
+          hasCurrentTrack ? styles.scrollContentWithPlayer : styles.scrollContent
+        }
         showsVerticalScrollIndicator={false}
         onEndReached={handleEndReached}
         onEndReachedThreshold={0.5}
@@ -244,6 +252,11 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingTop: 0,
+    paddingBottom: 70,
+  },
+  scrollContentWithPlayer: {
+    paddingTop: 0,
+    paddingBottom: 100,
   },
   sectionHeader: {
     flexDirection: 'row',

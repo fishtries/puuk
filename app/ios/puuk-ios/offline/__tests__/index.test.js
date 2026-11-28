@@ -23,7 +23,6 @@ import {
   publishVerifiedDownload,
   queueDownload,
   readCollection,
-  readFavoriteDownloads,
   readLyrics,
   readMediaKey,
   readPlayableIds,
@@ -254,9 +253,11 @@ test('opens a saved favorite and version-bound lyrics after restoring the same a
   playable.release();
   mockFiles.delete(playable.uri);
   expect(await acquirePlayable(restored, track.id)).toBeNull();
-  expect(await readFavoriteDownloads(restored)).toMatchObject({
-    queued: [track.id],
-  });
+  const db = await offlineDatabase();
+  expect(db.getFirstSync(
+    'SELECT track_id, state FROM job WHERE activation_id=? AND id=?',
+    restored.activationId, transfer.jobId,
+  )).toMatchObject({ track_id: track.id, state: 'queued' });
 });
 
 test('fences old operations across owners and repeated login to the same account', async () => {
@@ -594,6 +595,7 @@ test('a changed desired version does not count an old file as ready and requeues
   const session = await login('desired-version', user);
   const transfer = await reserve(session, 'playlist:test');
   await publishVerifiedDownload(session, transfer);
+  expect(await readPlayableIds(session, [track.id])).toEqual(new Set([track.id]));
   db.runSync(
     'UPDATE track_version SET desired_version=? WHERE owner=? AND track_id=?',
     'b'.repeat(64),
@@ -601,6 +603,7 @@ test('a changed desired version does not count an old file as ready and requeues
     track.id,
   );
   expect(await acquirePlayable(session, track.id)).toBeNull();
+  expect(await readPlayableIds(session, [track.id])).toEqual(new Set());
   const { jobId } = await queueDownload(session, track.id, 'playlist:test');
   expect(
     (await listDownloadJobs(session)).find((job) => job.jobId === jobId).state,
@@ -997,12 +1000,13 @@ test('Wave cold restore reopens SQLite, retains exact queue position and exclude
   const ready = { id: 'upcoming', duration: 150 };
   const disliked = { id: '7a9c3226-3d42-4b07-90e5-143f8dd4d698', duration: 165 };
   const fresh = { id: 'library', duration: 160 };
+  const trace = { action: 'append', source: 'alternate', anchor_id: 'example' };
   for (const dto of [played, current, ready, disliked, fresh]) {
     await publishTrack(session, dto);
   }
   const rated = await setLocalRating(session, disliked, 'dislike');
   expect(rated.state).toBe('pending');
-  await saveWaveQueue(session, { current, future: [unread, disliked, ready], history: [played] });
+  await saveWaveQueue(session, { current, future: [unread, disliked, { ...ready, wave_trace: trace }], history: [played] });
   closeOfflineSession();
   await new Promise(resolve => setImmediate(resolve));
   mockReopenDatabase();
@@ -1016,6 +1020,8 @@ test('Wave cold restore reopens SQLite, retains exact queue position and exclude
   const local = await selectLocalWaveTracks(restored, snapshot);
   expect(local.reserveIds.has(ready.id)).toBe(true);
   expect(local.tracks.map(dto => dto.id)).toEqual([ready.id, fresh.id, played.id]);
+  expect(local.tracks[0].wave_trace).toEqual(trace);
+  expect(local.tracks[1].wave_trace).toEqual({ action: 'local_continue', source: 'local_library' });
   const alternate = await login('wave-other', { ...session.owner, userId: '22' }, 3);
   expect(await readWaveQueue(alternate)).toBeNull();
   expect(await readOfflineWaveStatus(restored)).toBeNull();
@@ -1127,10 +1133,12 @@ test('offline Wave follows saved recommendation links and rebuilds from a new st
     mockReopenDatabase();
     const first = await selectLocalWaveTracks(session, {});
     expect(first.tracks.map(track => track.id)).toEqual(['a', 'd', 'c', 'b']);
+    expect(first.tracks[0].wave_trace).toMatchObject({ action: 'local_start', source: 'local_start' });
+    expect(first.tracks[1].wave_trace).toMatchObject({ source: 'local_neighbors', anchor_id: 'a' });
     const second = await selectLocalWaveTracks(session, { history: [first.tracks[0]] });
     expect(second.tracks.map(track => track.id)).toEqual(['b', 'c', 'd', 'a']);
     const replay = await selectLocalWaveTracks(session, { history: ['c', 'a', 'b', 'd'].map(id => ({ id })) });
-    expect(replay.tracks[0].id).toBe('a');
+    expect(replay.tracks[0].id).toBe('c');
     fetch.mockRejectedValueOnce(new Error('unavailable'));
     await expect(refreshWavePlan(session, signal, true)).rejects.toThrow('unavailable');
     const continued = await selectLocalWaveTracks(session, {
@@ -1141,4 +1149,19 @@ test('offline Wave follows saved recommendation links and rebuilds from a new st
     fetch.mockRestore();
     random.mockRestore();
   }
+});
+
+
+test('local openings rotate after process restart without playback history', async () => {
+  const session = await login('opening-rotation', { origin: 'https://rotation.test', userId: '17' });
+  for (const id of ['a', 'b', 'c']) await publishTrack(session, { id });
+  const heads = [];
+  for (let i = 0; i < 4; i++) {
+    const { tracks } = await selectLocalWaveTracks(session, { history: [] });
+    heads.push(tracks[0].id);
+    await saveWaveQueue(session, { current: tracks[0], future: [], history: [] }, { opening: true });
+    mockReopenDatabase();
+  }
+  expect(new Set(heads.slice(0, 3)).size).toBe(3);
+  expect(heads[3]).toBe(heads[0]);
 });

@@ -72,6 +72,35 @@ describe('HomeScreen', () => {
     jest.clearAllMocks();
   });
 
+  test('reuses the wave card on playback updates and updates its visibility', () => {
+    let renderer;
+    act(() => {
+      renderer = TestRenderer.create(<HomeScreen tracks={mockTracks} />);
+    });
+    const initialRenders = YourMixCard.mock.calls.length;
+    expect(initialRenders).toBeGreaterThan(0);
+
+    act(() => {
+      renderer.update(
+        <HomeScreen tracks={mockTracks} currentTrack={mockTracks[0]} isPlaying />,
+      );
+    });
+    expect(YourMixCard).toHaveBeenCalledTimes(initialRenders);
+
+    act(() => {
+      renderer.update(
+        <HomeScreen
+          tracks={mockTracks}
+          currentTrack={mockTracks[0]}
+          isPlaying
+          isVisible={false}
+        />,
+      );
+    });
+    expect(YourMixCard.mock.lastCall[0].isVisible).toBe(false);
+    act(() => renderer.unmount());
+  });
+
   test('renders YourMixCard and tracks list directly below it', () => {
     let renderer;
     act(() => {

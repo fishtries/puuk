@@ -12,7 +12,7 @@ import TrackLoadingBadge from '../TrackLoadingBadge';
 import { MenuView } from '@react-native-menu/menu';
 import styles from '../playerStyles';
 import PlayerHeader, { isNativeMenuAvailable } from '../PlayerHeader';
-import { ActionSheetIOS, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { ActionSheetIOS, ActivityIndicator, Alert, TouchableOpacity, Text } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Constants from 'expo-constants';
 import * as api from '../../../shared/api/api';
@@ -298,6 +298,31 @@ describe('FullPlayerModal - Native Pop-up button & swapped order', () => {
       menuView.props.onPressAction({ nativeEvent: { event: 'edit_track' } });
     });
     expect(onEditTrack).toHaveBeenCalledWith(mockTrack);
+  });
+
+  it('shows the actual Wave anchor and the change in position for the playing track', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const track = { ...mockTrack, wave_trace: {
+      action: 'after_reserve', source: 'alternate', anchor_title: 'Anchor',
+      mix_position: 5, server_position: 1, start_position: 2,
+    } };
+    let renderer;
+    try {
+      await act(async () => {
+        renderer = TestRenderer.create(<FullPlayerModal currentTrack={track} isPlayerVisible />);
+      });
+      const menu = renderer.root.findByProps({ testID: 'native-menu-view' });
+      expect(menu.props.actions).toContainEqual(expect.objectContaining({ id: 'wave_trace' }));
+      act(() => menu.props.onPressAction({ nativeEvent: { event: 'wave_trace' } }));
+      const [title, message] = alert.mock.lastCall;
+      expect(title).toBe(mockTrack.title);
+      expect(message).toContain('когда уже заиграл скачанный трек');
+      expect(message).toContain('Опорный трек — Anchor');
+      expect(message).toContain('№5 в миксе → №1 в ответе сервера → №2 после сортировки на iOS');
+    } finally {
+      if (renderer) await act(async () => renderer.unmount());
+      alert.mockRestore();
+    }
   });
 
   it('does not have layout sliding animation on topHeaderRight so badge appears in place with fade', async () => {

@@ -4,6 +4,7 @@ const EMPTY = Object.freeze({ currentTime: 0, duration: 0, playing: false });
 const stores = new WeakMap();
 const noopSubscribe = () => () => {};
 const emptySnapshot = () => EMPTY;
+const identity = (position) => position;
 
 // One native subscription per player. React's transport consumers observe
 // semantic changes; progress consumers observe exact audio
@@ -76,10 +77,10 @@ export function usePlaybackState(player) {
   return useSyncExternalStore(store?.subscribeState || noopSubscribe, store?.state || emptySnapshot);
 }
 
-export function usePlaybackPosition(player, enabled = true) {
+export function usePlaybackPosition(player, enabled = true, select = identity) {
   const store = player && enabled ? getStore(player) : null;
-  const subscribe = useCallback(listener => store ? store.subscribePosition(listener) : () => {}, [store]);
-  return useSyncExternalStore(subscribe, store?.position || emptySnapshot);
+  const snapshot = useCallback(() => select(store?.position() ?? EMPTY), [select, store]);
+  return useSyncExternalStore(store?.subscribePosition || noopSubscribe, snapshot);
 }
 
 const zero = () => 0;

@@ -310,28 +310,6 @@ export function listPlayableTracks(session) {
   });
 }
 
-export function readFavoriteDownloads(session) {
-  return useIndex(session, { ready: [], queued: [] }, (db, owner) => {
-    const ready = [];
-    for (const row of db.getAllSync(
-      'SELECT * FROM media WHERE owner=?',
-      owner,
-    )) {
-      if (matchesFile(offlineFile(row.path), row.bytes))
-        ready.push(row.track_id);
-      else removeMissing(db, session, row);
-    }
-    const queued = db
-      .getAllSync(
-        "SELECT track_id FROM job WHERE owner=? AND activation_id=? AND reason='foreground-favorites' AND state='queued'",
-        owner,
-        session.activationId,
-      )
-      .map((row) => row.track_id);
-    return { ready, queued };
-  });
-}
-
 export function readLyrics(session, key) {
   const unknown = { state: 'unknown' };
   if (!keyMatches(session, key)) return Promise.resolve(unknown);
@@ -821,7 +799,7 @@ export function cleanupUnretainedMedia(session, trackId) {
           db.runSync('DELETE FROM media_cleanup WHERE path=? AND owner=?', row.path, owner);
         } catch { /* Retry this unique path on the next cleanup. */ }
       }
-      notifyOfflineIndex({ type: 'missing', session });
+      notifyOfflineIndex({ type: 'missing', session, trackId: String(trackId) });
     }
     return allowed;
   });

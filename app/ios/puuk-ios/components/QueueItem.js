@@ -17,6 +17,7 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import CoverImage from '../shared/media/CoverImage';
+import { describeWaveTrace } from '../shared/domain/waveTrace';
 import {
   getSelectableArtists,
   normalizeCredits,
@@ -112,6 +113,7 @@ export default function QueueItem({
     ActionSheetIOS.showActionSheetWithOptions(
       {
         title: item.title,
+        message: describeWaveTrace(item.wave_trace),
         options: ['Отмена', ...actions.map((action) => action.title)],
         cancelButtonIndex: 0,
         destructiveButtonIndex: actions.length,

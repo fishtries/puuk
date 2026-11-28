@@ -1167,6 +1167,7 @@ describe('usePlayerController', () => {
       expect(queueIds()).toEqual(action === 'switch' ? ['next'] : ['fresh']);
       expect(authFetch.mock.calls.filter(([url]) => url.includes('/wave/queue'))).toHaveLength(1);
       if (action === 'play') {
+        expect(controller.upNextQueue[0].wave_trace.action).toBe('after_reserve');
         await act(async () => controller.queueControls.cycleRepeatMode());
         await act(async () => controller.fetchNextTrack());
         await act(async () => controller.fetchNextTrack());
@@ -1221,14 +1222,17 @@ describe('usePlayerController', () => {
       json: async () => isWaveStart(url) ? [{ id: 'now' }, ...candidates] : candidates,
     }));
     await act(async () => controller.startWave());
-    await act(async () => controller.queueControls.enqueue({ id: 'manual' }));
+    expect(controller.currentTrack.wave_trace).toMatchObject({ action: 'start', start_position: 1 });
+    await act(async () => controller.queueControls.enqueue({ id: 'manual', wave_trace: { action: 'start' } }));
     expect(queueIds()).toEqual(['old', 'manual']);
     await act(async () => controller.handleToggleDislike({ id: 'unavailable' }));
-    candidates = [{ id: 'unavailable' }, { id: 'fresh' }];
+    candidates = [{ id: 'unavailable' }, { id: 'fresh', wave_trace: { source: 'alternate', anchor_id: 'seed' } }];
     const plays = defaultPlaybackCoordinator.play.mock.calls.length;
     const token = selection();
     await act(async () => notifyOfflineIndex({ type: 'interactions-drained', session: mockSession }));
     expect(queueIds()).toEqual(['manual', 'fresh']);
+    expect(controller.upNextQueue[0].wave_trace).toBeUndefined();
+    expect(controller.upNextQueue[1].wave_trace).toEqual({ action: 'sync', source: 'alternate', anchor_id: 'seed' });
     expect(controller.currentTrack.id).toBe('now');
     expect(defaultPlaybackCoordinator.play).toHaveBeenCalledTimes(plays);
     expect(selection()).toBe(token);

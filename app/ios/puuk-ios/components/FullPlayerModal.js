@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import CoverImage, { prefetchCover } from '../shared/media/CoverImage';
 import { areTrackIdsEqual, getTrackId } from '../shared/domain/trackAdapter';
+import { describeWaveTrace } from '../shared/domain/waveTrace';
 import { authFetch } from '../shared/api/api';
 import ArtistSelector from '../shared/components/ArtistSelector';
 
@@ -1133,6 +1134,8 @@ const FullPlayerModal = ({
 
       if (nativeEvent.event === 'share' && SHARE_LINKS_ENABLED) {
         presentShareEntity(activeTrack, 'track');
+      } else if (nativeEvent.event === 'wave_trace') {
+        Alert.alert(activeTrack.title || 'Почему этот трек?', describeWaveTrace(activeTrack.wave_trace));
       } else if (nativeEvent.event === 'dislike') {
         if (!dislikePending && onToggleDislike) {
           Promise.resolve(onToggleDislike(activeTrack)).catch(() => {
@@ -1168,6 +1171,11 @@ const FullPlayerModal = ({
   const menuActions = useMemo(
     () => [
       ...(SHARE_LINKS_ENABLED ? [{ id: 'share', title: 'Поделиться', image: Platform.select({ ios: 'square.and.arrow.up' }) }] : []),
+      ...(currentTrack?.wave_trace ? [{
+        id: 'wave_trace',
+        title: 'Почему этот трек?',
+        image: Platform.select({ ios: 'info.circle' }),
+      }] : []),
       ...(currentTrack?.audio_revision ? [{
         id: 'wrong_recording',
         title: 'Не та версия',
