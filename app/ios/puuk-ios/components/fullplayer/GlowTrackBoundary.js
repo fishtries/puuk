@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { View, StyleSheet, Dimensions, PixelRatio } from 'react-native';
 import { usePlaybackPosition } from '../../hooks/playbackStatus';
 import Svg, {
@@ -31,15 +31,6 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
   accentColor = '#FFDAB9',
   width = SCREEN_WIDTH,
 }) {
-  const position = usePlaybackPosition(player, isVisible);
-  const currentTime = player ? position.currentTime : fallbackTime;
-  const duration = player ? position.duration : fallbackDuration;
-  // Прогресс границы трека (0..1)
-  const displayProgress = useMemo(() => {
-    if (!duration || duration <= 0) return 0;
-    return Math.max(0, Math.min(1, currentTime / duration));
-  }, [currentTime, duration]);
-
   const totalLength = useMemo(() => {
     return getBoundaryTotalLength(width, CORNER_RADIUS);
   }, [width]);
@@ -48,15 +39,81 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
     return getBoundaryPathD(width, CORNER_RADIUS, SVG_PAD_TOP);
   }, [width]);
 
-  const dashOffset = useMemo(() => {
-    // Subpixel audio ticks need not rebuild the filtered SVG subtree. Keep
-    // physical-pixel precision, including exact start/end and backward seeks.
-    return PixelRatio.roundToNearestPixel(totalLength * (1 - displayProgress));
-  }, [totalLength, displayProgress]);
-
-  const hasProgress = displayProgress > 0;
+  const selectDashOffset = useCallback(({ currentTime, duration }) => {
+    if (!(duration > 0 && currentTime > 0)) return null;
+    const progress = Math.min(1, currentTime / duration);
+    return PixelRatio.roundToNearestPixel(totalLength * (1 - progress));
+  }, [totalLength]);
+  // Compare physical pixels before React schedules an update.
+  const liveDashOffset = usePlaybackPosition(player, isVisible, selectDashOffset);
+  const dashOffset = player
+    ? liveDashOffset
+    : selectDashOffset({ currentTime: fallbackTime, duration: fallbackDuration });
+  const hasProgress = dashOffset !== null;
 
   const yBottom = CORNER_RADIUS + SVG_PAD_TOP;
+
+  const definitions = useMemo(
+    () => (
+      <Defs>
+        {/* Физический фильтр размытия по Гауссу для широкого атмосферного свечения */}
+        <Filter id="ambientBlur" x="-30%" y="-30%" width="160%" height="160%">
+          <FeGaussianBlur stdDeviation="12" />
+        </Filter>
+
+        {/* Фильтр размытия средней дальности для мягкого ореола */}
+        <Filter id="midBlur" x="-30%" y="-30%" width="160%" height="160%">
+          <FeGaussianBlur stdDeviation="5" />
+        </Filter>
+
+        {/* Сверхширокое высокое рассеянное свечение вверх */}
+        <LinearGradient
+          id="neonTallAmbientDiffuse"
+          x1="0"
+          y1={yBottom}
+          x2="0"
+          y2={0}
+          gradientUnits="userSpaceOnUse"
+        >
+          <Stop offset="0%" stopColor={accentColor} stopOpacity={0.35} />
+          <Stop offset="25%" stopColor={accentColor} stopOpacity={0.2} />
+          <Stop offset="50%" stopColor={accentColor} stopOpacity={0.08} />
+          <Stop offset="75%" stopColor={accentColor} stopOpacity={0.02} />
+          <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
+        </LinearGradient>
+
+        {/* Широкий неоновый ореол средней дальности */}
+        <LinearGradient
+          id="neonMidHalo"
+          x1="0"
+          y1={yBottom}
+          x2="0"
+          y2={SVG_PAD_TOP}
+          gradientUnits="userSpaceOnUse"
+        >
+          <Stop offset="0%" stopColor={accentColor} stopOpacity={0.65} />
+          <Stop offset="35%" stopColor={accentColor} stopOpacity={0.4} />
+          <Stop offset="70%" stopColor={accentColor} stopOpacity={0.15} />
+          <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
+        </LinearGradient>
+
+        {/* Тело линии: мягкий переход цвета акцента без едкого белого пересвета */}
+        <LinearGradient
+          id="neonTubeBody"
+          x1="0"
+          y1={yBottom}
+          x2="0"
+          y2={SVG_PAD_TOP}
+          gradientUnits="userSpaceOnUse"
+        >
+          <Stop offset="0%" stopColor="#ffffff" stopOpacity={0.65} />
+          <Stop offset="30%" stopColor={accentColor} stopOpacity={0.85} />
+          <Stop offset="100%" stopColor={accentColor} stopOpacity={0.7} />
+        </LinearGradient>
+      </Defs>
+    ),
+    [accentColor, yBottom],
+  );
 
   return useMemo(() => (
     <View style={styles.container} pointerEvents="none">
@@ -67,63 +124,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       >
-        <Defs>
-          {/* Физический фильтр размытия по Гауссу для широкого атмосферного свечения */}
-          <Filter id="ambientBlur" x="-30%" y="-30%" width="160%" height="160%">
-            <FeGaussianBlur stdDeviation="12" />
-          </Filter>
-
-          {/* Фильтр размытия средней дальности для мягкого ореола */}
-          <Filter id="midBlur" x="-30%" y="-30%" width="160%" height="160%">
-            <FeGaussianBlur stdDeviation="5" />
-          </Filter>
-
-          {/* Сверхширокое высокое рассеянное свечение вверх */}
-          <LinearGradient
-            id="neonTallAmbientDiffuse"
-            x1="0"
-            y1={yBottom}
-            x2="0"
-            y2={0}
-            gradientUnits="userSpaceOnUse"
-          >
-            <Stop offset="0%" stopColor={accentColor} stopOpacity={0.35} />
-            <Stop offset="25%" stopColor={accentColor} stopOpacity={0.2} />
-            <Stop offset="50%" stopColor={accentColor} stopOpacity={0.08} />
-            <Stop offset="75%" stopColor={accentColor} stopOpacity={0.02} />
-            <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
-          </LinearGradient>
-
-          {/* Широкий неоновый ореол средней дальности */}
-          <LinearGradient
-            id="neonMidHalo"
-            x1="0"
-            y1={yBottom}
-            x2="0"
-            y2={SVG_PAD_TOP}
-            gradientUnits="userSpaceOnUse"
-          >
-            <Stop offset="0%" stopColor={accentColor} stopOpacity={0.65} />
-            <Stop offset="35%" stopColor={accentColor} stopOpacity={0.4} />
-            <Stop offset="70%" stopColor={accentColor} stopOpacity={0.15} />
-            <Stop offset="100%" stopColor={accentColor} stopOpacity={0.0} />
-          </LinearGradient>
-
-          {/* Тело линии: мягкий переход цвета акцента без едкого белого пересвета */}
-          <LinearGradient
-            id="neonTubeBody"
-            x1="0"
-            y1={yBottom}
-            x2="0"
-            y2={SVG_PAD_TOP}
-            gradientUnits="userSpaceOnUse"
-          >
-            <Stop offset="0%" stopColor="#ffffff" stopOpacity={0.65} />
-            <Stop offset="30%" stopColor={accentColor} stopOpacity={0.85} />
-            <Stop offset="100%" stopColor={accentColor} stopOpacity={0.7} />
-          </LinearGradient>
-        </Defs>
-
+        {definitions}
         {/* Базовая направляющая по скругленной границе */}
         <Path
           d={pathD}
@@ -189,7 +190,7 @@ const GlowTrackBoundary = React.memo(function GlowTrackBoundary({
         ) : null}
       </Svg>
     </View>
-  ), [width, yBottom, accentColor, pathD, totalLength, dashOffset, hasProgress]);
+  ), [width, definitions, pathD, totalLength, dashOffset, hasProgress]);
 });
 
 const styles = StyleSheet.create({

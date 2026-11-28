@@ -6,7 +6,11 @@ jest.mock('../../../offline/availability', () => ({
   clearOrdinaryAudioCache: jest.fn(),
 }));
 import SettingsScreen from '../SettingsScreen';
-import { getSettings, t } from '../../../shared/storage/settings';
+import {
+  getSettings,
+  t,
+  updateSetting,
+} from '../../../shared/storage/settings';
 
 jest.mock('../../../shared/api/api', () => ({
   loginWithCode: jest.fn(),
@@ -57,6 +61,55 @@ describe('SettingsScreen', () => {
     expect(navigation.goBack).toHaveBeenCalled();
     await act(async () => tree.unmount());
   });
+  test('previews, cancels and saves a custom accent picked from the spectrum', async () => {
+    const original = getSettings().accentColor;
+    let tree;
+    await act(async () => {
+      tree = TestRenderer.create(
+        <SettingsScreen navigation={{ goBack: jest.fn() }} />,
+      );
+    });
+    const button = (label) =>
+      tree.root
+        .findAllByType(TouchableOpacity)
+        .find(
+          (node) =>
+            node.props.accessibilityLabel === label ||
+            node
+              .findAllByType(Text)
+              .some((text) => text.props.children === label),
+        );
+    const pickCyan = async () => {
+      await act(async () => button('Custom color').props.onPress());
+      const field = tree.root.findByProps({
+        accessibilityLabel: 'Hue and saturation',
+      });
+      await act(async () =>
+        field.props.onLayout({
+          nativeEvent: { layout: { width: 200, height: 100 } },
+        }),
+      );
+      await act(async () =>
+        field.props.onResponderGrant({
+          nativeEvent: { locationX: 100, locationY: 0 },
+        }),
+      );
+      await act(async () => field.props.onResponderRelease());
+    };
+    await pickCyan();
+    await act(async () => button('Cancel').props.onPress());
+    expect(getSettings().accentColor).toBe(original);
+    await pickCyan();
+    await act(async () => button('Done').props.onPress());
+    expect(getSettings().accentColor).toBe('#00FFFF');
+    expect(button('Custom color').props.accessibilityState).toEqual({
+      expanded: false,
+      selected: true,
+    });
+    await act(async () => tree.unmount());
+    await updateSetting('accentColor', original);
+  });
+
   test('renders Sound Check setting in Audio & Playback section and allows toggling', async () => {
     let renderer;
     await act(async () => {

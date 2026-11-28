@@ -27,7 +27,6 @@ export const TRANSLATIONS = {
     settingsTitle: 'Settings',
     offlineTitle: 'Offline storage',
     customColor: 'Custom color',
-    invalidColor: 'Enter a six-digit hex color',
     // Header & Profile
     profileTitle: 'Profile & Settings',
     profileSignIn: 'Sign In to Puuk',
@@ -76,7 +75,6 @@ export const TRANSLATIONS = {
     settingsTitle: 'Настройки',
     offlineTitle: 'Офлайн-хранилище',
     customColor: 'Свой цвет',
-    invalidColor: 'Введите цвет в формате #RRGGBB',
     // Header & Profile
     profileTitle: 'Профиль и настройки',
     profileSignIn: 'Войти в Puuk',

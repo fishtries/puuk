@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import AccentPalette from './AccentPalette';
 import { View, Text, TouchableOpacity, Switch, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { updateSetting, t } from '../../shared/storage/settings';
@@ -21,25 +22,15 @@ export default function SettingsScreen({ navigation, currentUser }) {
   const settings = usePageSettings();
   const { language: lang, accentColor: accent } = settings;
   const presetSelected = ACCENT_COLORS.some((color) => color.hex === accent);
-  const chooseCustomColor = () => {
-    Alert.prompt(
-      t('customColor', lang),
-      '#RRGGBB',
-      [
-        { text: t('cancel', lang), style: 'cancel' },
-        {
-          text: 'OK',
-          onPress: (input) => {
-            const hex = (input || '').trim().replace(/^#/, '').toUpperCase();
-            if (/^[0-9A-F]{6}$/.test(hex))
-              updateSetting('accentColor', '#' + hex);
-            else Alert.alert(t('invalidColor', lang));
-          },
-        },
-      ],
-      'plain-text',
-      accent,
-    );
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [draggingColor, setDraggingColor] = useState(false);
+  const closePalette = () => {
+    setPaletteOpen(false);
+    setDraggingColor(false);
+  };
+  const saveAccent = (value) => {
+    closePalette();
+    return updateSetting('accentColor', value);
   };
   const handleClearCache = () => {
     Alert.alert(t('clearCache', lang), t('clearCacheConfirm', lang), [
@@ -72,6 +63,7 @@ export default function SettingsScreen({ navigation, currentUser }) {
 
   return (
     <SettingsPage
+      scrollEnabled={!draggingColor}
       navigation={navigation}
       title={t('settingsTitle', lang)}
       lang={lang}
@@ -120,7 +112,7 @@ export default function SettingsScreen({ navigation, currentUser }) {
                   { backgroundColor: c.hex },
                   accent === c.hex && styles.colorDotActive,
                 ]}
-                onPress={() => updateSetting('accentColor', c.hex)}
+                onPress={() => saveAccent(c.hex)}
               />
             ))}
             <TouchableOpacity
@@ -130,16 +122,32 @@ export default function SettingsScreen({ navigation, currentUser }) {
                 styles.customColor,
                 !presetSelected && { backgroundColor: accent },
               ]}
-              onPress={chooseCustomColor}
+              accessibilityState={{
+                expanded: paletteOpen,
+                selected: !presetSelected,
+              }}
+              hitSlop={{ top: 8, bottom: 8, right: 8, left: 3 }}
+              onPress={() =>
+                paletteOpen ? closePalette() : setPaletteOpen(true)
+              }
             >
               <Ionicons
-                name="color-wand-outline"
+                name="color-palette-outline"
                 size={15}
                 color={presetSelected ? '#fff' : '#000'}
               />
             </TouchableOpacity>
           </View>
         </View>
+        {paletteOpen && (
+          <AccentPalette
+            accent={accent}
+            lang={lang}
+            onDrag={setDraggingColor}
+            onCancel={closePalette}
+            onSave={saveAccent}
+          />
+        )}
       </View>
 
       {/* ── 3. Audio & Playback Section ── */}
