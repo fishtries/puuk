@@ -310,9 +310,8 @@ test('opening Favorites waits for the in-flight rating attempt before reading', 
   index.getOfflineSession = () => mockActive;
   index.isOfflineSessionCurrent = session => session === mockActive;
   index.readCollection = async () => null;
-  index.readFavoriteDownloads = async () => ({ ready: [] });
+  index.readPlayableIds = async () => new Set();
   index.subscribeOfflineIndex = () => () => {};
-  require('../../collections').collectionProgress = async () => null;
   const track = { id: 'one', title: 'One' };
   await setLocalRating(ownerA, track, 'like');
   stop = startOutboxSync();
@@ -403,9 +402,8 @@ test.each(['Playlist', 'Library'])('%s does not issue a Favorites read after the
   index.getOfflineSession = () => mockActive;
   index.isOfflineSessionCurrent = session => session === mockActive;
   index.readCollection = async () => null;
-  index.readFavoriteDownloads = async () => ({ ready: [] });
+  index.readPlayableIds = async () => new Set();
   index.subscribeOfflineIndex = () => () => {};
-  require('../../collections').collectionProgress = async () => null;
   await setLocalRating(ownerA, { id: 'one', title: 'One' }, 'like');
   stop = startOutboxSync();
   let releasePut;
@@ -441,9 +439,8 @@ test('Favorites reads after a failed attempt and retains the pending local overl
   index.getOfflineSession = () => mockActive;
   index.isOfflineSessionCurrent = session => session === mockActive;
   index.readCollection = async () => null;
-  index.readFavoriteDownloads = async () => ({ ready: [] });
+  index.readPlayableIds = async () => new Set();
   index.subscribeOfflineIndex = () => () => {};
-  require('../../collections').collectionProgress = async () => null;
   await setLocalRating(ownerA, { id: 'one', title: 'One' }, 'like');
   stop = startOutboxSync();
   let releasePut;

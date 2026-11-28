@@ -8,7 +8,6 @@ import {
   saveOfflineCollection,
   removeOfflineCollection,
   isCollectionSaved,
-  collectionProgress,
 } from '../../offline/collections';
 import {
   SHARE_LINKS_ENABLED,
@@ -35,6 +34,7 @@ import {
   getSelectableArtists,
 } from '../../shared/domain/artistCredits';
 import ArtistSelector from '../../shared/components/ArtistSelector';
+import useCollectionProgress from '../downloads/useCollectionProgress';
 
 export default function AlbumScreen({
   route,
@@ -46,11 +46,11 @@ export default function AlbumScreen({
   const session = getOfflineSession();
   const key = { kind: 'album', collectionId: albumId };
   const [saved, setSaved] = useState(false);
-  const [progress, setProgress] = useState(null);
   const [album, setAlbum] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
+  const progress = useCollectionProgress(session, key, tracks, saved);
 
   const requestRef = useRef(0);
   const snapshotRevision = useRef(0);
@@ -139,24 +139,6 @@ export default function AlbumScreen({
       .then(setSaved)
       .catch(() => {});
   }, [session, albumId]);
-  useEffect(() => {
-    if (!session || !saved) return;
-    let active = true;
-    const refresh = () =>
-      collectionProgress(session, tracks)
-        .then((value) => {
-          if (active) setProgress(value);
-        })
-        .catch(() => {});
-    refresh();
-    const unsubscribe = subscribeOfflineIndex(({ type }) => {
-      if (['published', 'missing', 'collection'].includes(type)) refresh();
-    });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [session, tracks, saved]);
   const toggleCollection = async () => {
     if (!session) return;
     if (saved) await removeOfflineCollection(session, key);
