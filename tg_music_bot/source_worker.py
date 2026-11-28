@@ -41,7 +41,7 @@ def candidates_from_results(results):
     return candidates
 
 
-def find_candidates(song, client, alternatives=None):
+def find_candidates(song, client, alternatives=None, *, observed=None):
     # ISRC is a search hint, not proof of identity. Every result passes the same
     # title / artist / version / explicit / duration checks.
     queries = []
@@ -63,6 +63,8 @@ def find_candidates(song, client, alternatives=None):
             logging.warning('Catalog search failed: %s', type(exc).__name__)
             errors.append('Каталог YouTube Music недоступен')
     ranked, reasons = rank_candidates(song, candidates)
+    if observed is not None:
+        observed.extend(candidates)
     if alternatives is not None:
         alternatives.extend(candidate for candidate in candidates
                             if without_remaster(candidate.title) != candidate.title
@@ -99,7 +101,7 @@ def soundcloud_candidate(row, song):
     )
 
 
-def find_soundcloud_candidates(song):
+def find_soundcloud_candidates(song, *, observed=None):
     """Search metadata first; only checked recordings proceed to format loading."""
     import yt_dlp
     from soundcloud_source import register
@@ -116,7 +118,10 @@ def find_soundcloud_candidates(song):
         candidates = []
         for query in queries:
             result = ydl.extract_info('scsearch10:' + query, download=False)
-            candidates.extend(soundcloud_candidate(row, song) for row in (result or {}).get('entries', []) if row)
+            found = [soundcloud_candidate(row, song) for row in (result or {}).get('entries', []) if row]
+            candidates.extend(found)
+            if observed is not None:
+                observed.extend(found)
             ranked, reasons = rank_candidates(song, candidates)
             if ranked:
                 return ranked, reasons
@@ -266,6 +271,7 @@ def download_song(song, directory, *, client=None, download=None, primary=None, 
 
         download = partial(download_candidate, progress=progress) if progress else download_candidate
     reports, alternatives = [], []
+    unavailable = 0
     providers = ['SoundCloud', 'YouTube Music']
     if song.get('preview_url'):
         providers.append('VK Музыка')
@@ -291,6 +297,7 @@ def download_song(song, directory, *, client=None, download=None, primary=None, 
         except Exception as exc:
             logging.warning('%s unavailable: %s', provider, type(exc).__name__)
             reports.append(f'{provider}: каталог недоступен')
+            unavailable += 1
             continue
         if provider_reasons:
             logging.info('%s candidate filters: %s', provider, '; '.join(provider_reasons))
@@ -312,10 +319,13 @@ def download_song(song, directory, *, client=None, download=None, primary=None, 
                           DOWNLOAD_UNAVAILABLE)
         elif f'Каталог {provider} недоступен' in provider_reasons:
             reason = 'каталог недоступен'
+            unavailable += 1
         else:
             reason = 'нужная версия не найдена'
         reports.append(f'{provider}: {reason}')
     result = {'error': '; '.join(reports)}
+    if unavailable == len(providers):
+        result['temporary'] = True
     if alternatives and without_remaster(song['name']) == song['name']:
         candidate = alternatives[0]
         years = re.findall(r'\b(?:19|20)\d{2}\b', candidate.title)

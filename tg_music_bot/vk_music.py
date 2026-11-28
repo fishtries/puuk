@@ -49,7 +49,8 @@ def _source(base, row, album=None, track=None):
     seconds = sum(int(part) * 60 ** i for i, part in enumerate(reversed(length))) if all(
         part.isdecimal() for part in length) else None
     return {'type': 'vk', 'key': f'vk:track:{match[1]}', 'title': row['title'],
-            'artist': row['artist'], 'url': url, 'provider_id': match[1], 'duration': seconds,
+            'artist': row['artist'], 'artists': row.get('artists'), 'url': url,
+            'provider_id': match[1], 'duration': seconds,
             'album': album, 'track': track, 'cover_url': row.get('cover_url')}
 
 

@@ -246,3 +246,101 @@ def test_vk_mp4_requires_full_range_and_exact_body_size(tmp_path, monkeypatch):
 
     response.content = b'123456'
     assert _download_mp4(playback, tmp_path).read_bytes() == response.content
+
+
+def test_vk_metadata_matching_checks_recording_and_keeps_distinct_editions(monkeypatch):
+    from import_sources import vk_catalog_matches
+
+    track = {'title': 'Teardrop', 'artist': 'Massive Attack', 'duration': 331}
+    edition = {**track, 'album': 'Mezzanine', 'year': '1998', 'source': 'iTunes',
+               'cover_url': 'https://is1-ssl.mzstatic.com/art.jpg'}
+    results = [
+        edition,
+        {**edition, 'year': '', 'source': 'Deezer'},
+        {**edition, 'artist': 'Another artist'},
+        {**edition, 'duration': 270},
+        {**edition, 'album': 'Live in London'},
+        {**edition, 'title': 'Teardrop (Remastered 2018)', 'year': '2018'},
+    ]
+    monkeypatch.setattr('services.external_catalogs.search_metadata_providers',
+                        lambda query, *, search_both: results if query == 'Massive Attack Teardrop' and search_both else [])
+    matches = vk_catalog_matches(track)
+    assert [(item['year'], item['confirm']) for item in matches] == [('1998', False), ('2018', True)]
+    assert vk_catalog_matches({**track, 'duration': None}) == []
+
+
+def test_reviewed_candidate_requires_full_audio(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from import_sources import repair_source
+
+    candidate = {'key': 'youtube:00000000001', 'title': 'Version', 'artist': 'Artist', 'duration': 205,
+                 'provider_id': '00000000001', 'url': 'https://www.youtube.com/watch?v=00000000001'}
+    returned = {'path': str(tmp_path / 'audio.mp3'), 'evidence': {'id': candidate['provider_id']}}
+    monkeypatch.setattr('import_sources.download_source', lambda *_args, **_kwargs: returned.copy())
+    sound = SimpleNamespace(info=SimpleNamespace(length=20))
+    monkeypatch.setattr('mutagen.File', lambda *_: sound)
+    source = {'type': 'vk', 'key': 'vk:track:1_111'}
+    with pytest.raises(ValueError, match='полную выбранную запись'):
+        repair_source(source, {'candidate': candidate}, tmp_path)
+
+    sound.info.length = 205
+    result = repair_source(source, {'candidate': candidate}, tmp_path)
+    assert result['evidence']['selection'] == 'user-replacement'
+    assert result['evidence']['candidate']['key'] == candidate['key']
+
+
+def test_vk_album_lookup_matches_edition_by_title_and_duration_and_preserves_playlist_positions():
+    from release_metadata import match_release, vk_release_request
+
+    artist = '山下達郎'
+    rows = [
+        {'title': 'Your Eyes', 'duration': 198},
+        {'title': 'Loveland,Island', 'duration': 269},
+        {'title': 'あまく危険な香り [TV用インスト1 –TV Instrumental Version 1–]', 'duration': 179},
+    ]
+    request = vk_release_request('Tatsuro Yamashita - For You, 1982', [
+        {**row, 'artist': artist, 'type': 'vk', 'position': index} for index, row in enumerate(rows, 1)
+    ])
+    assert request['album'] == 'For You'
+    release = {
+        'title': 'FOR YOU', 'date': '2002-02-14', 'id': '6de2423a-d4b2-4382-9bde-4f21b09dbc79',
+        'status': 'Official', 'artist-credit': [{'name': artist}], 'cover-art-archive': {'front': True},
+        'media': [{'position': 1, 'tracks': [
+            {'position': 1, 'title': 'LOVELAND, ISLAND', 'length': 270000},
+            {'position': 2, 'title': 'YOUR EYES', 'length': 199000},
+            {'position': 3, 'title': 'あまく危険な香り［TV用インスト 1］', 'length': 180000},
+        ]}],
+    }
+    mapping = match_release(request, release)
+    assert [mapping[str(position)]['track_number'] for position in (1, 2, 3)] == ['2', '1', '3']
+    assert mapping['3']['year'] == '2002'
+    release['media'][0]['tracks'][2]['title'] = 'あまく危険な香り［TV用インスト 2］'
+    assert match_release(request, release) == {}
+
+
+def test_cover_art_archive_redirect_is_limited_to_the_same_release(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock
+    from import_sources import download_import_cover
+
+    release_id = '6de2423a-d4b2-4382-9bde-4f21b09dbc79'
+    cover_url = f'https://coverartarchive.org/release/{release_id}/front-500'
+    redirect_path = f'mbid-{release_id}/mbid-{release_id}-123_thumb500.jpg'
+    responses = []
+
+    def reply(location=None):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.is_redirect = location is not None
+        response.status_code = 307 if location else 200
+        response.headers = {'Location': location} if location else {'Content-Type': 'image/jpeg'}
+        response.iter_content.return_value = [b'image']
+        responses.append(response)
+
+    reply(f'https://archive.org/download/{redirect_path}')
+    reply(f'https://dn721602.ca.archive.org/0/items/{redirect_path}')
+    reply()
+    monkeypatch.setattr('requests.get', lambda *_args, **_kwargs: responses.pop(0))
+    assert Path(download_import_cover({'cover_url': cover_url}, tmp_path, catalog=True)).read_bytes() == b'image'
+
+    reply('https://archive.org/download/mbid-other/mbid-other-123_thumb500.jpg')
+    assert download_import_cover({'cover_url': cover_url}, tmp_path, catalog=True) is None

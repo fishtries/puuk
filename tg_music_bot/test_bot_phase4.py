@@ -344,7 +344,8 @@ class TestPhase4TelegramBot(unittest.TestCase):
             self.assertIn('Загружено 10 из 11 треков в Puuk', text)
             self.assertIn('08. Black Milk', text)
             self.assertEqual(
-                [button.text for button in keys.inline_keyboard[0]], ['Повторить', 'Добавить файл или ссылку'],
+                [[button.text for button in row] for row in keys.inline_keyboard],
+                [['Разобрать пропуски'], ['Повторить', 'Добавить файл или ссылку']],
             )
 
     def test_10_successful_chat_delivery_clears_the_progress_card(self):
@@ -374,6 +375,119 @@ class TestPhase4TelegramBot(unittest.TestCase):
                 publisher.cancel()
                 await asyncio.gather(publisher, return_exceptions=True)
             bot.delete_message.assert_awaited_once()
+
+        with tempfile.TemporaryDirectory() as state:
+            asyncio.run(verify(Path(state)))
+
+    def test_11_existing_vk_card_reopens_and_applies_selected_edition(self):
+        async def verify(root):
+            imports = TelegramImports(None, get_puuk_user, root / 'queue.db', root)
+            url = 'https://vk.com/audio1_123'
+            request = {'url': url}
+            job_id, _ = imports.jobs.submit(self.tg_id, self.user_id, self.tg_id, 1, request, 'server')
+            imports.jobs.set_message(job_id, 2)
+            imports.jobs.claim_snapshot()
+            source = {'type': 'vk', 'key': 'vk:track:1_123', 'title': 'Teardrop', 'artist': 'Massive Attack'}
+            imports.jobs.snapshot(job_id, source['title'], 'track', [source])
+            imports.jobs.claim_position()
+            imports.jobs.downloaded(job_id, 1, {'sha256': 'vk-audio'})
+            imports.jobs.delivered(job_id, 1, 'track-id', 'track-id')
+            imports.jobs.settle(job_id)
+            message = SimpleNamespace(from_user=SimpleNamespace(id=self.tg_id), chat=SimpleNamespace(id=self.tg_id),
+                                      message_id=3, reply_to_message=None, text=url, answer=AsyncMock(),
+                                      edit_text=AsyncMock())
+            callback = SimpleNamespace(from_user=message.from_user, message=message, answer=AsyncMock(),
+                                       data=f'imp:vkmeta:{job_id}')
+            track = {'title': source['title'], 'artist': source['artist'], 'duration': 331}
+            editions = [{'source': 'iTunes', 'album': 'Mezzanine', 'year': year} for year in ('1998', '2018')]
+            with (patch('telegram_imports.catalog.vk_metadata_target', return_value=track),
+                  patch('telegram_imports.get_track', return_value=track),
+                  patch('telegram_imports.catalog.update_vk_metadata', return_value=True) as apply,
+                  patch.object(imports, '_child', new=AsyncMock(side_effect=[editions, '/tmp/cover.jpg'])) as child):
+                await imports.link(message)
+                buttons = message.answer.await_args.kwargs['reply_markup'].inline_keyboard
+                self.assertEqual(buttons[-1][0].callback_data, callback.data)
+                self.assertEqual(imports.jobs.outstanding(self.tg_id, self.user_id), [])
+
+                await imports.callback(callback)
+                apply.assert_not_called()
+                options = message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard
+                self.assertEqual(options[1][0].text, '2018 · Mezzanine')
+                callback.data = options[1][0].callback_data
+                await imports.callback(callback)
+                self.assertEqual(child.await_args.args[2], editions[1])
+                self.assertEqual(apply.call_args.args[3:5], (track, editions[1]))
+                self.assertIn('Метаданные обновлены', message.edit_text.await_args.args[0])
+
+        with tempfile.TemporaryDirectory() as state:
+            asyncio.run(verify(Path(state)))
+
+    def test_12_vk_playlist_metadata_updates_unique_tracks_and_offers_edition_review(self):
+        async def verify(root):
+            bot = AsyncMock()
+            imports = TelegramImports(bot, get_puuk_user, root / 'queue.db', root)
+            job_id, _ = imports.jobs.submit(self.tg_id, self.user_id, self.tg_id, 1,
+                                            {'url': 'https://vk.com/music/playlist/1_2'}, 'server')
+            imports.jobs.set_message(job_id, 2)
+            imports.jobs.claim_snapshot()
+            sources = [{'type': 'vk', 'key': f'vk:track:1_{number}', 'title': f'Track {number}', 'artist': 'Artist'}
+                       for number in (1, 2, 1)]
+            imports.jobs.snapshot(job_id, 'Big Wave', 'playlist', sources)
+            for position, ident in enumerate(('a', 'b', 'a'), 1):
+                imports.jobs.claim_position()
+                imports.jobs.downloaded(job_id, position, {'sha256': ident})
+                imports.jobs.delivered(job_id, position, ident)
+            imports.jobs.settle(job_id)
+            job = imports.jobs.job(job_id)
+            message = SimpleNamespace(message_id=3, chat=SimpleNamespace(id=self.tg_id), edit_text=AsyncMock())
+            callback = SimpleNamespace(from_user=SimpleNamespace(id=self.tg_id), message=message, answer=AsyncMock(),
+                                       data='imp:vklist:0:0')
+            await imports.callback(callback)
+            playlist_button, *_ = message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard
+            callback.data = playlist_button[0].callback_data
+            await imports.callback(callback)
+            buttons = message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard
+            refresh = next(button for row in buttons for button in row if button.text == 'Обновить метаданные')
+            callback.data = refresh.callback_data
+            await imports.callback(callback)
+            self.assertIn('Проверяю метаданные · 0 из 2', message.edit_text.await_args.args[0])
+
+            from services.telegram_import_service import CATALOG_REVISION_FIELDS
+            track = {**dict.fromkeys(CATALOG_REVISION_FIELDS), 'duration': 210, 'album_track_position': None}
+            initial = {'album': 'Big Wave', 'source': 'iTunes', 'cover_url': 'https://img.example/a'}
+            special = {**initial, 'album': 'Remaster', 'year': '2020'}
+
+            async def child(action, directory, request, _timeout):
+                if action == 'catalog-cover':
+                    return str(root / 'cover.jpg')
+                return [initial] if request['title'] == 'Track 1' else [initial, special]
+
+            imports.metadata_batch.run_child = child
+            with (patch('vk_metadata_batch.SEARCH_INTERVAL', 0),
+                  patch('vk_metadata_batch.catalog.vk_metadata_target', return_value=track),
+                  patch('vk_metadata_batch.catalog.update_vk_metadata', return_value=True) as save):
+                worker = asyncio.create_task(imports.metadata_batch.run())
+                try:
+                    async with asyncio.timeout(5):
+                        while [row['state'] for row in imports.jobs.metadata_entries(job_id)] != ['updated', 'review']:
+                            await asyncio.sleep(.02)
+                    text, buttons = imports._card(job)
+                    self.assertIn('Метаданные обновлены · 1 из 2', text)
+                    callback.data = next(button.callback_data for row in buttons.inline_keyboard for button in row
+                                         if button.text == 'Выбрать издания · 1')
+                    await imports.callback(callback)
+                    self.assertIn('02. Track 2', message.edit_text.await_args.args[0])
+                    callback.data = message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard[1][0].callback_data
+                    await imports.callback(callback)
+                    async with asyncio.timeout(5):
+                        while [row['state'] for row in imports.jobs.metadata_entries(job_id)] != ['updated', 'updated']:
+                            await asyncio.sleep(.02)
+                    self.assertEqual([call.args[1] for call in save.call_args_list], ['a', 'b'])
+                    self.assertEqual(save.call_args.args[4], special)
+                    self.assertIn('Метаданные обновлены · 2 из 2', imports._card(job)[0])
+                finally:
+                    worker.cancel()
+                    await asyncio.gather(worker, return_exceptions=True)
 
         with tempfile.TemporaryDirectory() as state:
             asyncio.run(verify(Path(state)))

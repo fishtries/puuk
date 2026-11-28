@@ -1,12 +1,15 @@
 """Telegram controls and execution for the durable import queue."""
 import asyncio
-from collections import defaultdict
+from collections import Counter, defaultdict
 from html import escape
 import json
 import logging
+import secrets
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
+import tempfile
 import time
 from weakref import WeakValueDictionary
 from zipfile import ZIP_STORED, ZipFile
@@ -16,13 +19,16 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRet
 from aiogram.filters import Command
 from aiogram.types import ForceReply, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
+from db import get_track
 from downloader import _run_download_process
 from import_jobs import ImportJobs
 from import_progress import progress_bar, read_progress
 from import_sources import MAX_FILE_BYTES, canonical_link
+from recovery_review import RECOVERY_ACTIONS, RecoveryReview
 from repositories import imported_playlists, recording_reviews
 from services.embedding_queue_service import publish_import_analysis
 from services import telegram_import_service as catalog
+from vk_metadata_batch import VkMetadataBatch
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +69,11 @@ class TelegramImports:
         self.message_locks = WeakValueDictionary()
         self.dirty = set()
         self.delivery_after = {}
+        self.recovery = RecoveryReview(self.bot, self.jobs, self.root, self._child, self._mark_dirty, self._linked_owner)
+        self.catalog_slots = asyncio.Semaphore(2)
+        self.catalog_choices = {}
+        self.metadata_batch = VkMetadataBatch(self.jobs, self.root, self._linked_owner, self._child,
+                                              self.catalog_slots, self._notify_metadata_batch)
         self.router = Router()
         self.router.message.register(self.downloads, Command('downloads'))
         self.router.message.register(self.override, Command('tg', 'puuk'))
@@ -71,6 +82,9 @@ class TelegramImports:
         self.router.message.register(self.attachment, F.audio | F.document)
         self.router.message.register(self.link, F.text.regexp(r'^\s*https?://'))
         self.router.callback_query.register(self.callback, F.data.startswith('imp:'))
+
+    def _mark_dirty(self, job_id):
+        self.dirty.add(job_id)
 
     def _linked_owner(self, telegram_id, expected_owner=None) -> dict | None:
         user = self.owner(telegram_id)
@@ -189,6 +203,13 @@ class TelegramImports:
                 if repaired:
                     self.dirty.add(repaired)
                     return True
+            if mode == 'server' and 'url' in request:
+                completed = self.jobs.completed_vk_track(telegram_id, user['id'], message.chat.id, request)
+                source = self._vk_source(completed) if completed else None
+                if source and catalog.vk_metadata_target(user, completed['result_id'], source['key']):
+                    text, keyboard = self._card(completed)
+                    await message.answer(text, parse_mode='HTML', reply_markup=keyboard, disable_notification=True)
+                    return True
             job_id, outcome = self.jobs.submit(telegram_id, user['id'], message.chat.id,
                                                message.message_id, request, mode)
         except ValueError as exc:
@@ -210,6 +231,182 @@ class TelegramImports:
                                                  disable_notification=True)
                     self.jobs.set_message(job_id, reply.message_id)
         return True
+
+    def _vk_source(self, job, rows=None):
+        if job['state'] != 'finished' or job['kind'] != 'track' or job['mode'] != 'server' or not job['result_id']:
+            return None
+        rows = self.jobs.positions(job['id']) if rows is None else rows
+        if len(rows) == 1 and rows[0]['state'] == 'done':
+            source = json.loads(rows[0]['source'])
+            if source.get('type') == 'vk' and source.get('key', '').startswith('vk:track:'):
+                return source
+        return None
+
+    async def _vk_metadata(self, callback, job, user, action, argument):
+        job_id, track_id = job['id'], job['result_id']
+        source = self._vk_source(job)
+        if not source or not (track := catalog.vk_metadata_target(user, track_id, source['key'])):
+            await callback.answer('У вас нет доступа к изменению этого трека.', show_alert=True)
+            return
+
+        lock = self._lock(job_id)
+        if lock.locked() or (action != 'vkback' and self.catalog_slots.locked()):
+            await callback.answer('Поиск уже идёт. Попробуйте чуть позже.')
+            return
+        async with lock:
+            message_key = (callback.message.chat.id, callback.message.message_id, job_id)
+            if action == 'vkback':
+                self.catalog_choices.pop(message_key, None)
+                await self._edit_callback(callback, *self._card(job))
+                return
+            now = time.monotonic()
+            if action == 'vkpick':
+                expiry, choices, before = self.catalog_choices.get(message_key, (0, {}, None))
+                edition = choices.get(argument)
+                if now >= expiry or not edition:
+                    await self._edit_callback(callback, *self._card(job, note='Выбор устарел. Запустите поиск снова.'))
+                    return
+            else:
+                self.catalog_choices.pop(message_key, None)
+                edition, before = None, track
+
+            async with self.catalog_slots:
+                await callback.answer('Ищу метаданные' if edition is None else 'Обновляю метаданные')
+                with tempfile.TemporaryDirectory(prefix='vk-metadata-', dir=self.root) as directory:
+                    directory = Path(directory)
+                    try:
+                        if edition is None:
+                            request = {'title': source['title'], 'artist': source.get('artist') or track['artist'],
+                                       'duration': track['duration']}
+                            editions = await self._child('vk-metadata', directory, request, 24)
+                            if not editions:
+                                await self._edit_callback_message(
+                                    callback.message, *self._card(job, note='Подходящих изданий не найдено.'))
+                                return
+                            if len(editions) > 1 or editions[0].get('confirm'):
+                                self.catalog_choices = {key: entry for key, entry in self.catalog_choices.items()
+                                                        if entry[0] > now}
+                                if len(self.catalog_choices) >= 100:
+                                    self.catalog_choices.pop(next(iter(self.catalog_choices)))
+                                choices = {secrets.randbits(63): item for item in editions}
+                                self.catalog_choices[message_key] = (time.monotonic() + 300, choices, before)
+                                buttons = []
+                                for token, item in choices.items():
+                                    label = ' · '.join(filter(None, (
+                                        item.get('year'), item.get('album') or item['source'],
+                                        'Ремастер' if item.get('confirm') else '',
+                                    )))
+                                    buttons.append([_button(label[:60], f'imp:vkpick:{job_id}:{token}')])
+                                buttons.append([_button('Назад', f'imp:vkback:{job_id}')])
+                                text, _ = self._card(job, note='Какое издание выбрать?')
+                                await self._edit_callback_message(callback.message, text, _keyboard(buttons))
+                                return
+                            edition = editions[0]
+
+                        cover = await self._child('catalog-cover', directory, edition, 16)
+                        if not cover:
+                            note = 'Не удалось загрузить обложку. Попробуйте снова.'
+                        elif await asyncio.to_thread(catalog.update_vk_metadata, user, track_id, source['key'],
+                                                     before, edition, cover):
+                            self.catalog_choices.pop(message_key, None)
+                            note = 'Метаданные обновлены'
+                        else:
+                            note = 'Данные трека изменились. Запустите поиск снова.'
+                    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+                        self._log_error(job_id, exc)
+                        note = 'Не удалось обновить метаданные. Попробуйте снова.'
+            await self._edit_callback_message(callback.message, *self._card(job, note=note))
+
+    async def _notify_metadata_batch(self, job_id):
+        async with self._lock(job_id):
+            batch = self.jobs.metadata_batch(job_id)
+            text, keyboard = self._card(self.jobs.job(job_id))
+            try:
+                await self.bot.edit_message_text(text, chat_id=batch['chat_id'], message_id=batch['message_id'],
+                                                 parse_mode='HTML', reply_markup=keyboard)
+            except TelegramBadRequest as exc:
+                if 'message is not modified' not in str(exc).lower():
+                    raise
+
+    async def _vk_batch(self, callback, job, action, argument):
+        job_id = job['id']
+        async with self._lock(job_id):
+            rows = self.jobs.positions(job_id)
+            positions = self.metadata_batch.positions(job, rows)
+            if not positions:
+                await callback.answer('Нет загруженных VK-треков для обновления.', show_alert=True)
+                return
+            if action == 'vkbstart':
+                try:
+                    started = self.jobs.start_metadata_batch(
+                        job_id, callback.message.chat.id, callback.message.message_id, positions,
+                    )
+                except ValueError as exc:
+                    await callback.answer(str(exc), show_alert=True)
+                    return
+                if not started:
+                    await callback.answer('Обновление метаданных уже идёт.')
+                    return
+            elif action == 'vkbpick':
+                if not self.jobs.select_metadata_edition(job_id, argument):
+                    await self._edit_callback(callback, *self._card(job, note='Выбор устарел. Откройте список изданий.'))
+                    return
+            else:
+                reviews = [row for row in self.jobs.metadata_entries(job_id) if row['state'] == 'review']
+                if reviews:
+                    review = next((row for row in reviews if row['position'] > argument), reviews[0])
+                    position = review['position']
+                    source = json.loads(next(row for row in rows if row['position'] == position)['source'])
+                    text = (f"<b>{escape(job['title'][:180])}</b>\n\n"
+                            f"Выберите издание · {reviews.index(review) + 1} из {len(reviews)}\n"
+                            f"{position:02d}. {escape(source['title'][:150])}")
+                    buttons = []
+                    for item in json.loads(review['editions']):
+                        edition = item['edition']
+                        name = ' · '.join(filter(None, (edition.get('year'), edition.get('album') or edition['source'],
+                                                        'Ремастер' if edition.get('confirm') else '')))
+                        buttons.append([_button(name[:60], f"imp:vkbpick:{job_id}:{item['token']}")])
+                    nav = [_button('К загрузке', f'imp:show:{job_id}:0')]
+                    if len(reviews) > 1:
+                        nav.insert(0, _button('Другой трек', f'imp:vkbnext:{job_id}:{position}'))
+                    await self._edit_callback(callback, text, _keyboard(buttons + [nav]))
+                    return
+            await self._edit_callback(callback, *self._card(job))
+
+    def _vk_batch_status(self, job_id):
+        entries = self.jobs.metadata_entries(job_id)
+        counts = Counter(row['state'] for row in entries)
+        if not entries:
+            return [], [[_button('Обновить метаданные', f'imp:vkbstart:{job_id}')]]
+        total, pending = len(entries), counts['pending']
+        if pending:
+            checked = total - pending
+            return (['', f'<code>{progress_bar(round(checked * 100 / total))}</code>',
+                     f'Проверяю метаданные · {checked} из {total}'], [])
+        lines = ['', f"Метаданные обновлены · {counts['updated']} из {total}"]
+        for state, label in (('review', 'Нужно выбрать издание'), ('no_match', 'Нет совпадения'),
+                             ('restricted', 'Нет доступа к изменению'), ('failed', 'Не удалось обновить')):
+            if counts[state]:
+                lines.append(f'{label} · {counts[state]}')
+        buttons = []
+        if counts['review']:
+            buttons.append([_button(f"Выбрать издания · {counts['review']}", f'imp:vkbnext:{job_id}:0')])
+        buttons.append([_button('Обновить метаданные', f'imp:vkbstart:{job_id}')])
+        return lines, buttons
+
+    def _vk_collections_card(self, telegram_id, owner_id, page):
+        jobs = self.jobs.completed_vk_collections(telegram_id, owner_id, page * PAGE_SIZE, PAGE_SIZE + 1)
+        buttons = [[_button((job['title'] or 'Плейлист')[:60], f"imp:listshow:{job['id']}:0")]
+                   for job in jobs[:PAGE_SIZE]]
+        nav = []
+        if page:
+            nav.append(_button('Назад', f'imp:vklist:0:{page - 1}'))
+        if len(jobs) > PAGE_SIZE:
+            nav.append(_button('Дальше', f'imp:vklist:0:{page + 1}'))
+        if nav:
+            buttons.append(nav)
+        buttons.append([_button('Мои загрузки', 'imp:list:0:0')])
+        return '<b>Готовые альбомы и плейлисты VK</b>', _keyboard(buttons)
 
     def _position_progress(self, job_id, position):
         return read_progress(self.root / str(job_id) / f'position-{position}' / 'progress.txt')
@@ -263,7 +460,7 @@ class TelegramImports:
             summary += f"\nСейчас · {current['position']:02d}. {label}"
         return summary, progress
 
-    def _card(self, job, page=0):
+    def _card(self, job, page=0, *, note=None):
         job_id = job['id']
         if job['state'] == 'review':
             review = json.loads(job['review'])
@@ -298,10 +495,18 @@ class TelegramImports:
         count = sum(row['state'] == 'done' for row in rows)
         missing = [row for row in rows if row['state'] == 'skipped']
         status, percent = self._status(job, rows, count, missing)
-        lines = [f'<b>{escape(self._title(job, rows)[:250])}</b>']
+        title = self._title(job, rows)
+        vk_source = self._vk_source(job, rows)
+        if vk_source:
+            track = get_track(job['result_id'])
+            if track:
+                title = f"{track['artist']} — {track['title']}" if track['artist'] else track['title']
+        lines = [f'<b>{escape(title[:250])}</b>']
         if percent is not None:
             lines.append(f'<code>{progress_bar(percent)}</code>')
         lines.append(escape(status))
+        if note:
+            lines.extend(('', escape(note)))
         if job['error']:
             lines.append(escape(job['error'][:400]))
         if missing and job['kind'] != 'track':
@@ -311,6 +516,8 @@ class TelegramImports:
             action, label = ('resume', 'Продолжить') if job['state'] == 'paused' else ('pause', 'Пауза')
             buttons.append([_button(label, f'imp:{action}:{job_id}'),
                             _button('Отменить', f'imp:cancel:{job_id}')])
+        if missing and job['state'] in {'active', 'finished'}:
+            buttons.append([_button('Разобрать пропуски', f'imp:recover:{job_id}')])
         page = max(0, min(page, (len(missing) - 1) // PAGE_SIZE))
         shown = missing[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
         for row in shown:
@@ -326,10 +533,6 @@ class TelegramImports:
                 suffix = f' № {position}' if len(missing) > 1 else ''
                 buttons.append([_button(f'Повторить{suffix}', f'imp:retry:{job_id}:{position}'),
                                 _button(f'Добавить файл или ссылку{suffix}', f'imp:repair:{job_id}:{position}')])
-                if row['alternative']:
-                    year = json.loads(row['alternative']).get('year')
-                    label = f'Добавить ремастер ({year})' if year else 'Добавить ремастер'
-                    buttons.append([_button(label, f"imp:remaster:{job_id}:{position}")])
         manual = sum(row['run_after'] == 0 for row in missing)
         if manual > 1 and job['state'] in {'active', 'finished'}:
             buttons.append([_button(f'Повторить все {manual}', f'imp:retry:{job_id}:0')])
@@ -357,6 +560,12 @@ class TelegramImports:
             source = json.loads(rows[0]['source'])
             if source.get('key', '').startswith('youtube:') and 'url' in json.loads(job['request']):
                 buttons.append([_button('Найти альбомную версию', f'imp:albumversion:{job_id}')])
+        if vk_source:
+            buttons.append([_button('Обновить метаданные', f'imp:vkmeta:{job_id}')])
+        if self.metadata_batch.positions(job, rows):
+            metadata_lines, metadata_buttons = self._vk_batch_status(job_id)
+            lines.extend(metadata_lines)
+            buttons.extend(metadata_buttons)
         return '\n'.join(lines), _keyboard(buttons)
 
     async def _edit(self, job):
@@ -372,8 +581,10 @@ class TelegramImports:
 
     def _downloads_card(self, telegram_id, owner_id, page):
         rows = self.jobs.outstanding(telegram_id, owner_id)
+        completed_vk = self.jobs.completed_vk_collections(telegram_id, owner_id, 0, 1)
+        vk_button = [[_button('Готовые альбомы и плейлисты VK', 'imp:vklist:0:0')]] if completed_vk else []
         if not rows:
-            return 'Активных загрузок нет.', None
+            return 'Активных загрузок нет.', _keyboard(vk_button)
         page = max(0, min(page, (len(rows) - 1) // PAGE_SIZE))
         buttons = []
         lines = ['<b>Мои загрузки</b>']
@@ -397,7 +608,7 @@ class TelegramImports:
             nav.append(_button('Назад', f'imp:list:0:{page - 1}'))
         if (page + 1) * PAGE_SIZE < len(rows):
             nav.append(_button('Дальше', f'imp:list:0:{page + 1}'))
-        return '\n'.join(lines), _keyboard(buttons + ([nav] if nav else []))
+        return '\n'.join(lines), _keyboard(buttons + ([nav] if nav else []) + vk_button)
 
     async def downloads(self, message):
         user = self._linked_owner(message.from_user.id)
@@ -424,10 +635,21 @@ class TelegramImports:
         job_id, argument = int(raw_id), int(args[0]) if args else 0
         if action == 'list':
             text, keyboard = self._downloads_card(telegram_id, user['id'], argument)
+        elif action == 'vklist':
+            text, keyboard = self._vk_collections_card(telegram_id, user['id'], argument)
         else:
             job = self.jobs.job(job_id)
             if not job or job['user_id'] != telegram_id or job['owner_id'] != user['id']:
                 await callback.answer('Нет доступа.', show_alert=True)
+                return
+            if action in RECOVERY_ACTIONS:
+                await self.recovery.handle(callback, job, action, argument)
+                return
+            if action in {'vkbstart', 'vkbnext', 'vkbpick'}:
+                await self._vk_batch(callback, job, action, argument)
+                return
+            if action in {'vkmeta', 'vkpick', 'vkback'}:
+                await self._vk_metadata(callback, job, user, action, argument)
                 return
             if action == 'save':
                 result_id = job['playlist_id'] or job['result_id']
@@ -439,22 +661,22 @@ class TelegramImports:
                 if not row or job['state'] not in {'active', 'finished'}:
                     await callback.answer('Эта позиция больше не ждёт добора', show_alert=True)
                     return
-                prompt = await callback.message.answer(f'Ответьте файлом или точной ссылкой для № {argument}.',
+                instruction = f'Ответьте файлом или точной ссылкой для № {argument}.'
+                if json.loads(row['source']).get('song'):
+                    instruction += ' Бот добавит выбранную вами версию.'
+                prompt = await callback.message.answer(instruction,
                                                        reply_markup=ForceReply(),
                                                        disable_notification=True)
                 self.jobs.remember_repair(prompt.chat.id, prompt.message_id, job_id, argument)
                 await callback.answer()
                 return
-            elif action in {'remaster', 'albumversion'}:
+            elif action == 'albumversion':
                 row = next((row for row in self.jobs.positions(job_id)
-                            if row['position'] == (argument or 1)), None)
-                if row and action == 'remaster' and row['state'] == 'skipped' and row['alternative']:
-                    request = {'selection': json.loads(row['alternative'])}
-                elif row and action == 'albumversion' and job['kind'] == 'track' and row['state'] == 'done':
-                    request = {'album_version': json.loads(row['source'])}
-                else:
+                            if row['position'] == 1), None)
+                if not row or job['kind'] != 'track' or row['state'] != 'done':
                     await callback.answer('Этот вариант недоступен.', show_alert=True)
                     return
+                request = {'album_version': json.loads(row['source'])}
                 try:
                     new_job, _ = self.jobs.submit(telegram_id, user['id'], job['chat_id'],
                                                   -(job_id * 1001 + argument), request, job['mode'])
@@ -514,8 +736,12 @@ class TelegramImports:
     @staticmethod
     async def _edit_callback(callback, text, keyboard):
         await callback.answer()
+        await TelegramImports._edit_callback_message(callback.message, text, keyboard)
+
+    @staticmethod
+    async def _edit_callback_message(message, text, keyboard):
         try:
-            await callback.message.edit_text(text, parse_mode='HTML', reply_markup=keyboard)
+            await message.edit_text(text, parse_mode='HTML', reply_markup=keyboard)
         except TelegramBadRequest as exc:
             if 'message is not modified' not in str(exc).lower():
                 raise
@@ -711,7 +937,8 @@ class TelegramImports:
                 if job['mode'] == 'server':
                     track_id, album_id = catalog.publish(
                         job['owner_id'], source, artifact, self.music_dir, position=position,
-                        playlist_id=job['playlist_id'], album=job['kind'] == 'album')
+                        playlist_id=job['playlist_id'], album=job['kind'] == 'album',
+                        selected_album_id=job['result_id'] if job['kind'] == 'album' else None)
                     result_id = album_id if job['kind'] == 'album' else track_id if job['kind'] == 'track' else None
                 else:
                     count = len(self.jobs.positions(job_id))
@@ -861,6 +1088,8 @@ class TelegramImports:
                 workers.create_task(self._publisher())
                 workers.create_task(self._reviewer())
                 workers.create_task(self._analysis_delivery())
+                workers.create_task(self.recovery.run())
+                workers.create_task(self.metadata_batch.run())
                 for _ in range(self.workers):
                     workers.create_task(self._loader())
         finally:

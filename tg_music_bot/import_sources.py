@@ -1,6 +1,7 @@
 """Resolve incoming messages to immutable, ordered recording selections."""
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import asdict
 import hashlib
 from pathlib import Path
@@ -231,7 +232,7 @@ def _direct(url):
         label = item.get('title') or urlsplit(item_url).path.rsplit('/', 1)[-1].replace('-', ' ') or 'Трек'
         sources.append({'type': 'direct', 'key': f"{'youtube' if youtube else 'soundcloud'}:{item['id']}",
                         'url': item_url, 'provider_id': str(item['id']), 'title': label,
-                        'music_title': item.get('track'), 'artist': item.get('artist'),
+                        'music_title': item.get('track'), 'artist': item.get('artist'), 'duration': item.get('duration'),
                         'album': info.get('title') if kind == 'album' else None,
                         'album_artist': info.get('artist') or info.get('uploader') if kind == 'album' else None})
     return info.get('title') or 'Загрузка', kind, sources
@@ -478,7 +479,7 @@ def digest_file(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def download_import_cover(source, directory):
+def download_import_cover(source, directory, *, catalog=False):
     import requests
 
     from metadata import MAX_COVER_SIZE_BYTES
@@ -491,12 +492,29 @@ def download_import_cover(source, directory):
     except ValueError:
         return None
     host = parsed.hostname or ''
-    if (parsed.scheme != 'https' or parsed.netloc != host
-            or not host.endswith(('.scdn.co', '.spotifycdn.com', '.vkuserphoto.ru', '.userapi.com'))):
+    domains = ('.mzstatic.com', '.dzcdn.net') if catalog else (
+        '.scdn.co', '.spotifycdn.com', '.vkuserphoto.ru', '.userapi.com',
+    )
+    archive = catalog and host == 'coverartarchive.org' and re.fullmatch(
+        r'/release/([0-9a-f-]{36})/front-500', parsed.path,
+    )
+    if parsed.scheme != 'https' or parsed.netloc != host or not (host.endswith(domains) or archive):
         return None
     path = directory / 'import-cover'
     try:
-        with requests.get(url, timeout=(3, 5), stream=True, allow_redirects=False) as response:
+        with ExitStack() as responses:
+            for _ in range(3):
+                response = responses.enter_context(requests.get(url, timeout=(3, 5), stream=True, allow_redirects=False))
+                if not (archive and response.is_redirect):
+                    break
+                url = response.headers['Location']
+                redirect = urlsplit(url)
+                release_id = archive[1]
+                path_pattern = rf'/(?:download|(?:[0-9]+/)?items)/mbid-{release_id}/mbid-{release_id}-[0-9]+_thumb500\.jpg'
+                if (redirect.scheme != 'https' or redirect.netloc != redirect.hostname
+                        or not re.fullmatch(r'(?:[a-z0-9-]+\.)*archive\.org', redirect.hostname or '')
+                        or not re.fullmatch(path_pattern, redirect.path)):
+                    return None
             if response.status_code != 200 or not response.headers.get('Content-Type', '').startswith('image/'):
                 return None
             deadline = time.monotonic() + 8
@@ -515,8 +533,39 @@ def download_import_cover(source, directory):
     return str(path)
 
 
+def vk_catalog_matches(request):
+    from services.external_catalogs import search_metadata_providers
+    from source_selection import duration_matches, is_clean, normalized, versions, without_remaster
+
+    artist, title = request['artist'], request['title']
+    query = f'{artist} {title}'
+    matches = {}
+    for item in search_metadata_providers(query, search_both=True):
+        candidate = item.get('title') or ''
+        album = item.get('album') or ''
+        same_title = normalized(candidate) == normalized(title)
+        remaster = not same_title and normalized(without_remaster(candidate)) == normalized(title)
+        if (not (same_title or remaster)
+                or normalized(item.get('artist')) != normalized(artist)
+                or not duration_matches(request['duration'], item.get('duration'))
+                or not item.get('cover_url')):
+            continue
+        # A provider may attach a version label only to the release.
+        marker = versions(f'{candidate} {album}') - versions(title)
+        if marker - {'remaster'} or (is_clean(album) and not is_clean(title)):
+            continue
+        confirm = remaster or 'remaster' in marker
+        year = item.get('year') or ''
+        release = normalized(album), confirm
+        key = release, year
+        if key in matches or (not year and any(known_release == release for known_release, _ in matches)):
+            continue
+        matches[key] = {**item, 'confirm': confirm}
+    return list(matches.values())[:6]
+
+
 def _download_with_cover(source, directory, progress=None):
-    if source.get('spotify_preview_from_track'):
+    if source.get('spotify_preview_from_track') and not source.get('replacement'):
         song = source['song']
         track = fetch_entity('track', song['song_id'])
         if track.get('uri') != source['key']:
@@ -605,6 +654,9 @@ def download_source(source, directory, *, progress=None):
     if progress:
         options['progress_hooks'] = [ytdlp_progress(progress)]
     with yt_dlp.YoutubeDL(options) as client:
+        if source.get('provider') == 'soundcloud':
+            from soundcloud_source import register
+            register(client)
         info = client.extract_info(source['url'], download=True)
     if not info or check(info):
         raise ValueError('Площадка не вернула выбранную запись')
@@ -619,7 +671,7 @@ def download_source(source, directory, *, progress=None):
         path = renamed
     return {'path': str(path), 'sha256': digest_file(path),
             'title': source.get('version_label') or info.get('track') or info.get('title'),
-            'artist': info.get('artist') or info.get('uploader'),
+            'artist': info.get('artist') or info.get('uploader'), 'duration': info.get('duration'),
             'album': info.get('album'), 'evidence': {'url': source['url'], 'id': source['provider_id']}}
 
 
@@ -640,6 +692,21 @@ def review_source(request, directory):
 
 
 def repair_source(source, replacement, directory, *, progress=None):
+    if candidate := replacement.get('candidate'):
+        from mutagen import File
+        from source_selection import duration_matches
+
+        # Candidate identity came from the explicit selection on the review card.
+        selection = {**candidate, 'type': 'direct', 'version_label': candidate['title'],
+                     'url': canonical_link(candidate['url'])}
+        artifact = download_source(selection, directory / 'replacement', progress=progress)
+        audio = File(artifact['path'])
+        expected = candidate.get('duration') or artifact.get('duration')
+        if audio is None or audio.info is None or not duration_matches(expected, audio.info.length):
+            raise ValueError('Площадка не передала полную выбранную запись')
+        artifact['evidence'] = {**artifact.get('evidence', {}), 'selection': 'user-replacement',
+                                'candidate': {key: candidate[key] for key in ('key', 'title', 'artist', 'url')}}
+        return artifact
     if 'url' in replacement:
         _, kind, items = resolve_link(replacement['url'])
         if kind != 'track':
@@ -653,16 +720,9 @@ def repair_source(source, replacement, directory, *, progress=None):
         path, _ = _read_attachment(Path(replacement['path']))
         artifact = {'path': str(path), 'sha256': digest_file(path)}
     if source.get('song'):
-        from audio_match import fetch_spotify_preview, matches_excerpt
-
-        song = source['song']
-        if not song.get('preview_url'):
-            raise ValueError('У Spotify нет фрагмента для сверки присланной записи')
-        preview = directory / 'repair-reference.mp3'
-        fetch_spotify_preview(song['preview_url'], preview)
-        if not matches_excerpt(preview, Path(artifact['path']), song['duration']):
-            raise ValueError('Звук присланного файла отличается от фрагмента Spotify')
-        evidence = {**artifact.get('evidence', {}), 'audio_match': 'spotify-preview-original-speed'}
+        evidence = {'selection': 'user-replacement'}
+        if 'url' in replacement:
+            evidence['url'] = replacement['url']
         artifact['evidence'] = evidence
     return artifact
 
@@ -674,8 +734,12 @@ def main():
 
     sys.path.insert(1, str(Path(__file__).resolve().parents[1] / 'brain'))
 
+    from recovery_candidates import download_recovery_preview, find_recovery_candidates
+    from release_metadata import find_vk_release
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('link', 'attachment', 'audio', 'review', 'album-version'))
+    parser.add_argument('action', choices=('link', 'attachment', 'audio', 'review', 'album-version',
+                                          'vk-metadata', 'catalog-cover', 'recovery-options', 'recovery-preview', 'vk-release'))
     parser.add_argument('directory', type=Path)
     parser.add_argument('request', type=Path)
     parser.add_argument('result', type=Path)
@@ -687,7 +751,12 @@ def main():
                'audio': lambda: _download_with_cover(request, args.directory,
                                                    progress_reporter(args.progress) if args.progress else None),
                'review': lambda: review_source(request, args.directory),
-               'album-version': lambda: find_album_version(request)}
+               'album-version': lambda: find_album_version(request),
+               'vk-metadata': lambda: vk_catalog_matches(request),
+               'vk-release': lambda: find_vk_release(request),
+               'catalog-cover': lambda: download_import_cover(request, args.directory, catalog=True),
+               'recovery-options': lambda: find_recovery_candidates(request['source'], request.get('alternative')),
+               'recovery-preview': lambda: download_recovery_preview(request, args.directory)}
     try:
         result = {'data': actions[args.action]()}
     except RecordingUnavailable as exc:

@@ -39,9 +39,25 @@ class ImportJobs(DownloadQueue):
                     chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
                     files TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(chat_id,user_id,owner_id)
                 );
+                CREATE TABLE IF NOT EXISTS import_preview_messages (
+                    chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+                    expires_at REAL NOT NULL, PRIMARY KEY(chat_id,user_id)
+                );
+                CREATE TABLE IF NOT EXISTS import_metadata_batches (
+                    job_id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS import_metadata_entries (
+                    job_id INTEGER NOT NULL, position INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+                    editions TEXT, PRIMARY KEY(job_id,position)
+                );
+                CREATE INDEX IF NOT EXISTS import_metadata_work ON import_metadata_entries(state,job_id,position);
                 CREATE INDEX IF NOT EXISTS import_jobs_owner ON import_jobs(user_id, owner_id, state);
                 CREATE INDEX IF NOT EXISTS import_positions_work ON import_positions(state, run_after);
             """)
+            batch_columns = {column[1] for column in conn.execute('PRAGMA table_info(import_metadata_batches)')}
+            if 'release_editions' not in batch_columns:
+                conn.execute('ALTER TABLE import_metadata_batches ADD COLUMN release_editions TEXT')
             columns = {column[1] for column in conn.execute('PRAGMA table_info(import_jobs)')}
             if 'review' not in columns:
                 conn.execute('ALTER TABLE import_jobs ADD COLUMN review TEXT')
@@ -60,6 +76,7 @@ class ImportJobs(DownloadQueue):
         with self.connect() as conn:
             conn.execute("UPDATE import_jobs SET state='new' WHERE state='resolving'")
             conn.execute("UPDATE import_positions SET state='pending' WHERE state='downloading'")
+            conn.execute('UPDATE import_preview_messages SET expires_at=0')
             conn.execute("""UPDATE import_positions SET state='skipped',run_after=0,
                 error='Доставка не подтверждена. Проверьте чат перед повтором.'
                 WHERE state='sending'""")
@@ -110,6 +127,78 @@ class ImportJobs(DownloadQueue):
     def positions(self, job_id):
         with self.connect() as conn:
             return conn.execute('SELECT * FROM import_positions WHERE job_id=? ORDER BY position', (job_id,)).fetchall()
+
+    def completed_vk_track(self, telegram_id, owner_id, chat_id, request):
+        with self.connect() as conn:
+            return conn.execute("""SELECT j.* FROM import_jobs j JOIN import_positions p ON p.job_id=j.id
+                WHERE j.user_id=? AND j.owner_id=? AND j.chat_id=? AND j.request=?
+                  AND j.mode='server' AND j.kind='track' AND j.state='finished' AND j.result_id=p.track_id
+                  AND p.state='done' AND json_extract(p.source,'$.type')='vk'
+                ORDER BY j.id DESC LIMIT 1""",
+                (telegram_id, owner_id, chat_id, json.dumps(request, sort_keys=True))).fetchone()
+
+    def completed_vk_collections(self, telegram_id, owner_id, offset, limit):
+        with self.connect() as conn:
+            return conn.execute("""SELECT j.* FROM import_jobs j
+                WHERE j.user_id=? AND j.owner_id=? AND j.mode='server'
+                  AND j.kind IN ('album','playlist') AND j.state='finished'
+                  AND EXISTS(SELECT 1 FROM import_positions p WHERE p.job_id=j.id
+                    AND p.state='done' AND p.track_id IS NOT NULL AND json_extract(p.source,'$.type')='vk')
+                ORDER BY j.id DESC LIMIT ? OFFSET ?""", (telegram_id, owner_id, limit, offset)).fetchall()
+
+    def start_metadata_batch(self, job_id, chat_id, message_id, positions, *, release_editions=None):
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if conn.execute("SELECT 1 FROM import_metadata_entries WHERE job_id=? AND state='pending'",
+                            (job_id,)).fetchone():
+                return False
+            if conn.execute("SELECT COUNT(DISTINCT job_id) FROM import_metadata_entries WHERE state='pending'").fetchone()[0] >= 8:
+                raise ValueError('Очередь обновления метаданных занята. Попробуйте позже.')
+            conn.execute('''INSERT OR REPLACE INTO import_metadata_batches(
+                             job_id,chat_id,message_id,created_at,release_editions) VALUES (?,?,?,?,?)''',
+                         (job_id, chat_id, message_id, time.time(),
+                          json.dumps(release_editions, ensure_ascii=False) if release_editions is not None else None))
+            conn.execute('DELETE FROM import_metadata_entries WHERE job_id=?', (job_id,))
+            conn.executemany('INSERT INTO import_metadata_entries(job_id,position) VALUES (?,?)',
+                             ((job_id, position) for position in positions))
+            return True
+
+    def metadata_batch(self, job_id):
+        with self.connect() as conn:
+            return conn.execute('SELECT * FROM import_metadata_batches WHERE job_id=?', (job_id,)).fetchone()
+
+    def save_metadata_release(self, job_id, editions):
+        with self.connect() as conn:
+            conn.execute('UPDATE import_metadata_batches SET release_editions=? WHERE job_id=?',
+                         (json.dumps(editions, ensure_ascii=False), job_id))
+
+    def metadata_entries(self, job_id):
+        with self.connect() as conn:
+            return conn.execute('SELECT * FROM import_metadata_entries WHERE job_id=? ORDER BY position',
+                                (job_id,)).fetchall()
+
+    def next_metadata_entry(self):
+        with self.connect() as conn:
+            return conn.execute("""SELECT e.* FROM import_metadata_entries e JOIN import_metadata_batches b USING(job_id)
+                WHERE e.state='pending' ORDER BY b.created_at,e.position LIMIT 1""").fetchone()
+
+    def finish_metadata_entry(self, job_id, position, state, editions=None):
+        with self.connect() as conn:
+            conn.execute('UPDATE import_metadata_entries SET state=?,editions=? WHERE job_id=? AND position=?',
+                         (state, json.dumps(editions) if editions else None, job_id, position))
+
+    def select_metadata_edition(self, job_id, token):
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = conn.execute("SELECT position,editions FROM import_metadata_entries WHERE job_id=? AND state='review'",
+                                (job_id,)).fetchall()
+            for row in rows:
+                edition = next((item for item in json.loads(row['editions']) if item['token'] == token), None)
+                if edition:
+                    conn.execute("""UPDATE import_metadata_entries SET state='pending',editions=?
+                        WHERE job_id=? AND position=?""", (json.dumps([edition]), job_id, row['position']))
+                    return True
+            return False
 
     def outstanding(self, telegram_id, owner_id):
         with self.connect() as conn:
@@ -248,12 +337,49 @@ class ImportJobs(DownloadQueue):
                 return job_id
             if prompt['state'] != 'skipped' or prompt['job_state'] not in {'active', 'finished'}:
                 raise ValueError('Эта позиция уже обрабатывается или импорт закрыт')
-            source = json.loads(prompt['source'])
-            source['replacement'] = replacement
-            conn.execute("""UPDATE import_positions SET state='pending',source=?,retry_until=0,run_after=0
-                WHERE job_id=? AND position=?""", (json.dumps(source), job_id, prompt['position']))
+            self._replace_skipped(conn, job_id, prompt['position'], prompt['source'], replacement)
             conn.execute('INSERT INTO import_messages VALUES (?,?,?)', (chat_id, message_id, job_id))
             return job_id
+
+    @staticmethod
+    def _replace_skipped(conn, job_id, position, original, replacement):
+        source = json.loads(original)
+        source['replacement'] = replacement
+        conn.execute("""UPDATE import_positions SET state='pending',source=?,retry_until=0,run_after=0
+            WHERE job_id=? AND position=?""", (json.dumps(source), job_id, position))
+
+    def choose_recovery_candidate(self, job_id, position, telegram_id, owner_id, candidate):
+        with self.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("""SELECT p.source FROM import_positions p JOIN import_jobs j ON p.job_id=j.id
+                WHERE j.id=? AND p.position=? AND j.user_id=? AND j.owner_id=?
+                  AND p.state='skipped' AND j.state IN ('active','finished')""",
+                               (job_id, position, telegram_id, owner_id)).fetchone()
+            if not row:
+                return False
+            self._replace_skipped(conn, job_id, position, row['source'], {'candidate': candidate})
+            return True
+
+    def remember_preview_message(self, chat_id, telegram_id, message_id, expires_at):
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO import_preview_messages VALUES (?,?,?,?)
+                ON CONFLICT(chat_id,user_id) DO UPDATE SET message_id=excluded.message_id,expires_at=excluded.expires_at""",
+                         (chat_id, telegram_id, message_id, expires_at))
+
+    def preview_message(self, chat_id, telegram_id):
+        with self.connect() as conn:
+            return conn.execute('SELECT * FROM import_preview_messages WHERE chat_id=? AND user_id=?',
+                                (chat_id, telegram_id)).fetchone()
+
+    def expired_preview_messages(self, now):
+        with self.connect() as conn:
+            return conn.execute('SELECT * FROM import_preview_messages WHERE expires_at<=? LIMIT 64',
+                                (now,)).fetchall()
+
+    def forget_preview_message(self, chat_id, telegram_id, message_id):
+        with self.connect() as conn:
+            conn.execute('DELETE FROM import_preview_messages WHERE chat_id=? AND user_id=? AND message_id=?',
+                         (chat_id, telegram_id, message_id))
 
     def interrupt(self, job_id, position):
         with self.connect() as conn:
