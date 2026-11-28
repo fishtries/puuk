@@ -1,5 +1,7 @@
 """Publish verified Telegram import artifacts using the catalog's identities."""
 from contextlib import closing
+from dataclasses import fields
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -7,7 +9,7 @@ import tempfile
 import uuid
 
 import db
-from metadata import clean_cover_bytes, read_audio_metadata
+from metadata import AudioMetadata, clean_cover_bytes, read_audio_metadata
 from repositories import delivery
 from repositories.artist_credits import CreditSource
 from repositories.base import bump_catalog_version, get_connection
@@ -70,10 +72,12 @@ def album_cover(album_id):
         return tuple(row) if row else (None, None)
 
 
-def track_cover(track_id):
+def track_cover(track_id, *, preferred=False):
     with closing(get_connection()) as conn:
         row = conn.execute('SELECT image,mime FROM telegram_track_covers WHERE track_id=?',
                            (track_id,)).fetchone()
+        if row and preferred and not _catalog_metadata_exists(conn, track_id):
+            return None, None
         return tuple(row) if row else (None, None)
 
 
@@ -85,6 +89,78 @@ def store_track_cover(conn, track_id, image, mime):
         conn.execute('UPDATE tracks SET cover_version=COALESCE(cover_version,0)+1,cover_color=NULL WHERE id=?',
                      (track_id,))
         bump_catalog_version(conn)
+    return bool(changed)
+
+
+CATALOG_FIELDS = ('title', 'artist', 'album_artist', 'year', 'genre', 'track_number', 'disc_number')
+CATALOG_REVISION_FIELDS = (*CATALOG_FIELDS, 'album_id', 'cover_version', 'file_path', 'file_size', 'file_mtime_ns')
+
+
+def _catalog_metadata_exists(conn, track_id):
+    return conn.execute("""SELECT 1 FROM telegram_track_imports
+        WHERE track_id=? AND source GLOB 'vk:track:*' AND json_extract(evidence, '$.catalog_metadata') IS NOT NULL
+        LIMIT 1""", (track_id,)).fetchone() is not None
+
+
+def has_catalog_metadata(track_id):
+    with closing(get_connection()) as conn:
+        return _catalog_metadata_exists(conn, track_id)
+
+
+def _vk_metadata_target(conn, user, track_id, source_key):
+    if not source_key.startswith('vk:track:'):
+        return None, None
+    imported = conn.execute('SELECT evidence,sha256 FROM telegram_track_imports WHERE source=? AND track_id=?',
+                            (source_key, track_id)).fetchone()
+    track = db.get_track(track_id, conn=conn) if imported else None
+    if not track or (user.get('role') != 'admin' and track['added_by_user_id'] != user['id']):
+        return None, None
+    return track, imported
+
+
+def vk_metadata_target(user, track_id, source_key):
+    with closing(get_connection()) as conn:
+        track, _ = _vk_metadata_target(conn, user, track_id, source_key)
+        return track
+
+
+def update_vk_metadata(user, track_id, source_key, before, edition, cover_path, *, keep_album=False):
+    image, mime = clean_cover_bytes(Path(cover_path).read_bytes())
+    with closing(get_connection()) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        track, imported = _vk_metadata_target(conn, user, track_id, source_key)
+        if (track is None or any(track[field] != before[field] for field in CATALOG_REVISION_FIELDS)
+                or track['duration'] != before['duration']):
+            return False
+
+        meta = AudioMetadata(**{field.name: track[field.name] for field in fields(AudioMetadata)
+                                if field.name in track and track[field.name] is not None})
+        release_fields = {'album_artist', 'track_number', 'disc_number'} if keep_album else set()
+        for field in CATALOG_FIELDS:
+            if field not in release_fields and (value := edition.get(field)):
+                setattr(meta, field, value)
+        album_id = track['album_id']
+        if not keep_album and (album := edition.get('album')):
+            album_id = resolve_import_album(track_id, album, meta.album_artist, year=meta.year,
+                                            artist_source=CreditSource('provider', [meta.album_artist])
+                                            if meta.album_artist else None, conn=conn)
+        db.update_track_metadata_from_audio(
+            track_id, meta, album_id=album_id,
+            artist_source=CreditSource('provider', [meta.artist]),
+            album_artist_source=CreditSource('provider', [meta.album_artist]) if meta.album_artist and not keep_album else None,
+            conn=conn,
+        )
+        cover_changed = store_track_cover(conn, track_id, image, mime)
+        evidence = json.loads(imported['evidence'])
+        if not cover_changed and not evidence.get('catalog_metadata'):
+            # The visible cover can change precedence even if these bytes were already stored.
+            conn.execute('UPDATE tracks SET cover_version=COALESCE(cover_version,0)+1,cover_color=NULL WHERE id=?',
+                         (track_id,))
+            bump_catalog_version(conn)
+        evidence['catalog_metadata'] = edition['source']
+        conn.execute('UPDATE telegram_track_imports SET evidence=? WHERE source=?',
+                     (json.dumps(evidence, ensure_ascii=False), source_key))
+        return True
 
 
 def find_release_flac(source, music_dir):
@@ -125,10 +201,15 @@ def _copy_artifact(source, target):
             path.unlink(missing_ok=True)
 
 
-def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None, album=False):
+def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None, album=False,
+            selected_album_id=None):
     audio = Path(artifact['path'])
     checksum = artifact['sha256']
     source_key = source.get('key') or f'file:{checksum}'
+    evidence = {**(artifact.get('evidence') or {})}
+    candidate = evidence.get('candidate')
+    if evidence.get('selection') == 'user-replacement':
+        source_key = f'manual:{source_key}:{checksum}'
     song = source.get('song') or {}
     root = Path(music_dir).resolve()
     metadata = read_audio_metadata(str(audio))
@@ -155,13 +236,21 @@ def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None
     for field in ('title', 'artist', 'album', 'album_artist', 'year', 'genre', 'disc_number', 'track_number'):
         if value := source.get('metadata', {}).get(field):
             setattr(metadata, field, value)
+    if candidate and candidate.get('title'):
+        metadata.title = candidate['title']
     album_artist = metadata.album_artist or ('' if album else metadata.artist)
     artist_source = CreditSource('provider', song['artists']) if song.get('artists') else None
     with closing(get_connection()) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        recovery_album = None
+        if album and candidate:
+            recovery_album = selected_album_id or resolve_import_album(
+                '', metadata.album, album_artist, year=metadata.year, conn=conn,
+            )
+            source_key = f'{source_key}:album:{recovery_album}:{position}'
         prior = conn.execute("""SELECT i.sha256,t.id,t.file_path,t.album_id FROM telegram_track_imports i
             JOIN tracks t ON t.id=i.track_id WHERE i.source=?""", (source_key,)).fetchone()
-        if prior is None:
+        if prior is None and not (album and candidate):
             prior = conn.execute("""SELECT i.sha256,t.id,t.file_path,t.album_id FROM telegram_track_imports i
                 JOIN tracks t ON t.id=i.track_id WHERE i.sha256=? ORDER BY t.id LIMIT 1""", (checksum,)).fetchone()
         if prior is None and (reuse := artifact.get('reuse')):
@@ -176,9 +265,10 @@ def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None
             target = root / rel_path
             album_id = prior['album_id']
         else:
-            expected_album = resolve_import_album(prior['id'] if prior else '', metadata.album,
-                                                  album_artist, year=metadata.year, conn=conn)
-            if prior is None and album and song and expected_album:
+            expected_album = recovery_album or resolve_import_album(
+                prior['id'] if prior else '', metadata.album, album_artist, year=metadata.year, conn=conn,
+            )
+            if prior is None and album and song and expected_album and not candidate:
                 same = conn.execute("""SELECT t.id,t.file_path,t.album_id FROM tracks t
                     WHERE t.album_id=? AND t.title=? COLLATE NOCASE AND t.artist=? COLLATE NOCASE
                     AND (t.album_track_position=? OR
@@ -187,7 +277,10 @@ def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None
                                     (expected_album, metadata.title, metadata.artist, position, position)).fetchall()
                 if len(same) == 1 and Path(same[0]['file_path']).suffix.lower() != '.flac':
                     prior = same[0]
-            rel_path = f'telegram/{checksum[:2]}/{checksum}{audio.suffix.lower()}'
+            # Catalog tracks have one album membership. A manually chosen album
+            # variant must not move the same bytes out of an existing release.
+            placement = '-' + hashlib.sha256(source_key.encode()).hexdigest()[:20] if album and candidate else ''
+            rel_path = f'telegram/{checksum[:2]}/{checksum}{placement}{audio.suffix.lower()}'
             target = (root / rel_path).resolve()
             if not target.is_relative_to(root):
                 raise ValueError('Недопустимый путь публикации')
@@ -235,7 +328,12 @@ def publish(owner_id, source, artifact, music_dir, *, position, playlist_id=None
                     ON CONFLICT(track_id) DO UPDATE SET revision=excluded.revision,
                     refresh=MAX(telegram_import_analysis.refresh,excluded.refresh)""",
                              (track_id, revision, int(replaced)))
-        evidence = {**(artifact.get('evidence') or {})}
+        if source['type'] == 'vk':
+            previous = conn.execute('SELECT evidence FROM telegram_track_imports WHERE source=? AND sha256=?',
+                                    (source_key, checksum)).fetchone()
+            if previous and (provider := json.loads(previous['evidence']).get('catalog_metadata')):
+                evidence['catalog_metadata'] = provider
+                imported_cover = None
         if evidence.get('audio_match'):
             if song.get('preview_url'):
                 evidence['reference'] = {'preview_url': song['preview_url'], 'duration': song['duration']}

@@ -200,13 +200,13 @@ def get_cover_art(
         try:
             from services.telegram_import_service import album_cover, track_cover
 
+            image_data, mime = None, None
             if db_track and db_track.get('album_id'):
-                image_data, mime = album_cover(db_track['album_id'])
-                if image_data:
-                    if size is not None:
-                        image_data, mime = resize_cover_image(image_data, size)
-                    return Response(content=image_data, media_type=mime, headers=cache_headers)
-            image_data, mime = track_cover(track_id)
+                image_data, mime = track_cover(track_id, preferred=True)
+                if not image_data:
+                    image_data, mime = album_cover(db_track['album_id'])
+            if not image_data:
+                image_data, mime = track_cover(track_id)
             if image_data and size is not None:
                 image_data, mime = resize_cover_image(image_data, size)
             if not image_data:

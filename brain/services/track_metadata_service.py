@@ -251,6 +251,13 @@ def get_track_metadata_details(track_id: str, current_user: Dict[str, Any], base
         db.update_track_metadata_from_audio(track_id, actual_meta, album_id=album_id, cover_version_inc=False)
         db_track = db.get_track(track_id)
 
+    from services.telegram_import_service import CATALOG_FIELDS, has_catalog_metadata, track_cover
+    if has_catalog_metadata(track_id):
+        for field in CATALOG_FIELDS:
+            setattr(actual_meta, field, db_track.get(field))
+        actual_meta.album = ""
+        actual_meta.has_cover = actual_meta.has_cover or track_cover(track_id)[0] is not None
+
     album_name = actual_meta.album or "Unknown Album"
     if not actual_meta.album and db_track.get("album_id"):
         conn = db.get_connection()

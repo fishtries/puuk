@@ -97,7 +97,7 @@ def search_lyrics_providers(q: str) -> list:
     return results
 
 
-def search_metadata_providers(q: str) -> list:
+def search_metadata_providers(q: str, *, search_both=False) -> list:
     """Поиск метаданных (title, artist, album, year, artwork) из iTunes и Deezer."""
     if not q or not q.strip():
         return []
@@ -113,6 +113,7 @@ def search_metadata_providers(q: str) -> list:
         )
         if res.status_code == 200:
             for item in res.json().get("results", []):
+                millis = item.get("trackTimeMillis")
                 raw_art = item.get("artworkUrl100", "")
                 cover_url = raw_art.replace("100x100bb", "1000x1000bb") if raw_art else ""
                 year = item.get("releaseDate", "")[:4] if item.get("releaseDate") else ""
@@ -129,13 +130,14 @@ def search_metadata_providers(q: str) -> list:
                     "track_number": track_num,
                     "disc_number": disc_num,
                     "cover_url": cover_url,
-                    "source": "iTunes"
+                    "source": "iTunes",
+                    "duration": millis / 1000 if isinstance(millis, (int, float)) else None
                 })
     except Exception as e:
         print("iTunes search error:", e)
 
     # 2. Deezer fallback if iTunes gave few results
-    if len(results) < 3:
+    if search_both or len(results) < 3:
         try:
             res = requests.get(
                 DEEZER_SEARCH_URL,
@@ -156,7 +158,8 @@ def search_metadata_providers(q: str) -> list:
                         "track_number": "",
                         "disc_number": "",
                         "cover_url": cover_url,
-                        "source": "Deezer"
+                        "source": "Deezer",
+                        "duration": item.get("duration")
                     })
         except Exception as e:
             print("Deezer search error:", e)

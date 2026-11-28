@@ -119,3 +119,96 @@ def test_recording_review_does_not_block_a_replaced_file():
     assert recording_reviews.request(track_id, 1, '50:200') == 'queued'
     assert recording_reviews.finish(recording_reviews.claim(), 'mismatch') == 'mismatch'
     assert track_id in recording_reviews.blocked_track_ids()
+
+
+def test_vk_catalog_metadata_updates_existing_track_without_replacing_audio(tmp_path, monkeypatch):
+    from PIL import Image
+    from metadata import AudioMetadata
+    from services import telegram_import_service as catalog
+    from services.media_locations import ingest_music_file
+
+    monkeypatch.setenv('MUSIC_DIR', str(tmp_path))
+    audio = tmp_path / 'audio.mp3'
+    audio.write_bytes(b'vk recording')
+    art = tmp_path / 'cover.png'
+    Image.new('RGB', (30, 30), 'red').save(art)
+    monkeypatch.setattr(catalog, 'read_audio_metadata', lambda _: AudioMetadata(title='Original', duration=245))
+    source = {'type': 'vk', 'key': f'vk:track:{uuid4()}', 'title': 'Original', 'artist': 'Artist'}
+    artifact = {'path': str(audio), 'sha256': hashlib.sha256(audio.read_bytes()).hexdigest()}
+    track_id, _ = catalog.publish(1, source, artifact, tmp_path, position=1)
+    before = db.get_track(track_id)
+    db.add_favorite(1, track_id)
+    playlist_id, _ = prepare_playlist(1, f'vk:{uuid4()}', 'Playlist')
+    assert db.add_track_to_playlist(playlist_id, track_id)
+    entry_id = db.get_playlist_tracks(playlist_id)[0]['playlist_entry_id']
+    edition = {'title': 'Original', 'artist': 'Artist', 'album': 'Studio Album', 'album_artist': 'Artist',
+               'year': '2021', 'track_number': '4', 'source': 'iTunes'}
+
+    assert not catalog.update_vk_metadata({'id': 2, 'role': 'user'}, track_id, source['key'], before, edition, art)
+    assert catalog.update_vk_metadata({'id': 1}, track_id, source['key'], before, edition, art)
+    after = db.get_track(track_id)
+    assert db.get_album(after['album_id'])['title'] == 'Studio Album'
+    assert (after['year'], after['track_number'], after['duration']) == ('2021', '4', 245)
+    assert after['cover_version'] > before['cover_version']
+    assert catalog.track_cover(track_id, preferred=True)[1] == 'image/jpeg'
+    assert not catalog.update_vk_metadata({'id': 1}, track_id, source['key'], before, edition, art)
+
+    published = tmp_path / after['file_path']
+    assert published.read_bytes() == audio.read_bytes()
+    assert published.stat().st_mtime_ns == before['file_mtime_ns']
+    assert track_id in db.get_favorite_track_ids(1)
+    entry, = db.get_playlist_tracks(playlist_id)
+    assert (entry['id'], entry['playlist_entry_id']) == (track_id, entry_id)
+    assert catalog.publish(1, source, artifact, tmp_path, position=1)[0] == track_id
+    assert ingest_music_file(str(published), source='import')['album_id'] == after['album_id']
+    assert catalog.has_catalog_metadata(track_id)
+
+
+def test_selected_variant_fills_album_position_without_moving_an_existing_track(tmp_path, monkeypatch):
+    from metadata import AudioMetadata
+    from services import telegram_import_service as catalog
+
+    audio = tmp_path / 'variant.mp3'
+    audio.write_bytes(b'already published audio')
+    sha = hashlib.sha256(audio.read_bytes()).hexdigest()
+    monkeypatch.setattr(catalog, 'read_audio_metadata', lambda _: AudioMetadata(title='Variant', duration=245))
+    existing_source = {'type': 'direct', 'key': f'youtube:{uuid4()}', 'title': 'Variant',
+                       'artist': 'Artist', 'album': f'Other release {uuid4()}'}
+    old_track, old_album = catalog.publish(1, existing_source, {'path': str(audio), 'sha256': sha}, tmp_path,
+                                          position=1)
+    release = db.resolve_album(f'Target album {uuid4()}', album_artist='Artist')
+    source = {'type': 'vk', 'key': f'vk:track:{uuid4()}', 'title': 'Requested recording', 'artist': 'Artist'}
+    evidence = {'selection': 'user-replacement', 'candidate': {'title': 'Variant'}}
+    artifact = {'path': str(audio), 'sha256': sha, 'evidence': evidence}
+    track, album = catalog.publish(1, source, artifact, tmp_path, position=8, album=True, selected_album_id=release)
+    assert track != old_track and album == release
+    assert db.get_track(old_track)['album_id'] == old_album
+    placed = db.get_track(track)
+    assert (placed['album_id'], placed['album_track_position'], placed['title']) == (release, 8, 'Variant')
+    assert catalog.publish(1, source, artifact, tmp_path, position=8, album=True, selected_album_id=release)[0] == track
+
+
+def test_bulk_vk_metadata_keeps_the_imported_album_and_track_numbers(tmp_path, monkeypatch):
+    from PIL import Image
+    from metadata import AudioMetadata
+    from services import telegram_import_service as catalog
+
+    audio = tmp_path / 'audio.mp3'
+    audio.write_bytes(b'vk album recording')
+    cover = tmp_path / 'cover.png'
+    Image.new('RGB', (30, 30), 'blue').save(cover)
+    monkeypatch.setattr(catalog, 'read_audio_metadata', lambda _: AudioMetadata(duration=190))
+    source = {'type': 'vk', 'key': f'vk:track:{uuid4()}', 'title': 'Song', 'artist': 'Artist',
+              'album': f'Original album {uuid4()}', 'album_artist': 'Artist', 'disc': 2, 'track': 8}
+    artifact = {'path': str(audio), 'sha256': hashlib.sha256(audio.read_bytes()).hexdigest()}
+    track_id, album_id = catalog.publish(1, source, artifact, tmp_path, position=8, album=True)
+    edition = {'album': 'Compilation', 'album_artist': 'Various Artists', 'track_number': '19', 'disc_number': '1',
+               'source': 'iTunes', 'genre': 'Pop'}
+    before = db.get_track(track_id)
+    assert catalog.update_vk_metadata({'id': 1}, track_id, source['key'], before, edition, cover, keep_album=True)
+    after = db.get_track(track_id)
+    assert (after['album_id'], after['album_artist'], after['disc_number'], after['track_number']) == (
+        album_id, 'Artist', '2', '8',
+    )
+    assert after['genre'] == 'Pop'
+    assert catalog.track_cover(track_id, preferred=True)[1] == 'image/jpeg'
