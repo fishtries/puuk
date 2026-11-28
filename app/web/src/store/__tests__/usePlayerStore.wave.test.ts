@@ -298,6 +298,18 @@ describe('Wave batch consumption', () => {
     assert.deepEqual(loadedStreamIds(), ['00000000-0000-4000-a000-000000000041']);
   });
 
+  it('the home card starts a different run from a playing Wave', async () => {
+    const previous = '00000000-0000-4000-a000-000000000041';
+    const next = '00000000-0000-4000-a000-000000000042';
+    seedWave(previous, [previous], [previous]);
+    waveQueueReplies = [[track(next)]];
+    await usePlayerStore.getState().startWave();
+    const params = new URL(waveQueueFetchUrls[0], 'http://localhost').searchParams;
+    assert.equal(params.get('mode'), 'start');
+    assert.equal(params.get('previous_track_id'), previous);
+    assert.equal(usePlayerStore.getState().currentTrack?.id, next);
+  });
+
   it('5. repeated Next consumes the buffer: played head leaves the queue, ids are remembered', async () => {
     seedWave('00000000-0000-4000-a000-000000000042', ['00000000-0000-4000-a000-000000000042', '00000000-0000-4000-a000-000000000043', '00000000-0000-4000-a000-000000000044', '00000000-0000-4000-a000-000000000045', '00000000-0000-4000-a000-000000000046', '00000000-0000-4000-a000-000000000047', '00000000-0000-4000-a000-000000000048', '00000000-0000-4000-a000-000000000049'], ['00000000-0000-4000-a000-000000000042']);
 

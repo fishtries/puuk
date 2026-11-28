@@ -51,7 +51,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   const status = usePlayerStore((state) => state.status);
   const playTrack = usePlayerStore((state) => state.playTrack);
   const togglePlay = usePlayerStore((state) => state.togglePlay);
-  const toggleWave = usePlayerStore((state) => state.toggleWave);
+  const startWave = usePlayerStore((state) => state.startWave);
   const isWaveActive = usePlayerStore((state) => state.isWaveActive);
   const [waveLaunch, setWaveLaunch] = useState<Promise<boolean> | null>(null);
   const loadHistory = usePlayerStore((state) => state.loadHistory);
@@ -216,7 +216,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpenAuth, onAddToPlayl
   };
 
   const handleLaunchWave = async () => {
-    const launch = toggleWave();
+    const launch = startWave();
     setWaveLaunch(launch);
     try {
       await launch;

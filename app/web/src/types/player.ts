@@ -63,6 +63,7 @@ export interface PlayerStoreState {
   previousTrack: () => void;
   setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
+  startWave: () => Promise<boolean>;
   toggleWave: () => Promise<boolean>;
   addToQueue: (track: Track) => void;
   removeFromQueue: (index: number) => void;

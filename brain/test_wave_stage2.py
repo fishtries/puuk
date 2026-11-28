@@ -41,22 +41,23 @@ class TestWaveExclusionsAndDiversity(unittest.TestCase):
         resp = cls.client.post("/api/auth/login", json={"username": name, "password": "pass123"})
         cls.headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
-    def test_cold_start_reads_recent_vectors_once_in_history_order(self):
+    def test_restart_uses_playing_track_as_contrast(self):
         from types import SimpleNamespace
         from unittest.mock import patch
-        from services import recommendation_service as reco
+        from routers import wave_recommendations as route
 
-        missing, first, older = [str(uuid.uuid4()) for _ in range(3)]
-        point = lambda tid, vector: SimpleNamespace(id=tid, payload={}, vector=vector)
-        with patch.object(db, 'get_user_listening_history', return_value=[missing, first, first, 'legacy-id', older]), \
-             patch.object(reco.client, 'retrieve', return_value=[point(older, [0, 1]), point(first, [1, 0])]) as retrieve, \
-             patch.object(reco, 'get_or_compute_user_embedding', return_value=None), \
-             patch.object(reco.client, 'query_points', return_value=SimpleNamespace(points=[])) as query:
-            response = self.client.get('/api/wave/queue', headers=self.headers)
+        tid = str(uuid.uuid4())
+        point = SimpleNamespace(id=tid)
+        with patch.object(route, 'retrieve_track_point', return_value=[point]), \
+             patch.object(route.wave_mix, 'mixed_queue', return_value=[]) as mix:
+            response = self.client.get('/api/wave/queue', params={'mode': 'start', 'previous_track_id': tid},
+                                       headers=self.headers)
         self.assertEqual(response.status_code, 200)
-        retrieve.assert_called_once_with(collection_name=reco.COLLECTION_NAME, ids=[missing, first, older],
-                                         with_vectors=True, with_payload=True)
-        self.assertEqual(query.call_args.kwargs['query'], [1.0, 0.0])
+        user, previous, restart, _, hard, _, _ = mix.call_args.args
+        self.assertEqual(user, self.user_id)
+        self.assertIs(previous, point)
+        self.assertTrue(restart)
+        self.assertIn(tid, hard)
 
     def test_00_artist_key_falls_back_to_file_path(self):
         """Если artist нет ни в payload, ни в SQLite — извлекаем его из имени файла."""
@@ -396,3 +397,134 @@ def test_repeated_skips_cool_down_other_tracks_by_the_artist(monkeypatch):
     history.clear()
     history['new-a'] = (2., False)
     assert first() == 'new-b'
+
+
+def test_sparkle_neighbourhood_widens_before_repeating_artist(monkeypatch):
+    from types import SimpleNamespace
+    from services import recommendation_service as service
+
+    artist = '山下達郎'
+    seed = SimpleNamespace(vector=[1., 0.], payload={'artist': artist})
+    pool = [MockPoint(f'album-{i}', .99, artist) for i in range(service.CANDIDATE_POOL_FLOOR)]
+    pool.extend(MockPoint(f'other-{i}', .85, f'Artist {i}') for i in range(12))
+    limits = []
+
+    def query(**kwargs):
+        limits.append(kwargs['limit'])
+        return SimpleNamespace(points=pool[:kwargs['limit']])
+
+    monkeypatch.setattr(service.client, 'query_points', query)
+    result = service.get_smart_recommendations('sparkle', 8, seed, dislike_ids={'other-0'})
+    artists = [p.payload['artist'] for p in result]
+    assert len(limits) == 2
+    assert len(result) == 8
+    assert artists[0] != artist
+    assert artists.count(artist) <= 1
+    assert 'other-0' not in {p.id for p in result}
+
+
+def test_mix_gives_a_transition_four_tracks_to_develop(monkeypatch):
+    from types import SimpleNamespace
+    from services import wave_mix as mix
+
+    a, b, weak = [str(uuid.uuid4()) for _ in range(3)]
+    seed = SimpleNamespace(id=a, vector=[1., 0.], payload={})
+    contrast = SimpleNamespace(id=b, vector=[0., 1.], payload={})
+    snapshot = dict(likes={a, b}, dislikes=set(), events=[])
+    monkeypatch.setattr(mix, 'taste_snapshot', lambda _: snapshot)
+    monkeypatch.setattr(mix, 'track_weights', lambda s: {a: 2., b: 2., weak: .81})
+
+    def anchors(**kw):
+        assert set(kw['ids']) == {a, b}
+        return [seed, contrast]
+    monkeypatch.setattr(mix.reco.client, 'retrieve', anchors)
+    def neighbours(tid, limit, point, **kw):
+        assert a in kw['dislike_ids']
+        return [SimpleNamespace(id=f'{tid}/{n}') for n in range(limit)]
+    monkeypatch.setattr(mix.reco, 'get_smart_recommendations', neighbours)
+    trace = {}
+    result = mix.mixed_queue(1, seed, True, 8, set(), set(), set(), trace=trace)
+    assert [p.id.split('/')[0] for p in result] == [b]*4 + [a]*4
+    for position, point in enumerate(result, 1):
+        assert trace[point.id] == {
+            'anchor_id': b if position <= 4 else a,
+            'source': 'taste' if position <= 4 else 'alternate',
+            'mix_position': position,
+        }
+
+
+def test_mix_extends_a_good_run_and_shortens_it_after_early_skips():
+    from datetime import datetime, timezone
+    from services.wave_mix import _run_length
+
+    event = dict(ts=datetime.now(timezone.utc).isoformat(), context='wave',
+                 event_type='finish', listen_duration_ms=240000, track_duration_ms=240000)
+    assert _run_length([event]) == 4
+    assert _run_length([event, event]) == 6
+    skipped = dict(event, event_type='skip', listen_duration_ms=4000)
+    assert _run_length([skipped, skipped]) == 2
+    old = dict(skipped, ts='2020-01-01')
+    assert _run_length([old, old]) == 4
+
+
+def test_uncredited_slowed_edits_can_lead_a_matching_run(monkeypatch):
+    from types import SimpleNamespace
+    from services import recommendation_service as service
+
+    seed = SimpleNamespace(vector=[1., 0.], payload={'title': '9 AM (slowed and reverb)'})
+    edit = MockPoint('edit', .90, None)
+    edit.payload['title'] = 'ILoveUIHateU (Slowed + Reverb)'
+    named = MockPoint('named', .92, 'Known Artist')
+    monkeypatch.setattr(service.client, 'query_points', lambda **kw: SimpleNamespace(points=[named, edit]))
+    result = service.get_smart_recommendations('seed', 2, seed, personal_mix=True)
+    assert result[0].id == 'edit'
+
+
+def test_legacy_and_new_wave_launchers_share_a_rotation_without_feedback(tmp_path, monkeypatch):
+    import test_db_path
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    from routers import wave_recommendations as route
+    from repositories.wave_openings import recent_openings, reserve_opening
+
+    monkeypatch.setenv('PUUK_DB_PATH', str(tmp_path / 'rotate.db'))
+    db.init_db()
+    uid = db.create_user('rotate', hash_password('pass123'), role='admin')
+    ids = [str(uuid.uuid4()) for _ in range(4)]
+    points = [SimpleNamespace(id=tid) for tid in ids]
+    def mixed_queue(*args, trace=None):
+        if trace is not None:
+            for i, point in enumerate(points, 1):
+                trace[point.id] = dict(anchor_id='anchor', source='taste', mix_position=i)
+        return list(points)
+
+    monkeypatch.setattr(route.wave_mix, 'mixed_queue', mixed_queue)
+    monkeypatch.setattr(route, 'recent_wave_exposure', lambda user: {ids[0]: (6., False)})
+    monkeypatch.setattr(route, 'build_wave_track_payload', lambda p, *a, **kw: {'id': str(p.id)})
+    client = TestClient(app)
+    token = client.post('/api/auth/login', json={'username': 'rotate', 'password': 'pass123'}).json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    heads = []
+    for path in ['/api/wave/next?current_track_id=random', '/api/wave/queue?limit=1'] * 2:
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        first = data[0] if isinstance(data, list) else data
+        assert 'wave_trace' not in first
+        heads.append(first['id'])
+    assert heads[0] != ids[0]
+    assert len(set(heads)) == 4
+    assert recent_openings(uid) == heads
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        picks = list(pool.map(lambda _: reserve_opening(uid, ids, set(), set()), range(2)))
+    assert set(picks) == set(heads[:2])
+    assert db.get_user_listening_history(uid) == []
+    monkeypatch.setattr(route, 'reserve_opening', lambda *args: ids[2])
+    monkeypatch.setattr(db, 'get_tracks_by_ids', lambda keys: {'anchor': {'title': 'Anchor'}} if 'anchor' in keys else {})
+    explained = client.get('/api/wave/queue?mode=start&limit=2&explain=true', headers=headers)
+    assert explained.status_code == 200, explained.text
+    assert [p['id'] for p in explained.json()] == [ids[2], ids[0]]
+    assert [p['wave_trace'] for p in explained.json()] == [
+        dict(source='taste', anchor_id='anchor', anchor_title='Anchor', mix_position=3, server_position=1),
+        dict(source='taste', anchor_id='anchor', anchor_title='Anchor', mix_position=1, server_position=2),
+    ]

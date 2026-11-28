@@ -86,6 +86,7 @@ function invalidateWaveRequests() {
 function requestWaveBatch(
   currentTrackId: string | undefined,
   exclusions: WaveExclusionSets,
+  mode?: 'start' | 'mix',
 ): Promise<Track[]> {
   if (waveFetchPromise) return waveFetchPromise;
 
@@ -94,7 +95,9 @@ function requestWaveBatch(
   const timeout = setTimeout(() => controller.abort(), 5000);
   const request = fetchWaveQueue({
     signal: controller.signal,
-    currentTrackId,
+    currentTrackId: mode === 'start' ? undefined : currentTrackId,
+    previousTrackId: mode === 'start' ? currentTrackId : undefined,
+    mode,
     limit: WAVE_BATCH_SIZE,
     excludeTrackIds: exclusions.excludeTrackIds,
     queuedTrackIds: exclusions.queuedTrackIds,
@@ -111,6 +114,7 @@ function requestWaveBatch(
 
 export const usePlayerStore = create<PlayerStoreState>((set, get) => {
   let source: AudioDelivery | null = null;
+  let personalWave = false;
   let desiredPlaying = false;
   let exhausted = false;
   let episode: { controller: AbortController; generation: number } | null = null;
@@ -259,7 +263,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     void runAudio(get().currentTrack!, get().currentTime, true);
   }
   onApiSessionChange(() => get().resetUserData());
-  async function loadWaveBatch(): Promise<Track[]> {
+  async function loadWaveBatch(start = false): Promise<Track[]> {
     const generation = queueGeneration;
     const { currentTrack, queue, wavePlayedIds } = get();
     const exclusions = buildWaveExclusions(currentTrack, queue, wavePlayedIds);
@@ -269,7 +273,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
       // requestWaveBatch de-duplicates concurrent callers by sharing one promise,
       // so a second Next press waits for the same in-flight request instead of
       // dropping it and returning an empty batch.
-      const tracks = await requestWaveBatch(currentTrack?.id, exclusions);
+      const tracks = await requestWaveBatch(currentTrack?.id, exclusions, start ? 'start' : personalWave ? 'mix' : undefined);
       return generation === queueGeneration ? tracks : [];
     } catch (e) {
       if (generation === queueGeneration) console.warn('Wave queue fetch failed:', e);
@@ -381,7 +385,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
 
     set({ isWaveLoading: true });
     try {
-      const fresh = await requestWaveBatch(currentTrack?.id, exclusions);
+      const fresh = await requestWaveBatch(currentTrack?.id, exclusions, personalWave ? 'mix' : undefined);
       if (generation !== queueGeneration || !get().isWaveActive) return;
       const state = get();
       const anchorIndex = state.currentTrack
@@ -523,6 +527,7 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     playTrack: async (track: Track, newQueue?: Track[], source?: 'collection' | 'search' | 'wave') => {
       if (!captureApiSession().token) { set({ isLoginOpen: true }); return; }
       if (source !== 'wave' && (newQueue || source)) {
+        personalWave = false;
         invalidateWaveRequests();
         set({
           isWaveActive: source === 'search',
@@ -686,45 +691,32 @@ export const usePlayerStore = create<PlayerStoreState>((set, get) => {
     },
 
     toggleWave: async (): Promise<boolean> => {
+      if (!get().isWaveActive) return get().startWave();
+      invalidateWaveRequests();
+      personalWave = false;
+      set({ isWaveActive: false, isWaveLoading: false, autoplayAfterQueue: false });
+      return false;
+    },
+
+    startWave: async (): Promise<boolean> => {
       if (!localStorage.getItem('puuk_token')) {
         set({ isLoginOpen: true });
         return false;
       }
       invalidateWaveRequests();
       const generation = queueGeneration;
-      const nextWave = !get().isWaveActive;
-      const currentTrack = get().currentTrack;
-
-      if (!nextWave) {
-        set({ isWaveActive: false, isWaveLoading: false, autoplayAfterQueue: false });
-        return false;
-      }
-
-      set({
-        isWaveActive: true,
-        wavePlayedIds: currentTrack?.id ? [currentTrack.id] : [],
-      });
-
-      const waveTracks = await loadWaveBatch();
+      const { currentTrack, isWaveActive: wasActive, wavePlayedIds } = get();
+      set({ isWaveActive: true });
+      const waveTracks = await loadWaveBatch(true);
       if (generation !== queueGeneration) return false;
-      if (waveTracks.length === 0) {
-        set({ isWaveActive: false });
+      const fresh = mergeWaveTracks([], waveTracks, new Set(currentTrack ? [currentTrack.id] : []));
+      if (!fresh.length) {
+        set({ isWaveActive: wasActive });
         return false;
       }
-
-      const state = get();
-      if (!state.currentTrack) {
-        await get().playTrack(waveTracks[0], mergeWaveTracks([], waveTracks, new Set()), 'wave');
-        return true;
-      }
-
-      // Keep playing the current track and refill the buffer behind it.
-      const merged = mergeWaveTracks([], waveTracks, new Set([state.currentTrack.id]));
-      set({
-        queue: [state.currentTrack, ...merged],
-        currentTrackIndex: 0,
-      });
-
+      personalWave = true;
+      set({ wavePlayedIds: trimPlayedIds([...wavePlayedIds, ...(currentTrack ? [currentTrack.id] : [])]) });
+      await get().playTrack(fresh[0], fresh, 'wave');
       return true;
     },
 

@@ -2,6 +2,7 @@
 import os
 import logging
 import random
+import re
 from collections import Counter
 from typing import Optional
 
@@ -47,6 +48,15 @@ def _artist_from_file_path(file_path: Optional[str]) -> Optional[str]:
     if " - " not in name:
         return None
     return name.split(" - ", 1)[0].strip() or None
+
+
+_EDIT_VERSION = re.compile(r"\b(slowed|sped[ -]up|nightcore|acoustic|instrumental)\b", re.I)
+
+
+def _edit_version(payload):
+    title = payload.get("title") or os.path.basename(payload.get("file_path") or "")
+    match = _EDIT_VERSION.search(title)
+    return match[1].casefold().replace("-", " ") if match else None
 
 
 class _ArtistResolver:
@@ -102,6 +112,10 @@ def select_diverse_recommendations(
     max_tracks_per_artist: int = MAX_TRACKS_PER_ARTIST,
     resolver: Optional["_ArtistResolver"] = None,
     band_score_eps: float = 0.0,
+    *,
+    seed_artists: frozenset = frozenset(),
+    allow_artist_refill: bool = True,
+    rank_uncredited: bool = False,
 ) -> list:
     """
     Выбирает финальную пачку, ограничивая долю одного исполнителя.
@@ -130,13 +144,22 @@ def select_diverse_recommendations(
             continue
         seen.add(track_id)
         keys = resolver.keys(point.payload or {}, track_id)
+        if not keys and rank_uncredited:
+            # Share one allowance among uncredited tracks without fabricating artist metadata.
+            keys = frozenset({None})
         if keys:
             keyed.append((keys, point))
         else:
             unknown.append(point)
 
     selected: list = []
-    artist_counts: Counter = Counter()
+    artist_counts = Counter(seed_artists)
+    # Start with the highest-ranked different artist, then resume score order.
+    if seed_artists:
+        for index, (keys, _) in enumerate(keyed):
+            if keys.isdisjoint(seed_artists):
+                keyed.insert(0, keyed.pop(index))
+                break
 
     for keys, point in keyed:
         if len(selected) >= limit:
@@ -154,7 +177,7 @@ def select_diverse_recommendations(
             selected.append(point)
 
     # Fallback 2: мягкое ослабление лимита исполнителя, если пачка всё ещё не набрана.
-    if len(selected) < limit:
+    if allow_artist_refill and len(selected) < limit:
         chosen = {str(point.id) for point in selected}
         for _, point in keyed:
             if len(selected) >= limit:
@@ -226,7 +249,8 @@ def get_smart_recommendations(
     exclude_ids: set = None,
     queued_ids: set = None,
     user_id: Optional[int] = None,
-    personalization_weight: float = WAVE_PERSONALIZATION_WEIGHT
+    personalization_weight: float = WAVE_PERSONALIZATION_WEIGHT,
+    personal_mix: bool = False,
 ) -> list:
     """
     Гибридные векторные рекомендации:
@@ -244,6 +268,7 @@ def get_smart_recommendations(
     payload = getattr(seed, 'payload', None) or {}
 
     base_bpm = payload.get("bpm", 0)
+    version = _edit_version(payload) if personal_mix else None
 
     # 1. Извлекаем вектор текущего трека
     current_vector = None
@@ -265,10 +290,13 @@ def get_smart_recommendations(
     withheld = (exclude_ids or set()) | (queued_ids or set()) | (dislike_ids or set())
     candidate_limit = min(CANDIDATE_POOL_CEILING,
                           max(CANDIDATE_POOL_FLOOR, limit * CANDIDATE_POOL_MULTIPLIER) + len(withheld))
+    if version:
+        # Alternate edits of the same recording style can lie outside the closest audio neighbours.
+        candidate_limit = CANDIDATE_POOL_CEILING
+    seed_credit = payload.get("artist") or _artist_from_file_path(payload.get("file_path"))
     seed_query = (current_vector.tolist() if current_vector is not None else
                   RecommendQuery(recommend=RecommendInput(positive=[current_track_id])))
-    query = seed_query
-    prefetch = None
+    blended_query = None
     if current_vector is not None and user_id is not None and personalization_weight > 0:
         try:
             user_vec = get_or_compute_user_embedding(user_id, client)
@@ -278,18 +306,32 @@ def get_smart_recommendations(
         if user_vec is not None:
             blended = (1 - personalization_weight) * current_vector + personalization_weight * user_vec
             if np.linalg.norm(blended) > 0:
-                query = blended.tolist()
-                prefetch = Prefetch(query=seed_query, filter=ready_filter, limit=candidate_limit)
+                blended_query = blended.tolist()
 
-    results = client.query_points(
-        collection_name=COLLECTION_NAME, prefetch=prefetch, query=query,
-        query_filter=ready_filter, limit=candidate_limit, with_payload=True,
-    )
-    candidate_points = list(results.points)
+    def neighbours(size):
+        prefetch = Prefetch(query=seed_query, filter=ready_filter, limit=size) if blended_query is not None else None
+        return list(client.query_points(
+            collection_name=COLLECTION_NAME, prefetch=prefetch, query=blended_query if blended_query is not None else seed_query,
+            query_filter=ready_filter, limit=size, with_payload=True,
+        ).points)
 
+    candidate_points = neighbours(candidate_limit)
     exclude_ids = exclude_ids or set()
     queued_ids = queued_ids or set()
     resolver = _ArtistResolver()
+    resolver.prefetch([current_track_id, *(p.id for p in candidate_points)])
+    seed_artists = resolver.keys(payload, current_track_id)
+    if len(candidate_points) == candidate_limit and candidate_limit < CANDIDATE_POOL_CEILING:
+        fresh = [p for p in candidate_points if str(p.id) != str(current_track_id) and str(p.id) not in withheld]
+        diverse = select_diverse_recommendations(
+            fresh, limit, resolver=resolver, seed_artists=seed_artists, allow_artist_refill=False, rank_uncredited=personal_mix,
+        )
+        if len(diverse) < limit:
+            try:
+                candidate_points = neighbours(CANDIDATE_POOL_CEILING)
+            except Exception:
+                logging.getLogger(__name__).warning("Could not widen Wave neighbourhood", exc_info=True)
+
     recent_excluded = []
     queued_excluded = []
     seen_ids = set()
@@ -329,6 +371,11 @@ def get_smart_recommendations(
         repeat_penalty = 0.09 * min(play_weight, 3.0)
         skip_penalty = 0.06 * min(4, max(0, skips - 1))
         p.score -= penalty + repeat_penalty + skip_penalty
+        if version and _edit_version(cand_payload) == version:
+            p.score += 0.05
+            edit_credit = cand_payload.get("artist") or _artist_from_file_path(cand_payload.get("file_path"))
+            if seed_credit and edit_credit and seed_credit.casefold() == edit_credit.casefold():
+                p.score += 0.12
 
         if track_id in queued_ids:
             queued_excluded.append(p)
@@ -348,7 +395,8 @@ def get_smart_recommendations(
         scored_points.sort(key=lambda x: x.score, reverse=True)
 
     selected = select_diverse_recommendations(
-        scored_points, limit, resolver=resolver, band_score_eps=SELECT_BAND_SCORE_EPS
+        scored_points, limit, resolver=resolver, band_score_eps=SELECT_BAND_SCORE_EPS, seed_artists=seed_artists,
+        rank_uncredited=personal_mix
     )
 
     # 6. Мягкое ослабление исключений, строго по уровням:

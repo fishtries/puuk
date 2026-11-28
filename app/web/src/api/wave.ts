@@ -12,6 +12,8 @@ export interface WaveProfileStats {
 
 export async function fetchWaveQueue(params?: {
   currentTrackId?: string;
+  previousTrackId?: string;
+  mode?: 'start' | 'mix';
   limit?: number;
   excludeTrackIds?: string[];
   queuedTrackIds?: string[];
@@ -19,6 +21,8 @@ export async function fetchWaveQueue(params?: {
 }): Promise<Track[]> {
   const query = new URLSearchParams();
   if (params?.currentTrackId) query.append('current_track_id', params.currentTrackId);
+  if (params?.mode) query.append('mode', params.mode);
+  if (params?.previousTrackId) query.append('previous_track_id', params.previousTrackId);
   if (params?.limit) query.append('limit', params.limit.toString());
   for (const trackId of params?.excludeTrackIds ?? []) {
     if (trackId) query.append('exclude_track_ids', trackId);

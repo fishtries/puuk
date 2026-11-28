@@ -23,9 +23,8 @@ export const FreshMixCard: React.FC<{
   <button type="button"
     className={`${styles.glassCard} ${styles.freshMixCard}`}
     onClick={onLaunchWave}
-    aria-pressed={isWaveActive}
     aria-busy={isStarting}
-    title={isWaveActive ? "Выключить Мою Волну" : "Запустить Мою Волну"}
+    title={isWaveActive ? "Сменить настроение" : "Запустить Мою Волну"}
     aria-label="your mix"
   >
     <img
